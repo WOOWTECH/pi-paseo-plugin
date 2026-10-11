@@ -63,7 +63,7 @@ export async function withLock(file, fn, { timeoutMs = 15000, signal } = {}) {
         }
       }
       return null;
-    }, { timeoutMs: until - Date.now(), signal });
+    }, { timeoutMs: until - Date.now(), deadline:until, signal });
     if (acquired) break;
     if (Date.now() >= until) throw new RuntimeError('LOCK_BUSY', 'Plugin operation is already running');
     await pauseForLock(Math.min(100, Math.max(1, until - Date.now())), signal);

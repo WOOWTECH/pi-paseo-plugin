@@ -10,15 +10,15 @@ export function singleFlight(key,read) {
 }
 
 /** Bound provider probe frequency; failed probes are never cached. */
-export function createReadWindow({ttlMs=3000,maxEntries=32,now=Date.now}={}) {
+export function createReadWindow({ttlMs=3000,maxEntries=32,now=()=>performance.now(),wallNow=Date.now}={}) {
  const values=new Map(),active=new Map();
  return function readWindow(key,read) {
   const cached=values.get(key);
-  if(cached&&now()-cached.checkedAt<ttlMs)return Promise.resolve(cached);
+  if(cached&&now()-cached.readAt<ttlMs)return Promise.resolve(cached.result);
   if(active.has(key))return active.get(key);
   const task=Promise.resolve().then(read).then(value=>{
-   const result={value,checkedAt:now()};
-   values.delete(key);values.set(key,result);
+   const result={value,checkedAt:wallNow()};
+   values.delete(key);values.set(key,{result,readAt:now()});
    while(values.size>maxEntries)values.delete(values.keys().next().value);
    return result;
   });

@@ -64,6 +64,15 @@ test('a failed concurrent query is released; the next query checks current state
  await f.runtime.status();assert.equal(f.calls.status,2);assert.equal(f.calls.close,2);
 });
 
+test('wall-clock adjustment cannot extend the three-second provider probe window',async()=>{
+ let monotonic=0,wall=100000,reads=0;
+ const window=createReadWindow({now:()=>monotonic,wallNow:()=>wall});
+ const read=async()=>++reads;
+ assert.equal((await window('daemon',read)).checkedAt,100000);
+ wall=0;monotonic=2999;assert.equal((await window('daemon',read)).value,1);
+ monotonic=3000;assert.equal((await window('daemon',read)).value,2);
+});
+
 test('acceptance archives only its newly-created agent on success and keeps its transcript',async()=>{
  const archived=[],row={};const client={createAgent:async()=>({id:'owned-test-agent'}),archiveAgent:async id=>{archived.push(id);return {archivedAt:1};}};
  await usingAcceptanceAgent(client,{},row,async agent=>assert.equal(agent.id,'owned-test-agent'));

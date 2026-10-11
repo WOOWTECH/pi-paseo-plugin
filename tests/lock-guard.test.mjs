@@ -184,7 +184,9 @@ for (const failure of ['exit', 'signal', 'timeout']) {
     fs.writeFileSync(path.join(bin,'flock'), script.join('\\n'), {mode:0o700});
     const file = path.join(stateDir,'runtime.lock');
     const started = Date.now();
-    await assert.rejects(withRuntimeLock(fail,{timeoutMs:800}), code('${failure === 'timeout' ? 'LOCK_GUARD_TIMEOUT' : 'LOCK_GUARD_FAILED'}'));
+    ${failure === 'timeout'
+      ? "assert.throws(()=>withLockTransition(file,fail,{timeoutMs:800}),code('LOCK_GUARD_TIMEOUT'));"
+      : "await assert.rejects(withRuntimeLock(fail,{timeoutMs:800}),code('LOCK_GUARD_FAILED'));"}
     assert.ok(Date.now()-started<2000, 'helper failure must be bounded');
     assert.equal(processIdentity(Number(fs.readFileSync(pidFile,'utf8'))), null, 'helper process was not reaped');
     assert.equal(fs.existsSync(file),false); guardReleased(file);
@@ -192,6 +194,53 @@ for (const failure of ['exit', 'signal', 'timeout']) {
     assert.equal(await withRuntimeLock(()=>42),42); guardReleased(file);
   `));
 }
+
+for (const kind of ['directory', 'runtime', 'state']) {
+  test('expired ' + kind + ' deadline reports busy after a flock helper timeout', linux, t => failureCase(t, `
+    const bin=path.join(dir,'deadline-bin'); fs.mkdirSync(bin); process.env.PATH=bin;
+    // This helper execs Node directly and hangs; it never forks children.
+    fs.writeFileSync(path.join(bin,'flock'),'#!'+process.execPath+'\\nsetInterval(()=>{},1000);\\n',{mode:0o700});
+    const cp=await import('node:child_process');
+    const {syncBuiltinESMExports}=await import('node:module');
+    const originalSpawn=cp.default.spawnSync, originalNow=Date.now;
+    const start=1000000, deadline=start+3000;
+    let clockCalls=0, timedOut=false, helperPid, helperCalls=0, callbackCalls=0;
+    // Pin a 10 ms remaining budget without depending on CI scheduling. The real
+    // spawnSync timeout still runs; its return advances the enclosing clock.
+    Date.now=()=>clockCalls++===0?start:timedOut?deadline:deadline-10;
+    cp.default.spawnSync=function(command,args,options) {
+      if(command!=='flock')return originalSpawn(command,args,options);
+      helperCalls++; assert.equal(options.timeout,10);
+      const result=originalSpawn(command,args,options);
+      assert.equal(result.error?.code,'ETIMEDOUT'); assert.ok(result.pid>1);
+      helperPid=result.pid; timedOut=true; return result;
+    };
+    syncBuiltinESMExports();
+    const body=()=>{callbackCalls++;};
+    const file=path.join(stateDir,'${kind === 'directory' ? 'operation' : kind}.lock');
+    const expected='${kind === 'directory' ? 'LOCK_BUSY' : kind === 'runtime' ? 'RUNTIME_BUSY' : 'STATE_BUSY'}';
+    try {
+      ${kind === 'state'
+        ? "assert.throws(()=>updateState({deadlineProbe:true}),error=>error.code===expected);"
+        : `await assert.rejects(${kind === 'directory' ? 'withLock(file,body,{timeoutMs:3000})' : 'withRuntimeLock(body,{timeoutMs:3000})'},error=>error.code===expected);`}
+    } finally {
+      Date.now=originalNow; cp.default.spawnSync=originalSpawn; syncBuiltinESMExports();
+    }
+    assert.equal(helperCalls,1); assert.equal(callbackCalls,0);
+    assert.equal(fs.existsSync(file),false,'protected acquisition ran after timeout');
+    assert.equal(fs.existsSync(path.join(stateDir,'state.json')),false,'state was written after timeout');
+    assert.equal(processIdentity(helperPid),null,'timed-out helper was not reaped');
+    guardReleased(file);
+  `));
+}
+
+test('helper timeout before an enclosing deadline remains a guard failure', linux, t => failureCase(t, `
+  const bin=path.join(dir,'early-timeout-bin'); fs.mkdirSync(bin); process.env.PATH=bin;
+  fs.writeFileSync(path.join(bin,'flock'),'#!'+process.execPath+'\\nsetInterval(()=>{},1000);\\n',{mode:0o700});
+  const file=path.join(stateDir,'early.lock');
+  assert.throws(()=>withLockTransition(file,fail,{timeoutMs:10,deadline:Date.now()+60000}),code('LOCK_GUARD_TIMEOUT'));
+  assert.equal(fs.existsSync(file),false); guardReleased(file);
+`));
 
 test('guard symlinks, including a link introduced at open, never touch their target', linux, t => failureCase(t, `
   const target=path.join(dir,'external'); fs.writeFileSync(target,'unchanged',{mode:0o644});

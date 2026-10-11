@@ -104,7 +104,7 @@ export async function pauseForLock(ms, signal) {
  * the utility exits. Closing our fd releases it even on process death. Only
  * acquisition/reclamation/publication run here, never an async operation body.
  */
-export function withLockTransition(file, fn, { timeoutMs = 1000, signal } = {}) {
+export function withLockTransition(file, fn, { timeoutMs = 1000, deadline, signal } = {}) {
   checkLockSignal(signal);
   if (process.platform !== 'linux') throw new RuntimeError('LOCK_GUARD_UNSUPPORTED');
   const guard = file + '.guard';
@@ -121,6 +121,9 @@ export function withLockTransition(file, fn, { timeoutMs = 1000, signal } = {}) 
       timeout: Math.max(1, Math.min(1000, timeoutMs)), killSignal: 'SIGKILL',
     });
     if (result.error) {
+      // Expiring the enclosing operation is contention, not a separate helper
+      // failure. No protected callback ran; finally closes the OS guard fd.
+      if(result.error.code==='ETIMEDOUT'&&deadline!==undefined&&Date.now()>=deadline)return null;
       throw new RuntimeError(result.error.code === 'ENOENT' ? 'LOCK_GUARD_UNAVAILABLE' : result.error.code === 'ETIMEDOUT' ? 'LOCK_GUARD_TIMEOUT' : 'LOCK_GUARD_FAILED');
     }
     checkLockSignal(signal);
@@ -193,7 +196,7 @@ export function updateState(patch) {
   const file = path.join(dir, 'state.lock'); const deadline = Date.now() + 3000; let release;
   while (!release) {
     if (Date.now() >= deadline) throw new RuntimeError('STATE_BUSY');
-    release = acquire(file, { timeoutMs: deadline - Date.now() });
+    release = acquire(file, { timeoutMs: deadline - Date.now(), deadline });
     if (!release) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(20, Math.max(1, deadline - Date.now())));
   }
   try {
@@ -210,7 +213,7 @@ export async function withRuntimeLock(fn, { timeoutMs = 300000, signal } = {}) {
   while (!release) {
     checkLockSignal(signal);
     if (Date.now() >= deadline) throw new RuntimeError('RUNTIME_BUSY');
-    release = acquire(file, { timeoutMs: deadline - Date.now(), signal });
+    release = acquire(file, { timeoutMs: deadline - Date.now(), deadline, signal });
     if (!release) await pauseForLock(Math.min(100, Math.max(1, deadline - Date.now())), signal);
   }
   try { return await fn(); } finally { release(); }
