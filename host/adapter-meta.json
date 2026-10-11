@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/agegr/pi-web",
+  "baseCommit": "6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068",
+  "piWebVersion": "0.10.0",
+  "patchSha256": "5000bd4fb7255423f584df054a13afe447a0d2a886d29d7250928f51c2f24364"
+}

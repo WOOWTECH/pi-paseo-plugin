@@ -1,0 +1,12 @@
+node_modules/
+*.tgz
+*.log
+*.tsbuildinfo
+host/pi-web/
+artifacts/
+task-panel.json
+.env
+.env.*
+
+.agents/
+.claude/

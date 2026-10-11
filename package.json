@@ -1,0 +1,65 @@
+{
+  "name": "@woowtech/pi-paseo",
+  "version": "0.1.0",
+  "description": "Pi Agent / Pi Web plugin for automatic Paseo setup, remote pairing, Claude Code, Codex and Pi conversations.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-web",
+    "paseo",
+    "codex",
+    "claude-code"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WOOWTECH/pi-paseo-plugin.git"
+  },
+  "bin": {
+    "pi-paseo": "./bin/cli.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "scripts": {
+    "postinstall": "node bin/cli.mjs postinstall",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "pack": "npm pack"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3",
+    "typebox": "^1.0.61"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "extensions",
+    "host/adapter.patch",
+    "host/adapter-meta.json",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./host-api": "./src/host-api.mjs"
+  }
+}
