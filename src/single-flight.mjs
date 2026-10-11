@@ -1,3 +1,4 @@
+import {performance} from 'node:perf_hooks';
 const pending=new Map();
 /** Coalesce overlapping reads; never retain a completed or failed snapshot. */
 export function singleFlight(key,read) {
