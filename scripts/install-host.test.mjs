@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { installHost, readAdapter, runCommand, PI_WEB_BASE, PI_WEB_REPOSITORY, PI_WEB_VERSION } from '../bin/install-host.mjs';
@@ -210,4 +210,364 @@ test('child failure never includes stderr or external credentials', async () => 
   await assert.rejects(runCommand(process.execPath, ['-e', 'process.stderr.write("credential-sentinel");process.exit(7)']), error => {
     assert.equal(error.code, 'COMMAND_FAILED'); assert.ok(!String(error).includes('credential-sentinel')); return true;
   });
+});
+
+async function boundedChild(t, source, options) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-child-'));
+  const pids = path.join(root, 'pids');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let watchdog;
+  const result = runCommand(process.execPath, ['-e', source, pids], {
+    env: { ...process.env, HOME: root, PI_CODING_AGENT_DIR: root, PI_AGENT_DATA_DIR: root }, ...options,
+  }).then(() => 'RESOLVED', error => error.code);
+  try {
+    const code = await Promise.race([result, new Promise(resolve => { watchdog = setTimeout(() => resolve('HUNG'), 1800); })]);
+    if ((options.assertReaped ?? process.platform === 'linux') && code !== 'HUNG') {
+      await delay(150);
+      for (const pid of fs.readFileSync(pids, 'utf8').trim().split('\n').map(Number)) {
+        let args = '';
+        try { args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        assert.equal(args.split('\0').includes(pids), false, 'fixture subprocess is automatically terminated');
+      }
+    }
+    return code;
+  } finally {
+    clearTimeout(watchdog);
+    const children = fs.existsSync(pids) ? fs.readFileSync(pids, 'utf8').trim().split('\n').map(Number) : [];
+    for (const pid of children) {
+      try {
+        if (process.platform === 'linux' && !fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').includes(pids)) continue;
+        process.kill(pid, 'SIGKILL');
+      } catch (error) { if (!['ESRCH', 'ENOENT'].includes(error.code)) throw error; }
+    }
+    await result;
+    assert.equal(children.length, options.expectedProcesses ?? 1, 'fixture subprocesses reached their real call paths');
+  }
+}
+
+test('timeout forcibly reaps a real subprocess that ignores SIGTERM', async t => {
+  const code = await boundedChild(t, `require('fs').writeFileSync(process.argv[1], String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`, { timeoutMs: 300, killGraceMs: 80 });
+  assert.equal(code, 'COMMAND_TIMEOUT');
+});
+
+test('timeout reaps descendants holding command output open after their parent exits', async t => {
+  const descendant = `require('fs').appendFileSync(process.argv[1],String(process.pid)+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+  const code = await boundedChild(t, `const fs=require('fs');fs.writeFileSync(process.argv[1],String(process.pid)+'\\n');require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)},process.argv[1]],{stdio:['ignore',process.stdout,process.stderr]});setInterval(()=>{},1000)`, { timeoutMs: 300, killGraceMs: 80, expectedProcesses: 2 });
+  assert.equal(code, 'COMMAND_TIMEOUT');
+});
+
+test('timeout also reaps descendants that close inherited output pipes', async t => {
+  const descendant = `require('fs').appendFileSync(process.argv[1],String(process.pid)+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+  const code = await boundedChild(t, `require('fs').writeFileSync(process.argv[1],String(process.pid)+'\\n');require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)},process.argv[1]],{stdio:'ignore'});setInterval(()=>{},1000)`, { timeoutMs: 300, killGraceMs: 80, expectedProcesses: 2, assertReaped: process.platform === 'linux' });
+  assert.equal(code, 'COMMAND_TIMEOUT');
+});
+
+for (const pipes of ['ignore', 'inherit']) test(`successful command cleans up workers with ${pipes} output`, async t => {
+  const descendant = `require('fs').appendFileSync(process.argv[1],String(process.pid)+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+  const stdio = pipes === 'ignore' ? "'ignore'" : "['ignore',process.stdout,process.stderr]";
+  const source = `const fs=require('fs');fs.writeFileSync(process.argv[1],String(process.pid)+'\\n');const child=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)},process.argv[1]],{stdio:${stdio}});child.unref();setInterval(()=>{if(fs.readFileSync(process.argv[1],'utf8').trim().split('\\n').length===2)process.exit(0)},10)`;
+  assert.equal(await boundedChild(t, source, { timeoutMs: 1000, killGraceMs: 80, expectedProcesses: 2 }), 'RESOLVED');
+});
+
+test('a worker escaping into another session cannot keep the command wait open', async t => {
+  const descendant = `require('fs').appendFileSync(process.argv[1],String(process.pid)+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+  const source = `require('fs').writeFileSync(process.argv[1],String(process.pid)+'\\n');require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)},process.argv[1]],{detached:true,stdio:['ignore',process.stdout,process.stderr]});setInterval(()=>{},1000)`;
+  // Explicitly outside process-group containment; the fixture cleans up this
+  // deliberate escape. This asserts bounded waiting, not automatic reaping.
+  assert.equal(await boundedChild(t, source, { timeoutMs: 300, killGraceMs: 80, expectedProcesses: 2, assertReaped: false }), 'COMMAND_TIMEOUT');
+});
+
+test('stale lock from an exited unreaped owner is recovered', { skip: process.platform !== 'linux' }, async t => {
+  if (spawnSync('python3', ['--version']).status !== 0) { t.skip('Python is needed to hold a fixture zombie'); return; }
+  const f = fixture(t);
+  const owner = spawn('python3', ['-u', '-c', `import os,sys,time
+pid=os.fork()
+if pid==0: os._exit(0)
+while open('/proc/%d/stat'%pid).read().split(') ')[1].split()[0]!='Z': time.sleep(0.01)
+print(pid,flush=True)
+sys.stdin.readline()
+os.waitpid(pid,0)
+`], { env: f.options.env, stdio: ['pipe', 'pipe', 'ignore'] });
+  const exited = new Promise(resolve => owner.once('close', resolve));
+  try {
+    const pid = Number(await new Promise((resolve, reject) => { owner.stdout.once('data', value => resolve(String(value))); owner.once('error', reject); }));
+    const fields = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ');
+    assert.equal(fields[0], 'Z');
+    const lock = path.join(f.managed, '.install-host.lock');
+    write(lock, JSON.stringify({ pid, identity: fields[19], token: 'fixture-zombie-owner' }));
+    fs.utimesSync(lock, new Date(0), new Date(0));
+    assert.equal((await installHost({ ...f.options, lockTimeoutMs: 200 })).status, 'installed');
+  } finally { owner.stdin.end('\n'); await exited; }
+});
+
+test('output overflow terminates a real command before its long timeout', async t => {
+  const code = await boundedChild(t, `require('fs').writeFileSync(process.argv[1],String(process.pid));process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(5*1024*1024));setInterval(()=>{},1000)`, { timeoutMs: 10000, killGraceMs: 80 });
+  assert.equal(code, 'COMMAND_OUTPUT_LIMIT');
+});
+
+test('output cap counts UTF-8 bytes rather than JavaScript characters', async t => {
+  const code = await boundedChild(t, `require('fs').writeFileSync(process.argv[1],String(process.pid));process.stdout.write('€'.repeat(2*1024*1024),()=>process.exit(0))`, { timeoutMs: 10000, killGraceMs: 80 });
+  assert.equal(code, 'COMMAND_OUTPUT_LIMIT');
+});
+
+test('stale malformed lock with a live PID but no ownership token is recoverable', async t => {
+  const f = fixture(t), lock = path.join(f.managed, '.install-host.lock');
+  write(lock, JSON.stringify({ pid: process.pid }));
+  fs.utimesSync(lock, new Date(0), new Date(0));
+  const result = await installHost({ ...f.options, lockTimeoutMs: 200 });
+  assert.equal(result.status, 'installed');
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('a lock disappearing during owner inspection retries instead of aborting', async t => {
+  const f = fixture(t), lock = path.join(f.managed, '.install-host.lock');
+  write(lock, '{}');
+  const original = fs.openSync;
+  let raced = false;
+  fs.openSync = function(file, flags, ...args) {
+    if (file === lock && flags === 'wx' && !raced) {
+      raced = true;
+      fs.unlinkSync(lock);
+      throw Object.assign(new Error('Concurrent lock removal'), { code: 'EEXIST' });
+    }
+    return original.call(this, file, flags, ...args);
+  };
+  try {
+    assert.equal((await installHost(f.options)).status, 'installed');
+  } finally { fs.openSync = original; }
+  assert.equal(raced, true);
+});
+
+function changePatch(f) {
+  const patch = fs.readFileSync(path.join(f.pkg, 'host/adapter.patch'), 'utf8') + '\n';
+  write(path.join(f.pkg, 'host/adapter.patch'), patch);
+  write(path.join(f.pkg, 'host/adapter-meta.json'), JSON.stringify({ ...f.meta, patchSha256: sha(patch) }));
+}
+
+test('routing failure after build rolls back the active release and leaves a retry possible', async t => {
+  const f = fixture(t), first = await installHost(f.options);
+  const record = fs.readFileSync(path.join(f.managed, 'host-install.json'), 'utf8');
+  const launcher = fs.readFileSync(first.routing.launcher, 'utf8');
+  changePatch(f);
+  const metadata = path.join(f.home, 'shared/host.json');
+  write(metadata, JSON.stringify({ realWeb: 'invalid-relative-route' }));
+  await assert.rejects(installHost({ ...f.options, sharedHostPath: metadata }), { code: 'SHARED_ROUTING_INVALID' });
+  assert.equal(fs.realpathSync(first.adapterRoot), first.releaseRoot);
+  assert.equal(fs.readFileSync(first.routing.launcher, 'utf8'), launcher);
+  assert.equal(fs.readFileSync(path.join(f.managed, 'host-install.json'), 'utf8'), record);
+  assert.deepEqual(fs.readdirSync(path.join(f.managed, 'pi-web-releases')), [path.basename(first.releaseRoot)]);
+  assert.equal((await installHost(f.options)).status, 'installed');
+});
+
+test('first install routing receipt failure rolls back wrapper and release publication', async t => {
+  const f = fixture(t), routing = path.join(f.managed, 'host-routing.json');
+  const original = fs.renameSync;
+  fs.renameSync = function(from, to) {
+    if (to === routing) throw Object.assign(new Error('Receipt storage failure'), { code: 'EIO' });
+    return original.call(this, from, to);
+  };
+  try { await assert.rejects(installHost(f.options), { code: 'EIO' }); }
+  finally { fs.renameSync = original; }
+  assert.equal(fs.existsSync(path.join(f.home, '.local/bin/pi-web')), false);
+  assert.equal(fs.existsSync(path.join(f.managed, 'pi-web')), false);
+  assert.deepEqual(fs.readdirSync(path.join(f.managed, 'pi-web-releases')), []);
+  assert.equal((await installHost(f.options)).routing.status, 'user-wrapper');
+});
+
+test('final receipt failure restores shared routing bytes and prior release', async t => {
+  const f = fixture(t), metadata = path.join(f.home, 'shared/host.json');
+  write(metadata, JSON.stringify({ realWeb: f.native, shim: path.join(f.home, '.local/bin/pi-web') }), 0o640);
+  const first = await installHost({ ...f.options, sharedHostPath: metadata });
+  write(metadata, JSON.stringify({ realWeb: f.native, shim: path.join(f.home, '.local/bin/pi-web') }), 0o640);
+  const before = fs.readFileSync(metadata, 'utf8');
+  changePatch(f);
+  const receipt = path.join(f.managed, 'host-install.json');
+  fs.unlinkSync(receipt);
+  fs.symlinkSync(path.join(f.root, 'external-receipt'), receipt);
+  await assert.rejects(installHost({ ...f.options, sharedHostPath: metadata }), { code: 'UNSAFE_METADATA_PATH' });
+  assert.equal(fs.realpathSync(first.adapterRoot), first.releaseRoot);
+  assert.equal(fs.readFileSync(metadata, 'utf8'), before);
+  assert.equal(fs.statSync(metadata).mode & 0o777, 0o640);
+});
+
+test('prebuilt dependency symlinks are copied without retaining a mutable source link', async t => {
+  const f = fixture(t);
+  git(f.source, 'apply', path.join(f.pkg, 'host/adapter.patch'));
+  write(path.join(f.source, '.next/BUILD_ID'), 'existing-production-build\n');
+  const modules = path.join(f.root, 'mutable-modules');
+  write(path.join(modules, 'next/dist/bin/next'), '// original next\n');
+  write(path.join(f.source, '.git/info/exclude'), 'node_modules\n');
+  fs.symlinkSync(modules, path.join(f.source, 'node_modules'), 'dir');
+  const result = await installHost({ ...f.options, prebuiltRoot: f.source });
+  write(path.join(modules, 'next/dist/bin/next'), '// mutated next\n');
+  assert.equal(fs.readFileSync(path.join(result.releaseRoot, 'node_modules/next/dist/bin/next'), 'utf8'), '// original next\n');
+});
+
+test('interrupting the real installer command runner reaps its subprocess and returns a safe code', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-interrupt-')), pids = path.join(root, 'pids');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const module = new URL('../bin/install-host.mjs', import.meta.url).href;
+  const command = `require('fs').writeFileSync(process.argv[1],String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+  const script = `import {runCommand} from ${JSON.stringify(module)};try{await runCommand(process.execPath,['-e',${JSON.stringify(command)},process.argv[1]],{killGraceMs:80})}catch(error){console.log(error.code)}`;
+  const worker = spawn(process.execPath, ['--input-type=module', '-e', script, pids], {
+    env: { ...process.env, HOME: root, PI_CODING_AGENT_DIR: root, PI_AGENT_DATA_DIR: root }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '', watchdog;
+  worker.stdout.on('data', chunk => { output += chunk; });
+  worker.stderr.on('data', () => {});
+  const exited = new Promise(resolve => { worker.on('close', () => resolve(output.trim())); worker.on('error', () => resolve('SPAWN_FAILED')); });
+  try {
+    const readyBy = Date.now() + 1800;
+    while (!fs.existsSync(pids) && Date.now() < readyBy) await delay(10);
+    assert.equal(fs.existsSync(pids), true, 'real subprocess started');
+    worker.kill('SIGTERM');
+    const code = await Promise.race([exited, new Promise(resolve => { watchdog = setTimeout(() => resolve('HUNG'), 1800); })]);
+    assert.equal(code, 'COMMAND_INTERRUPTED');
+  } finally {
+    clearTimeout(watchdog);
+    worker.kill('SIGKILL');
+    if (fs.existsSync(pids)) try { process.kill(Number(fs.readFileSync(pids, 'utf8')), 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await exited;
+  }
+});
+
+test('a concurrently created launcher is preserved and the new release is rolled back', async t => {
+  const f = fixture(t), shim = path.join(f.home, '.local/bin/pi-web');
+  const original = fs.openSync, foreign = '#!/bin/sh\n# concurrent user launcher\n';
+  let created = false;
+  fs.openSync = function(file, flags, ...args) {
+    if (String(file).startsWith(shim + '.') && flags === 'wx' && !created) {
+      created = true;
+      write(shim, foreign, 0o755);
+    }
+    return original.call(this, file, flags, ...args);
+  };
+  try { await assert.rejects(installHost(f.options), { code: 'ROUTING_CHANGED_RETRY' }); }
+  finally { fs.openSync = original; }
+  assert.equal(created, true);
+  assert.equal(fs.readFileSync(shim, 'utf8'), foreign);
+  assert.equal(fs.existsSync(path.join(f.managed, 'pi-web')), false);
+  assert.deepEqual(fs.readdirSync(path.join(f.managed, 'pi-web-releases')), []);
+});
+
+test('live lock owners are preserved while truncated stale locks are recoverable', async t => {
+  const f = fixture(t), lock = path.join(f.managed, '.install-host.lock');
+  write(lock, JSON.stringify({ pid: process.pid, identity: null, token: 'valid-live-owner' }));
+  fs.utimesSync(lock, new Date(0), new Date(0));
+  await assert.rejects(installHost({ ...f.options, lockTimeoutMs: 100 }), { code: 'HOST_INSTALL_BUSY' });
+  assert.equal(JSON.parse(fs.readFileSync(lock)).token, 'valid-live-owner');
+  for (const malformed of ['', '{', 'null']) {
+    write(lock, malformed); fs.utimesSync(lock, new Date(0), new Date(0));
+    assert.ok(['installed', 'already-installed'].includes((await installHost({ ...f.options, lockTimeoutMs: 100 })).status));
+  }
+});
+
+test('kernel guard serializes cooperative processes and releases on owner death', { skip: process.platform !== 'linux' }, async t => {
+  const f = fixture(t), marker = path.join(f.root, 'guard-held');
+  fs.mkdirSync(f.managed, { recursive: true });
+  const guard = path.join(f.managed, '.install-host.guard');
+  const owner = spawn('flock', ['--exclusive', guard, process.execPath, '-e', `require('fs').writeFileSync(process.argv[1],'ready');setInterval(()=>{},1000)`, marker], {
+    detached: true, env: f.options.env, stdio: 'ignore',
+  });
+  const exited = new Promise(resolve => owner.once('close', resolve));
+  try {
+    const deadline = Date.now() + 2500;
+    while (!fs.existsSync(marker) && Date.now() < deadline) await delay(10);
+    assert.equal(fs.existsSync(marker), true, 'another process holds the OS lock');
+    await assert.rejects(installHost({ ...f.options, lockTimeoutMs: 100 }), { code: 'HOST_INSTALL_BUSY' });
+    assert.equal(f.calls.length, 0);
+  } finally {
+    try { process.kill(-owner.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await exited;
+  }
+  assert.equal((await installHost(f.options)).status, 'installed');
+  assert.ok(fs.statSync(guard).isFile(), 'guard inode remains permanent');
+});
+
+for (const edited of [false, true]) test(`publication killed after wrapper ${edited ? 'preserves later user edits' : 'resumes its own receipt'}`, async t => {
+  const f = fixture(t);
+  const localBase = git(f.source, 'rev-parse', 'HEAD');
+  const module = new URL('../bin/install-host.mjs', import.meta.url).href;
+  const config = { home: f.home, source: f.source, pkg: f.pkg, localBase, sharedHostPath: f.options.sharedHostPath };
+  const script = `
+import fs from 'node:fs';import path from 'node:path';
+import {installHost,runCommand,PI_WEB_BASE} from ${JSON.stringify(module)};
+const f=JSON.parse(process.argv[1]);
+function write(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,value);}
+async function run(command,args,options={}){
+  if(command==='npm'){write(path.join(options.cwd,args[0]==='ci'?'node_modules/next/dist/bin/next':'.next/BUILD_ID'),'fixture-build');return '';}
+  const adjusted=[...args];
+  if(args[0]==='fetch'){adjusted[adjusted.indexOf('origin')]=f.source;adjusted[adjusted.length-1]=f.localBase;}
+  if(args[0]==='checkout'&&args.at(-1)===PI_WEB_BASE)adjusted[adjusted.length-1]=f.localBase;
+  const value=await runCommand(command,adjusted,{...options,env:process.env});
+  return args[0]==='rev-parse'&&value===f.localBase?PI_WEB_BASE:value;
+}
+const rename=fs.renameSync;
+fs.renameSync=function(from,to){const value=rename.call(this,from,to);if(to===path.join(f.home,'.local/bin/pi-web'))process.kill(process.pid,'SIGKILL');return value;};
+await installHost({home:f.home,packageRoot:f.pkg,sharedHostPath:f.sharedHostPath,run});
+`;
+  const worker = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(config)], { env: f.options.env, stdio: 'ignore' });
+  let watchdog;
+  const termination = await new Promise(resolve => {
+    watchdog = setTimeout(() => worker.kill('SIGKILL'), 5000);
+    worker.once('close', (code, signal) => { clearTimeout(watchdog); resolve({ code, signal }); });
+  });
+  assert.deepEqual(termination, { code: null, signal: 'SIGKILL' });
+  const shim = path.join(f.home, '.local/bin/pi-web'), receipt = path.join(f.managed, 'host-routing.json');
+  assert.ok(fs.existsSync(shim));
+  assert.equal(fs.existsSync(receipt), false, 'the real kill interrupted publication');
+  if (edited) fs.appendFileSync(shim, '\n// user edit after interruption\n');
+  const before = fs.readFileSync(shim, 'utf8');
+  fs.utimesSync(path.join(f.managed, '.install-host.lock'), new Date(0), new Date(0));
+  const retry = await installHost(f.options);
+  assert.equal(retry.routing.status, edited ? 'manual-routing-required' : 'user-wrapper');
+  assert.equal(fs.readFileSync(shim, 'utf8'), before);
+  assert.equal(fs.existsSync(receipt), !edited);
+  assert.equal(retry.reused, true);
+});
+
+test('shared routing edits detected before replacement are preserved during rollback', async t => {
+  const f = fixture(t), first = await installHost(f.options);
+  changePatch(f);
+  const metadata = path.join(f.home, 'shared/host.json');
+  write(metadata, JSON.stringify({ realWeb: f.native, setting: 'original' }));
+  const foreign = JSON.stringify({ realWeb: f.native, setting: 'concurrent-user-edit' });
+  const open = fs.openSync;
+  let edited = false;
+  fs.openSync = function(file, flags, ...args) {
+    if (String(file).startsWith(metadata + '.') && flags === 'wx' && !edited) { edited = true; write(metadata, foreign); }
+    return open.call(this, file, flags, ...args);
+  };
+  try { await assert.rejects(installHost({ ...f.options, sharedHostPath: metadata }), { code: 'ROUTING_CHANGED_RETRY' }); }
+  finally { fs.openSync = open; }
+  assert.equal(edited, true);
+  assert.equal(fs.readFileSync(metadata, 'utf8'), foreign);
+  assert.equal(fs.realpathSync(first.adapterRoot), first.releaseRoot);
+});
+
+test('host repairs the SDK shrinkwrapped dependency after npm ci and before build', async t => {
+  const f = fixture(t);
+  let checkedBeforeBuild = false;
+  const run = async (command, args, options) => {
+    if (command === 'npm' && args[0] === 'run') {
+      const target = path.join(options.cwd, 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(target, 'package.json'))).version, '5.0.12');
+      assert.equal(fs.readFileSync(path.join(target, 'index.cjs'), 'utf8'), 'module.exports=()=>["fixed"];\n');
+      checkedBeforeBuild = true;
+    }
+    const result = await f.options.run(command, args, options);
+    if (command === 'npm' && args[0] === 'ci') {
+      const modules = path.join(options.cwd, 'node_modules'), sdk = path.join(modules, '@earendil-works/pi-coding-agent');
+      write(path.join(sdk, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', version: '1.0.0' }));
+      write(path.join(sdk, 'node_modules/minimatch/package.json'), JSON.stringify({ name: 'minimatch', main: 'index.cjs' }));
+      write(path.join(sdk, 'node_modules/minimatch/index.cjs'), 'module.exports={};\n');
+      write(path.join(sdk, 'node_modules/brace-expansion/package.json'), JSON.stringify({ name: 'brace-expansion', version: '5.0.9' }));
+      write(path.join(modules, 'brace-expansion/package.json'), JSON.stringify({ name: 'brace-expansion', version: '5.0.12' }));
+      write(path.join(modules, 'brace-expansion/index.cjs'), 'module.exports=()=>["fixed"];\n');
+    }
+    return result;
+  };
+  const result = await installHost({ ...f.options, run });
+  assert.equal(checkedBeforeBuild, true);
+  assert.equal(result.status, 'installed');
 });

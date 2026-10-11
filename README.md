@@ -6,10 +6,10 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 
 ## 相容版本
 
-- Linux／macOS、Node.js 22.19.0+、npm、git。
+- Linux、Node.js 22.19.0+、npm、git、util-linux `flock`。其他平台目前不納入此版本的部署驗收。
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
-- Paseo `@getpaseo/cli` 0.11.2，下載至持久 HOME 的獨立目錄。
+- Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
 - 登入在執行 Pi Web 的同一使用者 HOME。插件沿用現有 provider CLI；缺少時下載固定版本到插件的獨立目錄。既有帳號資料用於官方 CLI 登入。
 
 ## 完整安裝
@@ -69,17 +69,18 @@ Shell 操作：
 
 ```bash
 node bin/cli.mjs status
+node bin/cli.mjs health
 node bin/cli.mjs diagnose
 node bin/cli.mjs models codex
 node bin/cli.mjs start
 node bin/cli.mjs stop
 ```
 
-`node bin/cli.mjs acceptance` 會對三種 provider 各發送兩則小型驗收訊息，使用現有帳號額度。CLI 配對僅在私人終端用 `pair --reveal`；一般使用者應使用設定頁，配對連結不應進入聊天、Git 或一般日誌。
+`node bin/cli.mjs acceptance` 會對三種 provider 各發送兩則小型驗收訊息，使用現有帳號額度。驗收完成後自動歸檔此次測試對話，保留紀錄並釋放 provider 程序；清理失敗也會使整體驗收失敗。CLI 配對僅在私人終端用 `pair --reveal`；一般使用者應使用設定頁，配對連結不應進入聊天、Git 或一般日誌。
 
 ## 資料與生命週期
 
-預設狀態放在 `$PI_CODING_AGENT_DIR/pi-paseo/`，未設定時使用 `~/.pi/agent/pi-paseo/`；Paseo 自有 home 位於該狀態目錄的 `daemon/`。套件與整合層放在 `~/.local/share/pi-paseo/`。provider 的 HOME 和 Pi data directory 沿用原環境。
+預設狀態放在 `$PI_CODING_AGENT_DIR/pi-paseo/`，未設定時使用 `~/.pi/agent/pi-paseo/`；Paseo 自有 home 位於該狀態目錄的 `daemon/`。runtime 使用 lockfile 雜湊識別獨立版本，不覆寫正在使用的舊依賴；更新後若 daemon 尚在使用舊版本，需停止後啟動或透過既有容器服務重啟。套件與整合層放在 `~/.local/share/pi-paseo/`。provider 的 HOME 和 Pi data directory 沿用原環境。
 
 daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用埠。relay 配對不需要對外開啟容器埠。背景 supervisor 檢查程序 metadata，故障時恢復插件服務；這不會週期性呼叫模型。Pi Web 整合層在重啟後恢復 supervisor。
 
@@ -90,16 +91,31 @@ daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用
 ```bash
 PI_PASEO_SKIP_POSTINSTALL=1 npm ci
 npm test
-node --test scripts/install-host.test.mjs
+node --test scripts/install-host.test.mjs scripts/bootstrap.test.mjs
 npm run typecheck
 node scripts/check-package.mjs
 node scripts/verify-package-install.mjs
+node scripts/verify-host.mjs
+npm audit --omit=dev
+npm audit --omit=dev --prefix runtime
 npm pack --ignore-scripts
 ```
 
 `host/adapter.patch` 包含 Pi Web 整合原始碼及測試，`host/adapter-meta.json` 包含相容基底與 SHA-256。原始 Pi Web 的完整 checkout、依賴、建置物及本機登入資料都不放入插件發行包。
 
 對話驗收成功以實際 assistant 回覆與新的續聊訊息判定。CLI 存在、模型清單出現或 provider idle 都不能代表可對話。若 Claude 回報 `PROVIDER_QUOTA_EXHAUSTED`，請等待帳號額度恢復或在官方登入入口改用有額度的授權帳號，再重跑驗收。
+
+## 商業部署維護
+
+`health` 輸出不含秘密；只有已安裝、啟用、程序屬於本插件、服務可達且三種 provider 可啟動時才回傳 exit 0。真正對話及 relay 配對另外顯示驗證時間，不能以歷史成功取代目前連線健康。
+
+狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
+
+安裝器使用程序群組時限與 Linux 核心鎖，建置或發布失敗回滾自身變更。更新期間請避免外部同時編輯 launcher；安裝器保留偵測到的外部改動，檔案系統不提供跨外部寫入者的原子 compare-and-swap。程序群組無法涵蓋刻意逃離 session 的程序，部署隔離依賴容器及其資源限制。
+
+Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以固定官方 `brace-expansion` 5.0.12 替換其私有受影響依賴，並由回歸測試驗證 API 相容性。請使用發行 lockfile 和安裝流程，避免在使用中的套件目錄執行 `npm install` 或 `npm ci`。
+
+完整驗收紀錄與已知限制見 [驗證紀錄](docs/validation.md)。
 
 ## 官方參考
 

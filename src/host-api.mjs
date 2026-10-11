@@ -49,6 +49,8 @@ export async function saveConfig(input) {
   const name=typeof input.name==='string'?input.name.trim():'';
   if (name.length>100||/[\x00-\x1f]/.test(name)) throw new Error('Invalid name');
   writeRecord(path.join(runtime.locations().stateDir,'preferences.json'),{name:name||'Pi Agent',connection:'relay'});
+  const snapshot=await runtime.status();
+  if(snapshot.installed&&snapshot.enabled&&snapshot.daemon.running&&!snapshot.diagnosticCode)await runtime.activate();
   return {saved:true};
 }
 export async function completeOnboarding() {

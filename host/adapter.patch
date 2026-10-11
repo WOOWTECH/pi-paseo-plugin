@@ -1,11 +1,347 @@
+diff --git a/app/api/plugin-paseo/route.test.mjs b/app/api/plugin-paseo/route.test.mjs
+new file mode 100644
+index 0000000..f31630d
+--- /dev/null
++++ b/app/api/plugin-paseo/route.test.mjs
+@@ -0,0 +1,327 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { createRequire } from "node:module";
++import { setImmediate } from "node:timers/promises";
++import { fileURLToPath } from "node:url";
++import vm from "node:vm";
++import test from "node:test";
++import { NextRequest } from "next/server.js";
++import ts from "typescript";
++
++const host = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
++const require = createRequire(import.meta.url);
++
++// Execute the real route, proxy, origin checks, path guard, public projections
++// and package serializer. Only package discovery and the installed host API
++// are fixture boundaries; no sessions, accounts or daemon processes are read.
++function fixture(t, options = {}) {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-paseo-boundary-"));
++  const cwd = path.join(root, "project");
++  fs.mkdirSync(cwd);
++  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
++  const calls = [];
++  const snapshot = { phase: "running", enabled: true, daemon: { running: true, reachable: true }, ...options.status };
++  const api = {
++    async status() { calls.push("status"); return snapshot; },
++    async diagnostics() { calls.push("diagnostics"); return snapshot; },
++    async listModels(provider) { calls.push(`models:${provider}`); return { models: [{ id: "fixture-model", label: "Fixture model" }] }; },
++    async lifecycle(input) { calls.push(input.action); return { phase: "disabled" }; },
++    async pair() { calls.push("pair"); return { url: "https://app.paseo.sh/pair#fixture-private-value" }; },
++    async saveConfig(config) { calls.push("config"); snapshot.settings = config; return { saved: true }; },
++    ...options.api,
++  };
++  const pkg = { source: path.join(root, "package"), scope: "global", packageName: "@woowtech/pi-paseo", disabled: options.disabled === true };
++  const sandbox = vm.createContext({
++    process: { env: { HOME: root, PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_PASEO_STATE_DIR: path.join(root, "state"), PI_WEB_PASSWORD: "fixture-password" }, platform: process.platform },
++    Buffer, TextDecoder, URL, console,
++  });
++  const modules = new Map();
++  const stubs = {
++    "@earendil-works/pi-coding-agent": {
++      getAgentDir() { calls.push("sdk:getAgentDir"); return path.join(root, "agent"); },
++      SettingsManager: { create() { calls.push("sdk:settings"); throw new Error("Unexpected settings access"); } },
++      DefaultPackageManager: class { constructor() { calls.push("sdk:packages"); } },
++    },
++    "@/lib/project-trust": { getProjectTrustStatus() { calls.push("trust"); return { trusted: true }; } },
++    "@/lib/plugin-updates": { isPluginSourceCheckable: () => false, checkPluginUpdates: async () => { calls.push("updates"); return []; } },
++    "@/lib/plugin-lifecycle": { notifyPluginPackageChange() { calls.push("lifecycle"); }, preparePluginPackageRemoval() { calls.push("removal"); } },
++    "@/lib/paseo-plugin": {
++      configuredPaseoPackages(directory) { calls.push(`discover:${directory}`); return options.missing ? [] : [pkg]; },
++      loadPaseoHostApi: async () => api,
++      createPaseoOnboarding: async (directory, remember, prompt) => { calls.push(`onboarding:${directory}`); await remember?.("fixture-onboarding"); return prompt ? "fixture-onboarding" : "missing-prompt"; },
++    },
++    "@/lib/file-access": {
++      getAllowedFileRoots: async () => new Set([cwd]),
++      isExistingFilePathAllowed: (directory, roots) => load(path.join(host, "lib/path-security.ts")).isExistingPathWithinRoots(directory, roots),
++    },
++    "node:os": { homedir: () => cwd },
++  };
++  function load(file) {
++    if (modules.has(file)) return modules.get(file).exports;
++    const code = ts.transpileModule(fs.readFileSync(file, "utf8"), {
++      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true }, fileName: file,
++    }).outputText;
++    const loaded = { exports: {} };
++    modules.set(file, loaded);
++    vm.runInContext(`(function(require,module,exports){${code}\n})`, sandbox, { filename: file })((specifier) => {
++      if (Object.hasOwn(stubs, specifier)) return stubs[specifier];
++      if (specifier.startsWith("@/")) return load(path.join(host, specifier.slice(2) + ".ts"));
++      if (specifier.startsWith(".")) return load(path.resolve(path.dirname(file), specifier + ".ts"));
++      return require(specifier);
++    }, loaded, loaded.exports);
++    return loaded.exports;
++  }
++  const route = load(path.join(host, options.routeFile ?? "app/api/plugin-paseo/route.ts"));
++  const { proxy } = load(path.join(host, "proxy.ts"));
++  const { createWebSessionToken } = load(path.join(host, "lib/web-auth.ts"));
++  const token = createWebSessionToken("fixture-password");
++  function request(body, { method = body === undefined ? "GET" : "POST", headers = {}, auth = true, search = "", raw, stream } = {}) {
++    return new NextRequest(`http://localhost${options.routeFile ? options.routeFile.replace(/^app/, "").replace(/\/route\.ts$/, "") : "/api/plugin-paseo"}${search}`, {
++      method,
++      headers: { host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin", ...(auth ? { cookie: `pi_web_session=${token}` } : {}), ...(body === undefined && raw === undefined && stream === undefined ? {} : { "content-type": "application/json" }), ...headers },
++      ...(method === "GET" ? {} : { body: stream ?? raw ?? JSON.stringify({ cwd, ...body }), ...(stream ? { duplex: "half" } : {}) }),
++    });
++  }
++  async function dispatch(req) {
++    const guarded = proxy(req);
++    return guarded.headers.get("x-middleware-next") === "1" ? route[req.method](req) : guarded;
++  }
++  return { api, snapshot, cwd, root, calls, request, dispatch, route, serialize: load(path.join(host, "lib/plugin-package-lock.ts")).serializePluginPackageOperation };
++}
++
++test("Paseo proxy authenticates requests and rejects CSRF before loading the installed API", async (t) => {
++  const f = fixture(t);
++  for (const req of [f.request(undefined, { auth: false }), f.request({ action: "pair" }, { auth: false })]) {
++    assert.equal((await f.dispatch(req)).status, 401);
++  }
++  const csrf = f.request({ action: "pair" }, { headers: { origin: "https://attacker.invalid", "sec-fetch-site": "cross-site" } });
++  assert.equal((await f.dispatch(csrf)).status, 403);
++  assert.equal((await f.route.POST(csrf)).status, 403, "The handler also enforces origin checks");
++  assert.equal((await f.dispatch(f.request(undefined, { headers: { host: "rebind.invalid", origin: "http://rebind.invalid" } }))).status, 403);
++  assert.deepEqual(f.calls, []);
++  const res = await f.dispatch(f.request(undefined));
++  assert.equal(res.status, 200);
++  assert.equal(res.headers.get("cache-control"), "private, no-store");
++  assert.equal(res.headers.get("referrer-policy"), "no-referrer");
++});
++
++test("Paseo rejects malformed inputs before discovering packages or invoking runtime", async (t) => {
++  const f = fixture(t);
++  const cases = [
++    [f.request({ action: "status" }, { headers: { "content-type": "text/plain" } }), 415],
++    [f.request({}, { raw: "{" }), 400],
++    [f.request({}, { raw: "[]" }), 400],
++    [f.request({ action: ["disable"] }), 400],
++    [f.request({ action: "status", cwd: 42 }), 400],
++    [f.request({ action: "status", cwd: "relative" }), 400],
++    [f.request({ action: "models", provider: ["codex"] }), 400],
++    [f.request({ action: "config", config: { name: "x\ncommand" } }), 400],
++  ];
++  for (const [req, status] of cases) assert.equal((await f.dispatch(req)).status, status);
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo byte limit rejects multibyte JSON and cancels an oversized streaming body", async (t) => {
++  const f = fixture(t);
++  const raw = JSON.stringify({ action: "status", padding: "界".repeat(6000) });
++  assert.ok(raw.length < 16 * 1024 && Buffer.byteLength(raw) > 16 * 1024);
++  assert.equal((await f.dispatch(f.request({}, { raw }))).status, 413);
++  let cancelled = false;
++  const stream = new ReadableStream({
++    start(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
++    cancel() { cancelled = true; },
++  });
++  const pending = f.dispatch(f.request({}, { stream }));
++  // The request deliberately never ends: bounding req.text() after the read
++  // cannot protect this boundary. No timing guess is needed to check cancel.
++  await setImmediate();
++  assert.equal(cancelled, true, "The route cancels at the byte boundary without waiting for EOF");
++  assert.equal((await pending).status, 413);
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo authorizes a real directory rather than a file or escaping link", async (t) => {
++  const f = fixture(t);
++  const file = path.join(f.cwd, "file.txt");
++  fs.writeFileSync(file, "fixture");
++  const outside = path.join(f.root, "outside");
++  fs.mkdirSync(outside);
++  const link = path.join(f.cwd, "escape");
++  fs.symlinkSync(outside, link, "dir");
++  for (const cwd of [file, outside, link]) {
++    assert.equal((await f.dispatch(f.request({ action: "activate", cwd }))).status, 404);
++  }
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo masks runtime errors and projects status, diagnostics, models and pairing", async (t) => {
++  const privateValue = "fixture-private-value";
++  const f = fixture(t, { status: { state: { pairing: privateValue }, settings: { name: "Fixture container", apiKey: privateValue }, providers: [{ provider: "codex", status: "ready", credential: privateValue }] } });
++  for (const action of [undefined, "status", "diagnose", "models"]) {
++    const res = await f.dispatch(f.request(action ? { action, provider: "codex" } : undefined));
++    assert.equal(res.status, 200);
++    assert.doesNotMatch(await res.text(), /fixture-private-value/);
++  }
++  const pair = await f.dispatch(f.request({ action: "pair" }));
++  assert.equal(pair.status, 200);
++  assert.equal(pair.headers.get("cache-control"), "private, no-store");
++  assert.equal(pair.headers.get("referrer-policy"), "no-referrer");
++  assert.match((await pair.json()).url, /app\.paseo\.sh/);
++  f.api.pair = async () => { throw new Error(privateValue); };
++  const failure = await f.dispatch(f.request({ action: "pair" }));
++  assert.equal(failure.status, 503);
++  assert.doesNotMatch(await failure.text(), /fixture-private-value/);
++});
++
++test("Paseo read-only POSTs do not block Stop or wait for package writes", async (t) => {
++  const f = fixture(t);
++  for (const action of ["status", "models", "diagnose"]) {
++    const method = action === "models" ? "listModels" : action === "diagnose" ? "diagnostics" : "status";
++    const original = f.api[method];
++    let releaseRead;
++    let enteredRead;
++    const entered = new Promise((resolve) => { enteredRead = resolve; });
++    f.api[method] = async () => { enteredRead(); await new Promise((resolve) => { releaseRead = resolve; }); return original(); };
++    const read = f.dispatch(f.request({ action, provider: "codex" }));
++    await entered;
++    const stop = f.dispatch(f.request({ action: "disable" }));
++    try {
++      await setImmediate();
++      assert.ok(f.calls.includes("disable"), `A pending ${action} must not prevent Stop`);
++    } finally { releaseRead(); await Promise.all([read, stop]); f.api[method] = original; }
++    f.calls.length = 0;
++  }
++  let releaseWrite;
++  let enteredWrite;
++  const entered = new Promise((resolve) => { enteredWrite = resolve; });
++  const write = f.serialize(async () => { enteredWrite(); await new Promise((resolve) => { releaseWrite = resolve; }); });
++  await entered;
++  const read = f.dispatch(f.request({ action: "status" }));
++  try {
++    await setImmediate();
++    assert.ok(f.calls.includes("status"), "Public status remains accessible during package writes");
++  } finally { releaseWrite(); await Promise.all([write, read]); }
++});
++
++test("Paseo mutations still serialize and retain installed/enabled package metadata", async (t) => {
++  const f = fixture(t);
++  let release;
++  let entered;
++  const started = new Promise((resolve) => { entered = resolve; });
++  f.api.saveConfig = async () => { f.calls.push("config"); entered(); await new Promise((resolve) => { release = resolve; }); };
++  const config = f.dispatch(f.request({ action: "config", config: { name: "Fixture" } }));
++  await started;
++  const stop = f.dispatch(f.request({ action: "disable" }));
++  await setImmediate();
++  assert.equal(f.calls.includes("disable"), false);
++  release();
++  const [res, stopped] = await Promise.all([config, stop]);
++  assert.equal(stopped.status, 200);
++  const status = await res.json();
++  assert.equal(status.packageInstalled, true);
++  assert.equal(status.packageEnabled, true);
++});
++
++
++test("Paseo proxy denials are uncacheable and never reach runtime", async (t) => {
++  const f = fixture(t);
++  for (const req of [f.request({ action: "activate" }, { auth: false }), f.request({ action: "activate" }, { headers: { origin: "https://attacker.invalid" } })]) {
++    const res = await f.dispatch(req);
++    assert.match(res.headers.get("cache-control") ?? "", /no-store/);
++  }
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo rejects malformed origins even behind a rewriting proxy", async (t) => {
++  const f = fixture(t);
++  for (const origin of ["http://localhost/private", "http://user:password@localhost", "http://localhost?invalid", "ftp://localhost", "null", ""]) {
++    const res = await f.dispatch(f.request({ action: "pair" }, { headers: { origin, "x-forwarded-proto": "https" } }));
++    assert.equal(res.status, 403, origin);
++  }
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo route forwards the onboarding prompt and ID checkpoint to the host", async (t) => {
++  const f = fixture(t);
++  let remembered;
++  f.api.lifecycle = async (_input, hooks) => ({ onboardingSessionId: await hooks.createOnboarding("Fixture authorized prompt", (id) => { remembered = id; }) });
++  const res = await f.dispatch(f.request({ action: "activate" }));
++  assert.equal(res.status, 200);
++  assert.equal(remembered, "fixture-onboarding");
++  assert.equal((await res.json()).onboardingSessionId, "fixture-onboarding");
++});
++
++test("Plugin settings reject malformed requests before SDK discovery or lifecycle", async (t) => {
++  const f = fixture(t, { routeFile: "app/api/plugins/route.ts" });
++  const cases = [
++    [f.request({ action: "disable" }, { auth: false }), 401],
++    [f.request({ action: "disable" }, { headers: { origin: "https://attacker.invalid" } }), 403],
++    [f.request({ action: "disable" }, { headers: { "content-type": "text/plain" } }), 415],
++    [f.request({}, { raw: "{" }), 400],
++    ...["null", "[]", "42", '"string"'].map((raw) => [f.request({}, { raw }), 400]),
++    ...[{ cwd: 42 }, { cwd: "relative" }, { cwd: f.cwd + "\n" }, { action: ["disable"] }, { action: "unsupported" }, { scope: "typo" }, { source: ["npm:fixture"] }, { packages: "invalid" }, { packages: [null] }, { packages: [{ source: "npm:fixture", scope: "typo" }] }, { packages: [{ source: " " }] }].map((invalid) => [f.request({ action: "disable", source: "npm:fixture", ...invalid }), 400]),
++    [f.request({ action: "remove", packages: [{ source: "npm:fixture", scope: "global" }] }), 400],
++    [f.request({ action: "disable", padding: "x".repeat(65536) }), 413],
++  ];
++  for (const [req, status] of cases) {
++    const res = await f.dispatch(req);
++    assert.equal(res.status, status);
++    assert.match(res.headers.get("cache-control") ?? "", /no-store/);
++  }
++  assert.deepEqual(f.calls, [], "Rejected settings cannot reach package discovery, sessions or lifecycle");
++});
++
++
++test("Plugin GET protects origin, authentication, directory inputs and caching before SDK access", async (t) => {
++  const f = fixture(t, { routeFile: "app/api/plugins/route.ts" });
++  const file = path.join(f.cwd, "fixture.txt");
++  fs.writeFileSync(file, "fixture");
++  for (const [req, status] of [
++    [f.request(undefined, { auth: false }), 401],
++    [f.request(undefined, { headers: { origin: "https://attacker.invalid" } }), 403],
++    [f.request(undefined, { search: "?cwd=relative" }), 400],
++    [f.request(undefined, { search: "?cwd=" + encodeURIComponent(file) }), 400],
++    [f.request({ action: "disable", source: "npm:fixture", cwd: file }), 400],
++    [f.request(undefined, { search: "?cwd=" + encodeURIComponent(f.root) }), 403],
++  ]) {
++    const res = await f.dispatch(req);
++    assert.equal(res.status, status);
++    assert.match(res.headers.get("cache-control") ?? "", /no-store/);
++  }
++  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo rejects invalid UTF-8 and a declared oversized body without runtime access", async (t) => {
++  const f = fixture(t);
++  const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([0xff])); controller.close(); } });
++  assert.equal((await f.dispatch(f.request({}, { stream }))).status, 400);
++  assert.equal((await f.dispatch(f.request({ action: "activate" }, { headers: { "content-length": "16385" } }))).status, 413);
++  assert.deepEqual(f.calls, []);
++});
++
++
++test("Plugin update checks reject malformed or denied requests before runtime discovery", async (t) => {
++  const f = fixture(t, { routeFile: "app/api/plugins/check/route.ts" });
++  for (const [req, status] of [
++    [f.request({}, { auth: false }), 401],
++    [f.request({}, { headers: { origin: "https://attacker.invalid" } }), 403],
++    [f.request({}, { headers: { "content-type": "text/plain" } }), 415],
++    [f.request({}, { raw: "null" }), 400],
++    [f.request({}, { raw: "{" }), 400],
++    [f.request({ source: ["npm:fixture"] }), 400],
++    [f.request({ source: "npm:fixture", scope: "typo" }), 400],
++    [f.request({ cwd: "relative" }), 400],
++    [f.request({ padding: "x".repeat(65536) }), 413],
++  ]) {
++    const res = await f.dispatch(req);
++    assert.equal(res.status, status);
++    assert.match(res.headers.get("cache-control") ?? "", /no-store/);
++  }
++  assert.deepEqual(f.calls, []);
++  const checked = await f.dispatch(f.request({}));
++  assert.equal(checked.status, 200);
++  assert.match(checked.headers.get("cache-control") ?? "", /no-store/);
++  assert.deepEqual(f.calls, ["updates"]);
++});
 diff --git a/app/api/plugin-paseo/route.ts b/app/api/plugin-paseo/route.ts
 new file mode 100644
-index 0000000..3307fa4
+index 0000000..2e4d8cd
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.ts
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,96 @@
 +import { NextResponse } from "next/server";
++import { readJsonObject, RequestBodyError } from "@/lib/json-request";
 +import { homedir } from "node:os";
++import { statSync } from "node:fs";
++import { isAbsolute } from "node:path";
 +import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 +import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 +import { configuredPaseoPackages, createPaseoOnboarding, loadPaseoHostApi } from "@/lib/paseo-plugin";
@@ -16,6 +352,11 @@ index 0000000..3307fa4
 +export const dynamic = "force-dynamic";
 +export const runtime = "nodejs";
 +const headers = { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" };
++const MAX_BODY_BYTES = 16 * 1024;
++
++function validCwd(cwd: unknown): boolean {
++  return cwd === undefined || (typeof cwd === "string" && cwd.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(cwd) && (cwd === "" || isAbsolute(cwd)));
++}
 +
 +function response(value: unknown, status = 200) {
 +  return NextResponse.json(value, { status, headers });
@@ -23,8 +364,10 @@ index 0000000..3307fa4
 +
 +async function context(cwd: unknown) {
 +  const directory = typeof cwd === "string" && cwd ? cwd : process.env.PI_PASEO_CWD || homedir();
++  if (!validCwd(directory)) return null;
 +  const roots = await getAllowedFileRoots();
 +  if (!isExistingFilePathAllowed(directory, roots)) return null;
++  if (!statSync(directory).isDirectory()) return null;
 +  const packages = configuredPaseoPackages(directory);
 +  const target = packages.find((pkg) => !pkg.disabled) ?? packages[0];
 +  if (!target) return null;
@@ -34,7 +377,9 @@ index 0000000..3307fa4
 +export async function GET(req: Request) {
 +  if (!isApiRequestAllowed(req)) return response({ error: "Untrusted API request" }, 403);
 +  try {
-+    const current = await context(new URL(req.url).searchParams.get("cwd"));
++    const cwd = new URL(req.url).searchParams.get("cwd") ?? undefined;
++    if (!validCwd(cwd)) return response({ error: "Invalid working directory" }, 400);
++    const current = await context(cwd);
 +    if (!current) return response({ error: "請先在插件設定安裝 Paseo，並選擇可存取的工作目錄。" }, 404);
 +    return response(current.api ? paseoPublicStatus({ ...await current.api.status(), packageEnabled: true, packageInstalled: true }) : { phase: "disabled", packageEnabled: false, packageInstalled: true });
 +  } catch {
@@ -46,21 +391,21 @@ index 0000000..3307fa4
 +  if (!isApiRequestAllowed(req)) return response({ error: "Untrusted API request" }, 403);
 +  if (!hasJsonContentType(req)) return response({ error: "Content-Type must be application/json" }, 415);
 +  try {
-+    const raw = await req.text();
-+    if (raw.length > 16 * 1024) return response({ error: "Request too large" }, 413);
-+    let body: Record<string, unknown>;
-+    try { body = JSON.parse(raw); } catch { return response({ error: "Invalid JSON request" }, 400); }
-+    if (!body || typeof body !== "object" || Array.isArray(body)) return response({ error: "Invalid request" }, 400);
-+    if (!["status", "activate", "disable", "diagnose", "pair", "config", "models"].includes(String(body.action))) return response({ error: "Unsupported action" }, 400);
-+    return await serializePluginPackageOperation(async () => {
++    const body = await readJsonObject(req, MAX_BODY_BYTES);
++    if (typeof body.action !== "string" || !["status", "activate", "disable", "diagnose", "pair", "config", "models"].includes(body.action)) return response({ error: "Unsupported action" }, 400);
++    if (!validCwd(body.cwd)) return response({ error: "Invalid working directory" }, 400);
++    if (body.action === "models" && (typeof body.provider !== "string" || !["claude", "codex", "pi"].includes(body.provider))) return response({ error: "Unsupported provider" }, 400);
++    const config = body.action === "config" ? readPaseoConfig(body.config) : undefined;
++    if (body.action === "config" && !config) return response({ error: "設定只接受有效的顯示名稱。" }, 400);
++    const operation = async () => {
 +      const current = await context(body.cwd);
 +      if (!current) return response({ error: "Paseo 插件尚未安裝，或工作目錄無法存取。" }, 404);
 +      const { api, cwd, target, packages } = current;
 +      if (!api) return response({ error: "請先在插件設定啟用 Paseo。" }, 409);
-+      if (body.action === "status") return response(paseoPublicStatus(await api.status()));
++      const publicStatus = async () => paseoPublicStatus({ ...await api.status(), packageEnabled: true, packageInstalled: true });
++      if (body.action === "status") return response(await publicStatus());
 +      if (body.action === "diagnose") return response({ checks: paseoDiagnosticChecks(await api.diagnostics()) });
 +      if (body.action === "models") {
-+        if (!["claude", "codex", "pi"].includes(String(body.provider))) return response({ error: "Unsupported provider" }, 400);
 +        if (!api.listModels) return response({ error: "目前插件未提供模型目錄；請開啟 Paseo 選擇模型與模式。" }, 501);
 +        return response(paseoModelCatalog(await api.listModels(String(body.provider)), String(body.provider)));
 +      }
@@ -72,25 +417,128 @@ index 0000000..3307fa4
 +        return response({ url, ...(typeof result.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(result.expiresAt) ? { expiresAt: result.expiresAt } : {}) });
 +      }
 +      if (body.action === "config") {
-+        const config = readPaseoConfig(body.config);
-+        if (!config) return response({ error: "設定只接受有效的顯示名稱。" }, 400);
-+        await api.saveConfig(config);
-+        return response(paseoPublicStatus(await api.status()));
++        await api.saveConfig(config!);
++        return response(await publicStatus());
 +      }
 +      if (body.action === "activate" && target.disabled) return response({ error: "請先在插件設定啟用 Paseo。" }, 409);
-+      const result = await api.lifecycle({ action: body.action === "disable" ? "disable" : "enable", cwd, source: target.source, scope: target.scope, packages: body.action === "disable" ? [] : packages }, { createOnboarding: () => createPaseoOnboarding(cwd) });
++      const result = await api.lifecycle({ action: body.action === "disable" ? "disable" : "enable", cwd, source: target.source, scope: target.scope, packages: body.action === "disable" ? [] : packages }, { createOnboarding: (prompt, remember) => createPaseoOnboarding(cwd, remember, prompt) });
 +      return response(paseoLifecycleResult(result));
-+    });
-+  } catch {
++    };
++    // Runtime reads are independently bounded. A model/provider lookup can
++    // take minutes and must not hold the package/lifecycle mutation chain.
++    return await (["status", "diagnose", "models"].includes(body.action) ? operation() : serializePluginPackageOperation(operation));
++  } catch (failure) {
++    if (failure instanceof RequestBodyError) return response({ error: failure.message }, failure.status);
 +    // Do not return exception strings: CLI output can contain pairing secrets.
 +    return response({ error: "Paseo 操作尚未完成；請檢查診斷並重試。" }, 503);
 +  }
 +}
+diff --git a/app/api/plugins/check/route.ts b/app/api/plugins/check/route.ts
+index 5d6fc71..a03b71b 100644
+--- a/app/api/plugins/check/route.ts
++++ b/app/api/plugins/check/route.ts
+@@ -1,42 +1,36 @@
+ import { NextResponse } from "next/server";
++import { statSync } from "node:fs";
++import { isAbsolute } from "node:path";
+ import type { PluginScope } from "@/lib/api-types";
+ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
++import { readJsonObject, RequestBodyError } from "@/lib/json-request";
++import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+ import { checkPluginUpdates } from "@/lib/plugin-updates";
+ 
+ export const dynamic = "force-dynamic";
++function response(value: unknown, status = 200) {
++  return NextResponse.json(value, { status, headers: { "Cache-Control": "private, no-store" } });
++}
+ 
+ export async function POST(req: Request) {
++  if (!isApiRequestAllowed(req)) return response({ error: "Untrusted API request" }, 403);
++  if (!hasJsonContentType(req)) return response({ error: "Content-Type must be application/json" }, 415);
+   try {
+-    const body = await req.json() as {
+-      cwd?: unknown;
+-      source?: unknown;
+-      scope?: unknown;
+-    };
+-    const cwd = typeof body.cwd === "string" ? body.cwd : "";
+-    if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
++    const body = await readJsonObject(req, 64 * 1024);
++    const cwd = body.cwd;
++    if (typeof cwd !== "string" || !cwd || cwd.length > 4096 || !isAbsolute(cwd) || /[\u0000-\u001f\u007f]/.test(cwd)) return response({ error: "Valid absolute cwd required" }, 400);
++    if (body.source !== undefined && (typeof body.source !== "string" || !body.source.trim() || body.source.length > 4096 || /[\u0000-\u001f\u007f]/.test(body.source))) return response({ error: "Invalid package source" }, 400);
++    if (body.scope !== undefined && body.scope !== "global" && body.scope !== "project") return response({ error: "Invalid scope" }, 400);
++    if ((body.source === undefined) !== (body.scope === undefined)) return response({ error: "source and scope must be provided together" }, 400);
+     const allowedRoots = await getAllowedFileRoots();
+-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
+-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+-    }
+-
+-    const source = typeof body.source === "string" ? body.source : undefined;
+-    const scope = body.scope === "global" || body.scope === "project"
+-      ? body.scope as PluginScope
+-      : undefined;
+-    if ((source && !scope) || (!source && scope)) {
+-      return NextResponse.json({ error: "source and scope must be provided together" }, { status: 400 });
+-    }
+-
+-    const updates = await checkPluginUpdates(cwd, source && scope ? { source, scope } : undefined);
+-    if (source && scope && updates.length === 0) {
+-      return NextResponse.json({ error: "Configured package not found" }, { status: 404 });
+-    }
+-
+-    return NextResponse.json({ updates });
++    if (!isExistingFilePathAllowed(cwd, allowedRoots)) return response({ error: "Access denied" }, 403);
++    if (!statSync(cwd).isDirectory()) return response({ error: "Working directory required" }, 400);
++    const target = typeof body.source === "string" ? { source: body.source.trim(), scope: body.scope as PluginScope } : undefined;
++    const updates = await checkPluginUpdates(cwd, target);
++    if (target && updates.length === 0) return response({ error: "Configured package not found" }, 404);
++    return response({ updates });
+   } catch (error) {
+-    return NextResponse.json(
+-      { error: error instanceof Error ? error.message : String(error) },
+-      { status: 500 },
+-    );
++    if (error instanceof RequestBodyError) return response({ error: error.message }, error.status);
++    return response({ error: "Plugin update check could not be completed" }, 500);
+   }
+ }
+diff --git a/app/api/plugins/route.test.mjs b/app/api/plugins/route.test.mjs
+index e31bc08..b4229f0 100644
+--- a/app/api/plugins/route.test.mjs
++++ b/app/api/plugins/route.test.mjs
+@@ -26,7 +26,7 @@ after(async () => {
+ });
+ 
+ test("lists auto-discovered top-level extensions", async () => {
+-  const response = await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`));
++  const response = await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`, { headers: { host: "localhost" } }));
+   const body = await response.json();
+ 
+   assert.equal(response.status, 200);
+@@ -53,7 +53,7 @@ test("reports the package description from package.json", async () => {
+   await writeFile(join(packageDir, "extensions", "index.ts"), "export default () => {};\n");
+   await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [packageDir] }));
+ 
+-  const response = await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`));
++  const response = await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`, { headers: { host: "localhost" } }));
+   const body = await response.json();
+ 
+   assert.equal(response.status, 200);
 diff --git a/app/api/plugins/route.ts b/app/api/plugins/route.ts
-index 1c0670c..cf52dad 100644
+index 1c0670c..851a3b9 100644
 --- a/app/api/plugins/route.ts
 +++ b/app/api/plugins/route.ts
-@@ -13,6 +13,8 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
+@@ -1,6 +1,7 @@
+ import { NextResponse } from "next/server";
++import { readJsonObject, RequestBodyError } from "@/lib/json-request";
+ import { existsSync, readFileSync, statSync } from "fs";
+-import { basename, dirname, extname, join, relative, sep } from "node:path";
++import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
+ import {
+   DefaultPackageManager,
+   getAgentDir,
+@@ -13,6 +14,8 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
  import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
  import { getProjectTrustStatus } from "@/lib/project-trust";
  import { isPluginSourceCheckable } from "@/lib/plugin-updates";
@@ -99,8 +547,126 @@ index 1c0670c..cf52dad 100644
  import type {
    PluginDiagnostic,
    PluginPackageInfo,
-@@ -444,71 +446,95 @@ export async function POST(req: Request) {
-       return NextResponse.json({ error: "Access denied" }, { status: 403 });
+@@ -27,6 +30,16 @@ import type {
+ } from "@/lib/api-types";
+ 
+ export const dynamic = "force-dynamic";
++const MAX_BODY_BYTES = 64 * 1024;
++function response(value: unknown, init: ResponseInit = {}) {
++  return NextResponse.json(value, { ...init, headers: { "Cache-Control": "private, no-store" } });
++}
++function validCwd(value: unknown): value is string {
++  return typeof value === "string" && value.length > 0 && value.length <= 4096 && isAbsolute(value) && !/[\u0000-\u001f\u007f]/.test(value);
++}
++function validSource(value: unknown): value is string {
++  return typeof value === "string" && value.trim().length > 0 && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value);
++}
+ 
+ type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
+ 
+@@ -172,8 +185,8 @@ async function setPackageListDisabled(
+   }
+   await settingsManager.flush();
+   const settingsErrors = new Map<string, string>();
+-  for (const { scope, path, error } of settingsManager.drainErrors()) {
+-    if (!settingsErrors.has(scope)) settingsErrors.set(scope, path ? `${path}: ${error.message}` : error.message);
++  for (const { scope, path } of settingsManager.drainErrors()) {
++    if (!settingsErrors.has(scope)) settingsErrors.set(scope, path ? `${path}: Plugin settings could not be loaded or saved` : "Plugin settings could not be loaded or saved");
+   }
+   return packages.map((pkg) => {
+     // A settings file that failed to load also reads as "not configured", so
+@@ -184,12 +197,13 @@ async function setPackageListDisabled(
+ }
+ 
+ function readPackageList(value: unknown): { source: string; scope: PluginScope }[] | null {
+-  if (!Array.isArray(value)) return null;
++  if (!Array.isArray(value) || value.length === 0 || value.length > 200) return null;
+   const packages = new Map<string, { source: string; scope: PluginScope }>();
+   for (const item of value) {
+-    const source = typeof item?.source === "string" ? item.source.trim() : "";
+-    if (!source) return null;
++    if (!item || typeof item !== "object" || Array.isArray(item) || !validSource(item.source)) return null;
++    const source = item.source.trim();
+     const scope = readScope(item.scope);
++    if (!scope) return null;
+     packages.set(keyFor(source, scope), { source, scope });
+   }
+   return [...packages.values()];
+@@ -398,23 +412,25 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
+   };
+ }
+ 
+-function readScope(scope: unknown): PluginScope {
+-  return scope === "project" ? "project" : "global";
++function readScope(scope: unknown): PluginScope | null {
++  return scope === undefined || scope === "global" ? "global" : scope === "project" ? "project" : null;
+ }
+ 
+ export async function GET(req: Request) {
++  if (!isApiRequestAllowed(req)) return response({ error: "Untrusted API request" }, { status: 403 });
+   const { searchParams } = new URL(req.url);
+   const cwd = searchParams.get("cwd");
+-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
++  if (!validCwd(cwd)) return response({ error: "Valid absolute cwd required" }, { status: 400 });
+ 
+   try {
+     const allowedRoots = await getAllowedFileRoots();
+     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
+-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++      return response({ error: "Access denied" }, { status: 403 });
+     }
+-    return NextResponse.json(await readPlugins(cwd));
+-  } catch (error) {
+-    return NextResponse.json({ error: String(error) }, { status: 500 });
++    if (!statSync(cwd).isDirectory()) return response({ error: "Working directory required" }, { status: 400 });
++    return response(await readPlugins(cwd));
++  } catch {
++    return response({ error: "Plugin settings could not be read" }, { status: 500 });
+   }
+ }
+ 
+@@ -423,93 +439,118 @@ export async function GET(req: Request) {
+ // source/scope and add per-package `results` to the response.
+ export async function POST(req: Request) {
+   if (!isApiRequestAllowed(req)) {
+-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
++    return response({ error: "Untrusted API request" }, { status: 403 });
+   }
+   if (!hasJsonContentType(req)) {
+-    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
++    return response({ error: "Content-Type must be application/json" }, { status: 415 });
+   }
+ 
+   try {
+-    const body = await req.json() as {
+-      action?: PluginAction;
+-      source?: string;
+-      scope?: PluginScope;
+-      packages?: unknown;
+-      cwd?: string;
+-    };
+-    if (!body.cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+-    if (!body.action) return NextResponse.json({ error: "action required" }, { status: 400 });
++    const input = await readJsonObject(req, MAX_BODY_BYTES);
++    if (!validCwd(input.cwd)) return response({ error: "Valid absolute cwd required" }, { status: 400 });
++    if (typeof input.action !== "string" || !["install", "remove", "update", "disable", "enable"].includes(input.action)) return response({ error: "Unsupported action" }, { status: 400 });
++    const scope = readScope(input.scope);
++    if (!scope) return response({ error: "Invalid scope" }, { status: 400 });
++    if (input.source !== undefined && !validSource(input.source)) return response({ error: "Invalid package source" }, { status: 400 });
++    let packageList: { source: string; scope: PluginScope }[] | undefined;
++    if (input.packages !== undefined) {
++      if (input.action !== "enable" && input.action !== "disable") return response({ error: "packages is only supported by enable and disable" }, { status: 400 });
++      const parsed = readPackageList(input.packages);
++      if (!parsed) return response({ error: "packages must be a list of { source, scope }" }, { status: 400 });
++      packageList = parsed;
++    } else if (input.action !== "update" && input.source === undefined) {
++      return response({ error: "source required" }, { status: 400 });
++    }
++    const body = { cwd: input.cwd, action: input.action as PluginAction, source: typeof input.source === "string" ? input.source.trim() : undefined };
+     const allowedRoots = await getAllowedFileRoots();
+     if (!isExistingFilePathAllowed(body.cwd, allowedRoots)) {
+-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++      return response({ error: "Access denied" }, { status: 403 });
      }
  
 -    const agentDir = getAgentDir();
@@ -117,6 +683,7 @@ index 1c0670c..cf52dad 100644
 -      if (!packages) {
 -        return NextResponse.json({ error: "packages must be a list of { source, scope }" }, { status: 400 });
 +    const cwd = body.cwd;
++    if (!statSync(cwd).isDirectory()) return response({ error: "Working directory required" }, { status: 400 });
 +    return await serializePluginPackageOperation(async () => {
 +      const agentDir = getAgentDir();
 +      const projectTrust = getProjectTrustStatus(cwd, agentDir);
@@ -124,23 +691,16 @@ index 1c0670c..cf52dad 100644
 +        projectTrusted: projectTrust.trusted,
 +      });
 +      const before = await readPlugins(cwd);
-+      if (body.packages !== undefined) {
-+        if (body.action !== "enable" && body.action !== "disable") {
-+          return NextResponse.json({ error: "packages is only supported by enable and disable" }, { status: 400 });
-+        }
-+        const packages = readPackageList(body.packages);
-+        if (!packages) {
-+          return NextResponse.json({ error: "packages must be a list of { source, scope }" }, { status: 400 });
-+        }
++      if (packageList) {
 +        const results = await setPackageListDisabled(
 +          settingsManager,
-+          packages,
++          packageList,
 +          body.action === "disable",
 +          projectTrust.trusted,
 +        );
 +        const next = await readPlugins(cwd);
 +        const lifecycle = await notifyPluginPackageChange(body.action, cwd, before.packages, next.packages, results.filter((item) => !item.error));
-+        return NextResponse.json({ ...next, results, ...lifecycle } satisfies PluginsBulkResponse);
++        return response({ ...next, results, ...lifecycle } satisfies PluginsBulkResponse);
        }
 -      const results = await setPackageListDisabled(
 -        settingsManager,
@@ -174,10 +734,10 @@ index 1c0670c..cf52dad 100644
 -      await packageManager.removeAndPersist(source, { local });
 -    } else if (body.action === "update") {
 -      if (!source && !projectTrust.trusted && packageManager.listConfiguredPackages().some((pkg) => pkg.scope === "project")) {
-+      const scope = readScope(body.scope);
-+      if (scope === "project" && !projectTrust.trusted) {
-         return NextResponse.json(
+-        return NextResponse.json(
 -          { error: "Project resources must be trusted before updating project plugins" },
++      if (scope === "project" && !projectTrust.trusted) {
++        return response(
 +          { error: "Project resources must be trusted before modifying project plugins" },
            { status: 403 },
          );
@@ -203,10 +763,10 @@ index 1c0670c..cf52dad 100644
 +      const local = scope === "project";
 +
 +      if (body.action === "install") {
-+        if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
++        if (!source) return response({ error: "source required" }, { status: 400 });
 +        await packageManager.installAndPersist(source, { local });
 +      } else if (body.action === "remove") {
-+        if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
++        if (!source) return response({ error: "source required" }, { status: 400 });
 +        const removal = await preparePluginPackageRemoval(cwd, before.packages, source, scope);
 +        try {
 +          await packageManager.removeAndPersist(source, { local });
@@ -219,40 +779,43 @@ index 1c0670c..cf52dad 100644
 +        const next = await readPlugins(cwd);
 +        // The last package API is already stopped and may now be deleted.
 +        const lifecycle = await notifyPluginPackageChange("remove", cwd, before.packages, next.packages, [{ source, scope }], removal?.api);
-+        return NextResponse.json({ ...next, ...lifecycle });
++        return response({ ...next, ...lifecycle });
 +      } else if (body.action === "update") {
 +        if (!source && !projectTrust.trusted && packageManager.listConfiguredPackages().some((pkg) => pkg.scope === "project")) {
-+          return NextResponse.json(
++          return response(
 +            { error: "Project resources must be trusted before updating project plugins" },
 +            { status: 403 },
 +          );
 +        }
 +        await packageManager.update(source);
 +      } else if (body.action === "disable") {
-+        if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
++        if (!source) return response({ error: "source required" }, { status: 400 });
 +        setPackagesDisabled(settingsManager, [source], scope, true);
 +        await settingsManager.flush();
 +      } else if (body.action === "enable") {
-+        if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
++        if (!source) return response({ error: "source required" }, { status: 400 });
 +        setPackagesDisabled(settingsManager, [source], scope, false);
 +        await settingsManager.flush();
 +      } else {
-+        return NextResponse.json({ error: `Unsupported action: ${body.action}` }, { status: 400 });
++        return response({ error: `Unsupported action: ${body.action}` }, { status: 400 });
 +      }
  
 -    return NextResponse.json(await readPlugins(body.cwd));
 +      const settingsErrors = settingsManager.drainErrors();
 +      if (settingsErrors.length) {
-+        return NextResponse.json({ error: "Plugin settings could not be saved" }, { status: 500 });
++        return response({ error: "Plugin settings could not be saved" }, { status: 500 });
 +      }
 +      const next = await readPlugins(cwd);
 +      const successful = source ? [{ source, scope }] : next.packages.map(({ source, scope }) => ({ source, scope }));
 +      const lifecycle = await notifyPluginPackageChange(body.action, cwd, before.packages, next.packages, successful);
-+      return NextResponse.json({ ...next, ...lifecycle });
++      return response({ ...next, ...lifecycle });
 +    });
    } catch (error) {
-     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
++    if (error instanceof RequestBodyError) return response({ error: error.message }, { status: error.status });
++    return response({ error: "Plugin operation could not be completed; check installation and settings" }, { status: 500 });
    }
+ }
 diff --git a/app/paseo/setup/page.tsx b/app/paseo/setup/page.tsx
 new file mode 100644
 index 0000000..dd4dfc5
@@ -275,20 +838,258 @@ index 0000000..dd4dfc5
 +    </main>
 +  );
 +}
+diff --git a/components/PaseoPluginPanel.behavior.test.mjs b/components/PaseoPluginPanel.behavior.test.mjs
+new file mode 100644
+index 0000000..66de7d8
+--- /dev/null
++++ b/components/PaseoPluginPanel.behavior.test.mjs
+@@ -0,0 +1,229 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import { fileURLToPath } from "node:url";
++import { setImmediate } from "node:timers/promises";
++import vm from "node:vm";
++import test from "node:test";
++import * as jsx from "react/jsx-runtime";
++import ts from "typescript";
++import * as ui from "../lib/paseo-ui.ts";
++
++const panelPath = fileURLToPath(new URL("./PaseoPluginPanel.tsx", import.meta.url));
++
++// Run the actual panel and callbacks with a small hook scheduler. Fetch and
++// timers are isolated; JSX retains the real button props and displayed text.
++function fixture(t, { status = {}, fetch } = {}) {
++  const hooks = [], effects = [], requests = [], timers = new Map();
++  let now = Date.now();
++  let cursor = 0, tree, props = { cwd: "/fixture/project", setup: true }, nextTimer = 0;
++  const same = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
++  const react = {
++    useState(initial) {
++      const index = cursor++;
++      hooks[index] ??= { value: typeof initial === "function" ? initial() : initial };
++      return [hooks[index].value, (value) => { hooks[index].value = typeof value === "function" ? value(hooks[index].value) : value; }];
++    },
++    useRef(value) { const index = cursor++; hooks[index] ??= { current: value }; return hooks[index]; },
++    useCallback(callback, dependencies) {
++      const index = cursor++;
++      if (!same(hooks[index]?.dependencies, dependencies)) hooks[index] = { callback, dependencies };
++      return hooks[index].callback;
++    },
++    useEffect(effect, dependencies) {
++      const index = cursor++;
++      if (!same(hooks[index]?.dependencies, dependencies)) {
++        const previous = hooks[index];
++        hooks[index] = { dependencies };
++        effects.push(() => { previous?.cleanup?.(); hooks[index].cleanup = effect(); });
++      }
++    },
++  };
++  const blocks = Object.fromEntries(["ConfigButton", "ConfigDetailActions", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigFooterStatus", "ConfigSectionTitle"].map((name) => [name, name]));
++  const sandbox = vm.createContext({
++    fetch: async (url, options) => { requests.push({ url, options }); return fetch ? fetch(url, options) : Response.json(status); },
++    document: { hidden: false }, navigator: {}, console, AbortController, Date: { now: () => now },
++    setInterval(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
++    clearInterval(id) { timers.delete(id); },
++  });
++  const code = ts.transpileModule(fs.readFileSync(panelPath, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }, fileName: panelPath }).outputText;
++  const loaded = { exports: {} };
++  vm.runInContext(`(function(require,module,exports){${code}\n})`, sandbox, { filename: panelPath })((specifier) => {
++    const modules = { react, "react/jsx-runtime": jsx, "next/link": { default: "Link", __esModule: true }, "./SettingsUi": blocks, "@/lib/paseo-ui": ui };
++    assert.ok(Object.hasOwn(modules, specifier), specifier);
++    return modules[specifier];
++  }, loaded, loaded.exports);
++  const { PaseoPluginPanel } = loaded.exports;
++  function render(nextProps = {}) {
++    props = { ...props, ...nextProps };
++    cursor = 0;
++    tree = PaseoPluginPanel(props);
++    for (const effect of effects.splice(0)) effect();
++    return tree;
++  }
++  function elements(node) {
++    if (Array.isArray(node)) return node.flatMap((child) => elements(child));
++    if (!node || typeof node !== "object") return [];
++    return [node, ...elements(node.props?.children)];
++  }
++  function text(node) {
++    if (Array.isArray(node)) return node.map((child) => text(child)).join("");
++    if (node === null || node === undefined || typeof node === "boolean") return "";
++    if (typeof node !== "object") return String(node);
++    return (node.props?.summary ?? "") + text(node.props?.children);
++  }
++  function button(label) {
++    const found = elements(tree).find((node) => node.type === "ConfigButton" && text(node) === label);
++    assert.ok(found, `Button ${label} exists`);
++    return found;
++  }
++  async function settle() { await setImmediate(); render(); await setImmediate(); render(); }
++  t.after(() => { for (const hook of hooks) hook?.cleanup?.(); });
++  render();
++  return { render, text: () => text(tree), button, elements: () => elements(tree), settle, requests, timers, advance: (ms) => { now += ms; } };
++}
++
++test("Paseo Stop stays available while a paused daemon is still running", async (t) => {
++  const f = fixture(t, { status: { enabled: false, packageEnabled: true, phase: "disabled", daemon: { running: true, healthy: true } } });
++  await f.settle();
++  assert.equal(f.button("停止 Paseo 服務").props.disabled, false);
++});
++
++test("Paseo pairing and model controls wait for confirmed current readiness", async (t) => {
++  const f = fixture(t, { status: { enabled: true, packageEnabled: true, phase: "starting", daemon: { running: true, healthy: false } } });
++  await f.settle();
++  assert.equal(f.button("產生配對連結").props.disabled, true);
++  assert.equal(f.button("讀取 Codex 模型").props.disabled, true);
++  assert.match(f.text(), /等待.*連線|連線.*確認/);
++});
++
++test("Paseo lifecycle error receipts are shown as failure rather than success", async (t) => {
++  const f = fixture(t, { fetch: async (_url, options) => Response.json(options?.method === "POST" ? { error: "Paseo 初始化尚未完成；請檢查診斷。" } : { enabled: true, packageEnabled: true, daemon: { healthy: true } }) });
++  await f.settle();
++  f.button("啟動／繼續初始化").props.onClick();
++  await f.settle();
++  assert.match(f.text(), /Paseo 初始化尚未完成/);
++  assert.doesNotMatch(f.text(), /初始化已排入背景處理/);
++});
++
++test("Paseo failed refresh does not leave stale pairing and model controls enabled", async (t) => {
++  let fail = false;
++  const f = fixture(t, { fetch: async () => fail ? Response.json({ error: "服務無法取得" }, { status: 503 }) : Response.json({ enabled: true, packageEnabled: true, daemon: { healthy: true } }) });
++  await f.settle();
++  assert.equal(f.button("產生配對連結").props.disabled, false);
++  fail = true;
++  f.button("重新整理").props.onClick();
++  await f.settle();
++  assert.equal(f.button("產生配對連結").props.disabled, true);
++  assert.equal(f.button("讀取 Codex 模型").props.disabled, true);
++});
++
++test("Paseo previous-workspace responses cannot replace current status or names", async (t) => {
++  let releaseOld;
++  const old = new Promise((resolve) => { releaseOld = resolve; });
++  const f = fixture(t, { fetch: async (url) => String(url).includes(encodeURIComponent("/fixture/project")) ? old : Response.json({ phase: "running", configuration: { name: "Current workspace" } }) });
++  f.render({ cwd: "/fixture/new-project" });
++  await f.settle();
++  releaseOld(Response.json({ phase: "failed", configuration: { name: "Old workspace" } }));
++  await f.settle();
++  assert.doesNotMatch(f.text(), /需要處理/);
++  const input = f.elements().find((node) => node.type === "input");
++  assert.equal(input.props.value, "Current workspace");
++});
++
++test("Paseo historical acceptance shows its timestamp and does not override a current login error", async (t) => {
++  const f = fixture(t, { status: { state: { acceptance: { checkedAt: "2026-10-10T01:02:03.000Z", providers: [{ provider: "codex", passed: true }] } }, providers: [{ provider: "codex", chatVerified: true, authentication: "login_required" }] } });
++  await f.settle();
++  assert.match(f.text(), /2026-10-10T01:02:03.000Z/);
++  assert.match(f.text(), /歷史/);
++  assert.match(f.text(), /需要官方登入/);
++});
++
++test("Paseo Stop can interrupt a model read and a late catalog does not restore stale results", async (t) => {
++  let releaseModels;
++  const models = new Promise((resolve) => { releaseModels = resolve; });
++  let running = true;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    const body = options?.body ? JSON.parse(options.body) : undefined;
++    if (body?.action === "models") return models;
++    if (body?.action === "disable") { running = false; return Response.json({ phase: "disabled" }); }
++    return Response.json({ enabled: running, packageEnabled: true, daemon: { running, healthy: running } });
++  } });
++  await f.settle();
++  f.button("讀取 Codex 模型").props.onClick();
++  await f.settle();
++  assert.equal(f.button("停止 Paseo 服務").props.disabled, false);
++  f.button("停止 Paseo 服務").props.onClick();
++  await f.settle();
++  releaseModels(Response.json({ models: [{ id: "late-model", label: "Late model" }] }));
++  await f.settle();
++  assert.doesNotMatch(f.text(), /Late model/);
++  assert.equal(f.button("產生配對連結").props.disabled, true);
++});
++
++test("Paseo successful name saves display the applied normalized name", async (t) => {
++  let storedName = "Old name";
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") storedName = JSON.parse(options.body).config.name;
++    return Response.json({ configuration: { name: storedName } });
++  } });
++  await f.settle();
++  f.elements().find((node) => node.type === "input").props.onChange({ target: { value: "  New name  " } });
++  f.render();
++  f.button("儲存設定").props.onClick();
++  await f.settle();
++  assert.equal(storedName, "New name");
++  assert.equal(f.elements().find((node) => node.type === "input").props.value, "New name");
++});
++
++
++test("Paseo restart-required status explains the recovery action", async (t) => {
++  const f = fixture(t, { status: { phase: "restart_required", enabled: true, packageEnabled: true, daemon: { running: true, healthy: true } } });
++  await f.settle();
++  assert.match(f.text(), /需要重新啟動/);
++  assert.match(f.text(), /停止.*啟動／繼續初始化/);
++  assert.equal(f.button("停止 Paseo 服務").props.disabled, false);
++  assert.equal(f.button("產生配對連結").props.disabled, true);
++});
++
++test("Paseo polls cannot publish pre-write status while Stop is pending", async (t) => {
++  let releaseStop;
++  const stopped = new Promise((resolve) => { releaseStop = resolve; });
++  let gets = 0;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") return stopped;
++    gets++;
++    return Response.json({ phase: "running", enabled: true, packageEnabled: true, configuration: { name: gets === 1 ? "Initial name" : "Stale poll name" }, daemon: { running: true, healthy: true } });
++  } });
++  await f.settle();
++  f.button("停止 Paseo 服務").props.onClick();
++  await f.settle();
++  for (const poll of f.timers.values()) poll();
++  await f.settle();
++  try {
++    assert.equal(f.elements().find((node) => node.type === "input").props.value, "Initial name");
++    assert.equal(gets, 1, "Polling waits for lifecycle writes");
++  } finally { releaseStop(Response.json({ phase: "disabled" })); await f.settle(); }
++});
++
++
++test("Paseo expires old readiness while a slow status request is pending", async (t) => {
++  let release;
++  const pending = new Promise((resolve) => { release = resolve; });
++  let reads = 0;
++  const f = fixture(t, { fetch: async () => ++reads === 1 ? Response.json({ phase: "running", enabled: true, packageEnabled: true, daemon: { running: true, healthy: true } }) : pending });
++  await f.settle();
++  assert.equal(f.button("產生配對連結").props.disabled, false);
++  f.advance(5000);
++  for (const poll of f.timers.values()) poll();
++  await f.settle();
++  f.advance(15000);
++  for (const poll of f.timers.values()) poll();
++  await f.settle();
++  try {
++    assert.equal(f.button("產生配對連結").props.disabled, true);
++    assert.equal(f.button("讀取 Codex 模型").props.disabled, true);
++    assert.match(f.text(), /上次取得.*重新整理/);
++    assert.equal(reads, 2, "Slow polls are not superseded every five seconds");
++  } finally { release(Response.json({ phase: "running", enabled: true, packageEnabled: true, daemon: { healthy: true } })); await f.settle(); }
++  assert.equal(f.button("產生配對連結").props.disabled, false);
++});
 diff --git a/components/PaseoPluginPanel.tsx b/components/PaseoPluginPanel.tsx
 new file mode 100644
-index 0000000..09dd792
+index 0000000..54fbe91
 --- /dev/null
 +++ b/components/PaseoPluginPanel.tsx
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,206 @@
 +"use client";
 +
-+import { useCallback, useEffect, useState } from "react";
++import { useCallback, useEffect, useRef, useState } from "react";
 +import Link from "next/link";
 +import { ConfigButton, ConfigDetailActions, ConfigDetailGrid, ConfigDetailGridRow, ConfigFooterStatus, ConfigSectionTitle } from "./SettingsUi";
 +import { PASEO_APP_URL, PASEO_PROVIDERS, paseoModelCatalog, paseoProviderLabel, paseoPublicStatus, paseoSessionUrl, safePaseoPairUrl, type PaseoModelCatalog, type PaseoPublicStatus } from "@/lib/paseo-ui";
 +
++const STATUS_FRESH_MS = 15_000;
++
 +const PHASE_LABELS: Record<string, string> = {
++  restart_required: "需要重新啟動；請先停止 Paseo 服務，再按「啟動／繼續初始化」。",
 +  disabled: "已停用", idle: "等待初始化", installing: "下載安裝中", activating: "正在啟動", starting: "正在啟動",
 +  not_installed: "尚未安裝", stopped: "服務已停止", ready: "服務已啟動", running: "服務已啟動", paired: "已配對", complete: "初始化完成", error: "需要處理", failed: "需要處理",
 +};
@@ -299,7 +1100,8 @@ index 0000000..09dd792
 +    : await fetch(`/api/plugin-paseo${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { cache: "no-store" });
 +  let result: Record<string, unknown>;
 +  try { result = await response.json(); } catch { throw new Error("Paseo 操作暫時無法完成。請重新登入 Pi Web 後重試。"); }
-+  if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Paseo 操作暫時無法完成。");
++  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Paseo 操作暫時無法完成。");
++  if (!response.ok || result.error) throw new Error(typeof result.error === "string" ? result.error : "Paseo 操作暫時無法完成。");
 +  return result;
 +}
 +
@@ -312,27 +1114,63 @@ index 0000000..09dd792
 +  const [checks, setChecks] = useState<Array<{ name: string; status: string; message?: string }>>([]);
 +  const [name, setName] = useState("");
 +  const [catalogs, setCatalogs] = useState<PaseoModelCatalog[]>([]);
++  const [statusCurrent, setStatusCurrent] = useState(false);
++  const requestVersions = useRef({ workspace: 0, refresh: 0, action: 0, mutation: false, pendingRefresh: 0 });
++  const nameEdited = useRef(false);
++  const lastStatusAt = useRef(0);
 +
 +  const refresh = useCallback(async () => {
++    const versions = requestVersions.current;
++    if (versions.mutation || versions.pendingRefresh === versions.refresh && versions.pendingRefresh !== 0) return;
++    const workspace = versions.workspace, version = ++versions.refresh;
++    versions.pendingRefresh = version;
 +    try {
 +      const next = paseoPublicStatus(await request(cwd));
++      if (workspace !== versions.workspace || version !== versions.refresh) return;
++      lastStatusAt.current = Date.now();
 +      setStatus(next);
++      setStatusCurrent(true);
 +      setError("");
-+      if (next.configuration?.name) setName((value) => value || next.configuration!.name!);
++      if (!nameEdited.current) setName(next.configuration?.name ?? "");
 +    } catch (failure) {
++      if (workspace !== versions.workspace || version !== versions.refresh) return;
++      setStatusCurrent(false);
++      setPairUrl(null);
 +      setError(failure instanceof Error ? failure.message : "Paseo 狀態暫時無法取得。");
++    } finally {
++      if (workspace === versions.workspace && versions.pendingRefresh === version) versions.pendingRefresh = 0;
 +    }
 +  }, [cwd]);
 +
-+  useEffect(() => { setPairUrl(null); setChecks([]); setCatalogs([]); setName(""); setStatus({}); void refresh(); }, [refresh]);
++  useEffect(() => {
++    const versions = requestVersions.current;
++    versions.workspace++;
++    versions.action++;
++    versions.mutation = false;
++    nameEdited.current = false;
++    lastStatusAt.current = 0;
++    setPairUrl(null); setChecks([]); setCatalogs([]); setName(""); setStatus({}); setStatusCurrent(false); setBusy(""); setError(""); setNotice("");
++    void refresh();
++    return () => { versions.workspace++; versions.refresh++; versions.action++; };
++  }, [refresh, disabled]);
 +  useEffect(() => {
 +    if (disabled || status.packageEnabled === false) return;
-+    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
++    const timer = setInterval(() => {
++      if (lastStatusAt.current && Date.now() - lastStatusAt.current >= STATUS_FRESH_MS) setStatusCurrent(false);
++      if (!document.hidden) void refresh();
++    }, 5000);
 +    return () => clearInterval(timer);
 +  }, [disabled, status.packageEnabled, refresh]);
-+  useEffect(() => { if (disabled || status.enabled === false) setPairUrl(null); }, [disabled, status.enabled]);
++  useEffect(() => { if (disabled || status.packageEnabled === false || status.enabled === false || !statusCurrent) { setPairUrl(null); setCatalogs([]); } }, [disabled, status.packageEnabled, status.enabled, statusCurrent]);
 +
 +  const action = async (kind: "activate" | "disable" | "diagnose" | "pair" | "config" | "models", provider?: string) => {
++    const versions = requestVersions.current;
++    if (versions.mutation) return;
++    versions.mutation = !["diagnose", "models"].includes(kind);
++    const workspace = versions.workspace, version = ++versions.action;
++    // A pre-action poll must not replace the snapshot fetched after a write.
++    versions.refresh++;
++    const current = () => workspace === versions.workspace && version === versions.action;
 +    setBusy(kind);
 +    if (kind === "pair" || kind === "disable") setPairUrl(null);
 +    setError("");
@@ -340,6 +1178,7 @@ index 0000000..09dd792
 +    try {
 +      const config = kind === "config" ? { ...(name.trim() ? { name: name.trim() } : {}) } : undefined;
 +      const result = await request(cwd, kind, config, provider);
++      if (!current()) return;
 +      if (kind === "pair") {
 +        const url = safePaseoPairUrl(result.url);
 +        if (!url) throw new Error("尚未取得有效的官方配對連結。");
@@ -360,23 +1199,29 @@ index 0000000..09dd792
 +        }));
 +        setNotice("診斷已更新。提供者仍需各自完成登入與實際對話驗證。");
 +      } else {
++        if (kind === "config") nameEdited.current = false;
 +        if (paseoSessionUrl(result.onboardingSessionId)) setStatus((current) => ({ ...current, onboardingSessionId: result.onboardingSessionId as string }));
 +        setNotice(kind === "config" ? "設定已儲存。" : kind === "disable" ? "已要求停止 Paseo 服務。" : "初始化已排入背景處理；請繼續初始化對話。" );
 +      }
++      versions.mutation = false;
 +      await refresh();
 +    } catch (failure) {
++      if (!current()) return;
 +      setError(failure instanceof Error ? failure.message : "Paseo 操作尚未完成。");
-+    } finally { setBusy(""); }
++    } finally { if (current()) { versions.mutation = false; setBusy(""); } }
 +  };
 +
 +  const sessionUrl = paseoSessionUrl(status.onboardingSessionId);
 +  const packageDisabled = disabled || status.packageEnabled === false;
++  const serviceReady = statusCurrent && !packageDisabled && status.enabled !== false && status.daemon?.healthy === true && status.phase !== "restart_required";
++  const mutationBusy = Boolean(busy) && !["diagnose", "models"].includes(busy);
 +  return (
 +    <section style={{ display: "flex", flexDirection: "column", gap: 12 }} aria-label="Paseo 連線設定">
 +      <ConfigSectionTitle>Paseo 連線</ConfigSectionTitle>
 +      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0, lineHeight: 1.7 }}>
 +        在 Paseo 操作這個容器的 Claude Code、Codex 與 Pi。沿用現有登入、模型與權限，透過官方 relay 配對。
 +      </p>
++      {!statusCurrent && Object.keys(status).length > 0 && <p role="status" style={{ fontSize: 12, margin: 0 }}>狀態尚未確認；以下為上次取得的資訊。請重新整理或檢查診斷。</p>}
 +      <ConfigDetailGrid>
 +        <ConfigDetailGridRow label="初始化狀態">{disabled ? "插件已停用" : PHASE_LABELS[status.phase ?? ""] ?? status.phase ?? "尚未取得"}</ConfigDetailGridRow>
 +        <ConfigDetailGridRow label="Paseo 服務">{status.daemon?.healthy ? "連線正常" : status.daemon?.running ? "程序執行中，等待連線確認" : status.daemon?.running === false ? "尚未啟動" : "尚未確認"}</ConfigDetailGridRow>
@@ -384,6 +1229,7 @@ index 0000000..09dd792
 +        <ConfigDetailGridRow label="Paseo 安裝">{status.daemon?.installed ? "已安裝" : "尚未確認"}</ConfigDetailGridRow>
 +        <ConfigDetailGridRow label="官方 relay 目前連線">{status.daemon?.relayConnected === true ? "已連線" : status.daemon?.relayConnected === false ? "未連線" : "尚未取得即時連線狀態"}</ConfigDetailGridRow>
 +        {status.daemon?.relayVerifiedAt && <ConfigDetailGridRow label="relay 上次驗證時間">{status.daemon.relayVerifiedAt}（歷史紀錄）</ConfigDetailGridRow>}
++        {status.chatCheckedAt && <ConfigDetailGridRow label="對話驗證最近紀錄">{status.chatCheckedAt}（歷史紀錄；目前登入與額度需重新確認）</ConfigDetailGridRow>}
 +        {PASEO_PROVIDERS.map((provider) => {
 +          const found = status.providers?.find((entry) => entry.id === provider.id || (provider.id === "claude" && entry.id === "claude-code"));
 +          return <ConfigDetailGridRow key={provider.id} label={provider.label}>{paseoProviderLabel(found)}{found?.modes?.length ? `；模式：${found.modes.map((mode) => mode.label).join("、")}` : ""}</ConfigDetailGridRow>;
@@ -394,7 +1240,7 @@ index 0000000..09dd792
 +        <ConfigButton onClick={() => void refresh()} disabled={Boolean(busy)}>重新整理</ConfigButton>
 +        <ConfigButton onClick={() => void action("diagnose")} disabled={Boolean(busy)}>{busy === "diagnose" ? "診斷中…" : "檢查診斷"}</ConfigButton>
 +        <ConfigButton onClick={() => void action("activate")} disabled={Boolean(busy) || packageDisabled}>{busy === "activate" ? "啟動中…" : "啟動／繼續初始化"}</ConfigButton>
-+        <ConfigButton onClick={() => void action("disable")} disabled={Boolean(busy) || packageDisabled || status.enabled === false}>{busy === "disable" ? "停止中…" : "停止 Paseo 服務"}</ConfigButton>
++        <ConfigButton onClick={() => void action("disable")} disabled={mutationBusy || packageDisabled || (status.enabled === false && status.daemon?.running !== true)}>{busy === "disable" ? "停止中…" : "停止 Paseo 服務"}</ConfigButton>
 +        {sessionUrl && <Link href={sessionUrl} className="config-button config-button-secondary config-button-default" target="_blank" rel="noopener noreferrer">開啟初始化對話</Link>}
 +        <a href={PASEO_APP_URL} target="_blank" rel="noopener noreferrer" className="config-button config-button-secondary config-button-default">開啟 Paseo</a>
 +      </ConfigDetailActions>
@@ -404,7 +1250,7 @@ index 0000000..09dd792
 +          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
 +            <ConfigSectionTitle>容器資訊</ConfigSectionTitle>
 +            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>Paseo 顯示名稱
-+              <input className="config-add-source-input" value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="例如：Pi Agent 容器" disabled={Boolean(busy)} />
++              <input className="config-add-source-input" value={name} onChange={(event) => { nameEdited.current = true; setName(event.target.value); }} maxLength={100} placeholder="例如：Pi Agent 容器" disabled={Boolean(busy)} />
 +            </label>
 +            {cwd && <p style={{ fontSize: 12, margin: 0, overflowWrap: "anywhere" }}>初始化工作目錄：{cwd}</p>}
 +            <ConfigDetailActions><ConfigButton onClick={() => void action("config")} disabled={Boolean(busy)}>{busy === "config" ? "儲存中…" : "儲存設定"}</ConfigButton></ConfigDetailActions>
@@ -413,7 +1259,7 @@ index 0000000..09dd792
 +            <ConfigSectionTitle>連接 Paseo Remote</ConfigSectionTitle>
 +            <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>官方 relay 使用加密配對，無須額外輸入 Paseo 帳號密碼。產生連結後開啟 Paseo 完成配對，接著選擇這個容器、提供者與模型。</p>
 +            <ConfigDetailActions>
-+              <ConfigButton variant="primary" onClick={() => void action("pair")} disabled={Boolean(busy) || packageDisabled || status.enabled === false}>{busy === "pair" ? "產生中…" : "產生配對連結"}</ConfigButton>
++              <ConfigButton variant="primary" onClick={() => void action("pair")} disabled={Boolean(busy) || !serviceReady}>{busy === "pair" ? "產生中…" : "產生配對連結"}</ConfigButton>
 +              {pairUrl && <a href={pairUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="config-button config-button-secondary config-button-default">使用配對連結開啟 Paseo</a>}
 +              {pairUrl && <ConfigButton onClick={() => {
 +                void (navigator.clipboard?.writeText(pairUrl) ?? Promise.reject()).then(() => setNotice("配對連結已複製。請只交給你自己的 Paseo 裝置。"), () => setError("無法存取剪貼簿，請使用配對按鈕開啟 Paseo。"));
@@ -425,7 +1271,8 @@ index 0000000..09dd792
 +      )}
 +      {setup && <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 +        <ConfigSectionTitle>模型、模式與思考等級</ConfigSectionTitle>
-+        <ConfigDetailActions>{PASEO_PROVIDERS.map((provider) => <ConfigButton key={provider.id} onClick={() => void action("models", provider.id)} disabled={Boolean(busy) || packageDisabled || status.enabled === false}>讀取 {provider.label} 模型</ConfigButton>)}</ConfigDetailActions>
++        {!serviceReady && <p style={{ fontSize: 12, margin: 0 }}>等待 Paseo 服務連線確認後，即可配對並讀取模型。請啟動服務或重新整理狀態。</p>}
++        <ConfigDetailActions>{PASEO_PROVIDERS.map((provider) => <ConfigButton key={provider.id} onClick={() => void action("models", provider.id)} disabled={Boolean(busy) || !serviceReady}>讀取 {provider.label} 模型</ConfigButton>)}</ConfigDetailActions>
 +        {catalogs.map((catalog) => <div key={catalog.provider} style={{ fontSize: 12, lineHeight: 1.8 }}>
 +          <strong>{PASEO_PROVIDERS.find((provider) => provider.id === catalog.provider)?.label}</strong>
 +          <p style={{ margin: 0 }}>模式：{catalog.modes.map((mode) => mode.label).join("、") || "Paseo 尚未回報可用模式"}</p>
@@ -460,17 +1307,23 @@ index 83fddc9..5ec59dd 100644
          <ConfigSectionTitle>{t("i18n.resolvedResources")}</ConfigSectionTitle>
          <ResourceList pkg={pkg} />
 diff --git a/docs/agents/settings-ui.md b/docs/agents/settings-ui.md
-index 274b438..d4aee0f 100644
+index 274b438..b71a5a9 100644
 --- a/docs/agents/settings-ui.md
 +++ b/docs/agents/settings-ui.md
 @@ -2,6 +2,7 @@
  
  ## Plugins and skills
  - `/api/plugins` uses pi's `SettingsManager` + `DefaultPackageManager` for global/project package install, remove, update, enable and disable; disabling writes empty `extensions/skills/prompts/themes` arrays to the package entry.
-+- The optional `@woowtech/pi-paseo` integration receives confirmed install/enable/update/disable/remove events after settings writes succeed. Only that package's installed `package.json` identity activates its runtime; bulk failures and preserved filtered entries receive no event. `lib/paseo-plugin.ts` dynamically imports its `src/host-api.mjs` from installed metadata or the operator's `PI_PASEO_PLUGIN_ROOT`, so it must ship alongside this host build. Runtime failures are public setup notices, never raw CLI output, and do not invalidate a completed Pi package installation. Node instrumentation resumes enabled global packages once; the runtime owns the lock and unique onboarding session id. The session uses Pi's SDK and default permissions; with no configured model its first authorized user request is still saved for later continuation. `/paseo/setup` and `/api/plugin-paseo` share the existing proxy/auth boundary. Public status excludes pairing URLs; only the explicit no-store pairing action returns one, and the browser holds it in component memory. Official relay uses no extra Paseo account password.
++- The optional `@woowtech/pi-paseo` integration receives confirmed install/enable/update/disable/remove events after settings writes succeed. Only that package's installed `package.json` identity activates its runtime; bulk failures and preserved filtered entries receive no event. `lib/paseo-plugin.ts` dynamically imports its `src/host-api.mjs` from installed metadata or the operator's `PI_PASEO_PLUGIN_ROOT`, so it must ship alongside this host build. Runtime failures are public setup notices, never raw CLI output, and do not invalidate a completed Pi package installation. Every host lifecycle/restore/removal hook forwards `createOnboarding(prompt, remember)`; the host awaits `remember(realSessionId)` immediately after SDK creation and before naming, preflight, prompting or shutdown, so failures reuse that identity. Node instrumentation resumes enabled global packages once; the runtime owns the lock and unique onboarding session id. The session uses Pi's SDK and default permissions; with no configured model its first authorized user request is still saved for later continuation. `/paseo/setup` and `/api/plugin-paseo` share the existing proxy/auth boundary. Public status excludes pairing URLs; only the explicit no-store pairing action returns one, and the browser holds it in component memory. Official relay uses no extra Paseo account password.
  - `/api/skills` lists through `DefaultResourceLoader`, so settings paths, package skills and project `.agents/skills` appear as the runtime sees them. Toggling a skill edits only the `disable-model-invocation` frontmatter key of its `SKILL.md`, so user formatting survives, and `PATCH /api/skills` edits only `.md` files (its roots also hold `auth.json`, settings and project files). `/api/skills/install` shells through `npx skills add ... --agent pi`; project installs run in the selected cwd.
  - **Group switches.** Each sidebar group of the Skills, Plugins and MCP panels (a skill scope, a package scope, an `mcp.json`; not standalone extensions) has a `ConfigSidebarGroupSwitch` in its heading row, so the 190px phone sidebar loses no height. As with the Models provider switch, it is on only while every row is: a partial group reads as off beside its `n/m` count and one click completes it. A panel whose group can hold rows its switch never turns on passes its own `checked` (MCP: `mcpGroupSwitchChecked()`), or the switch stays off for good. One request carries the list (`PATCH /api/skills` `filePaths`, `POST /api/plugins` `packages`, `POST /api/mcp` `set-enabled` `servers`) and answers per item, so a refused row does not stop the rest; what was left undone shows under the heading (`ConfigSidebarGroupStatus`). An entry already in the requested state is left alone; enabling keeps an entry's own keys such as `autoload`. `SettingsManager` never throws a failed load or write (`flush()` resolves), so the bulk plugin path reads `drainErrors()`, or an unreadable settings.json would report success. Disabling empties the four resource lists and keeps no filters, so a group switched off leaves an enabled filtered package on (the SDK reports every object entry as `filtered`) and says so; the bulk route refuses it.
  
+@@ -10,3 +11,5 @@
+ - **Every add pane chooses global or project in one place:** a `ConfigSaveTarget` (scope switch aria-labelled `config.saveTo`, plus the path that choice writes to) first under the pane's title, where a detail pane shows its `ConfigScopeTag` and path. Skills, Plugins and MCP get it through `ConfigAddSourceHeading` (title, the catalog links at its right, then the save target); Sub-agents put it in the detail header in place of the tag while creating. The submit button stays where its flow needs it (Install under the source box or on each skill result, Save in the footer, Add at the end of the MCP form), with why it waits beside it, not under the save target. The path is shown whole, never cut short: it wraps after a separator (`<wbr>`), then anywhere. Sub-agents offer both scopes whatever the folder's trust: profiles are not project resources that wait for it.
+ - **Why a control is unavailable is visible text** — a scope switch's `disabledReason` (under the switch's whole line, so controls passed as its `children` stay level with it), the note under a detail header, a footer summary that opens its diagnostics — never only a `title` tooltip, which a touch screen cannot show.
+ - `ConfigTrustNotice` shows its button only when given `onTrust`; Settings › MCP passes AppShell's trust dialog through `SettingsPanel` (see **Trust from Settings** in [mcp-settings.md](mcp-settings.md)). Skills and Plugins take the page's `trust` and reload after a decision but have no Trust button; adding one needs `onOpenTrustDialog` passed to them and `mcpProjectTrustable()`'s rule.
++
++- Plugin/Paseo mutations parse bounded UTF-8 JSON objects before settings or runtime discovery (64 KiB plugins, 16 KiB Paseo). Reject malformed scopes/sources/cwds without SDK work; success and refusal responses use no-store. The Paseo panel pauses polls during mutations, ignores obsolete workspace/action responses, and expires readiness after 15 seconds without a confirmed status. Slow polls share one pending read. `restart_required` instructs Stop then Start and disables pairing/model reads until recovery. Runtime status cache invalidation remains the installed plugin’s responsibility.
 diff --git a/instrumentation-node.ts b/instrumentation-node.ts
 index 782f95a..11362fc 100644
 --- a/instrumentation-node.ts
@@ -508,6 +1361,124 @@ index 31c20be..6ee52aa 100644
  }
  
  /** One package of a bulk enable/disable; `error` means it was left as it was. */
+diff --git a/lib/json-request.ts b/lib/json-request.ts
+new file mode 100644
+index 0000000..5fba2c0
+--- /dev/null
++++ b/lib/json-request.ts
+@@ -0,0 +1,43 @@
++export class RequestBodyError extends Error {
++  constructor(readonly status: number, message: string) { super(message); }
++}
++
++/** Bound bytes as they arrive, before decoding or retaining the whole body. */
++async function readRequestBody(req: Request, maxBytes: number): Promise<string> {
++  const length = req.headers.get("content-length");
++  if (length && /^\d+$/.test(length) && Number(length) > maxBytes) {
++    await req.body?.cancel().catch(() => undefined);
++    throw new RequestBodyError(413, "Request too large");
++  }
++  if (!req.body) return "";
++  const reader = req.body.getReader();
++  const decoder = new TextDecoder("utf-8", { fatal: true });
++  let bytes = 0, raw = "";
++  try {
++    for (;;) {
++      const { value, done } = await reader.read();
++      if (done) break;
++      bytes += value.byteLength;
++      if (bytes > maxBytes) {
++        await reader.cancel().catch(() => undefined);
++        throw new RequestBodyError(413, "Request too large");
++      }
++      try { raw += decoder.decode(value, { stream: true }); }
++      catch { await reader.cancel().catch(() => undefined); throw new RequestBodyError(400, "Invalid JSON request"); }
++    }
++    try { return raw + decoder.decode(); }
++    catch { throw new RequestBodyError(400, "Invalid JSON request"); }
++  } finally { reader.releaseLock(); }
++}
++
++/** Parse only a bounded JSON object; callers validate fields before runtime IO. */
++export async function readJsonObject(req: Request, maxBytes: number): Promise<Record<string, unknown>> {
++  let body: unknown;
++  try { body = JSON.parse(await readRequestBody(req, maxBytes)); }
++  catch (failure) {
++    if (failure instanceof RequestBodyError) throw failure;
++    throw new RequestBodyError(400, "Invalid JSON request");
++  }
++  if (!body || typeof body !== "object" || Array.isArray(body)) throw new RequestBodyError(400, "Invalid request");
++  return body as Record<string, unknown>;
++}
+diff --git a/lib/paseo-name.test.mjs b/lib/paseo-name.test.mjs
+new file mode 100644
+index 0000000..7ecc171
+--- /dev/null
++++ b/lib/paseo-name.test.mjs
+@@ -0,0 +1,63 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { createRequire } from "node:module";
++import { fileURLToPath, pathToFileURL } from "node:url";
++import vm from "node:vm";
++import test from "node:test";
++import ts from "typescript";
++
++const root = path.resolve(process.env.PI_PASEO_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
++const runtimeLayout = await import(pathToFileURL(path.join(root, "src/runtime-layout.mjs")).href);
++const require = createRequire(import.meta.url);
++
++test("the host name save reaches the configuration applied by the actual Paseo runtime", async (t) => {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-paseo-name-"));
++  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
++  const loc = { home, agentDir: path.join(home, "agent"), stateDir: path.join(home, "state"), runtimeDir: path.join(home, "runtime"), paseoHome: path.join(home, "daemon"), port: 6769 };
++  const runtimeDir = runtimeLayout.runtimeDirectory(loc);
++  for (const dir of [loc.stateDir, loc.paseoHome, path.join(runtimeDir, "node_modules/@getpaseo/cli"), path.join(runtimeDir, "node_modules/@getpaseo/server/dist/server/web-ui")]) fs.mkdirSync(dir, { recursive: true });
++  fs.writeFileSync(path.join(runtimeDir, "node_modules/@getpaseo/cli/package.json"), '{"version":"0.11.2"}');
++  fs.writeFileSync(path.join(runtimeDir, "node_modules/@getpaseo/server/dist/server/web-ui/index.html"), "fixture");
++  runtimeLayout.markRuntimeReady(loc);
++  assert.equal(runtimeLayout.runtimeReady(loc), true, "Fixture uses the immutable runtime and its real readiness receipt");
++  fs.writeFileSync(path.join(loc.paseoHome, ".pi-paseo-owner.json"), JSON.stringify({ installationId: "fixture", home: loc.paseoHome }));
++  let state = { installationId: "fixture", phase: "running", desiredEnabled: true };
++  class RuntimeError extends Error { constructor(code) { super(code); this.code = code; } }
++  const readRecord = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
++  const writeRecord = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
++  const stubs = {
++    "./state.mjs": { RuntimeError, locations: () => loc, readState: () => state, updateState: (value) => (state = { ...state, ...value }), withRuntimeLock: async (fn) => fn(), processIdentity: () => "fixture", privateDirectory: (dir) => fs.mkdirSync(dir, { recursive: true }), atomicJson: writeRecord },
++    "./process.mjs": { findExecutable: () => assert.fail("No installers may execute"), runProcess: async (_command, args) => { assert.ok(args.includes("--version"), "Only fixture version detection is allowed"); assert.equal(args[0], path.join(runtimeDir, "node_modules/@getpaseo/cli/bin/paseo")); return "0.11.2"; } },
++    "./runtime-layout.mjs": runtimeLayout,
++    "./provider-launchers.mjs": { resolveProviderLaunchers: async () => ({}), configureProviders: () => ({}) },
++    "./onboarding.mjs": { readRecord, writeRecord, onboardingStatus: () => ({}) },
++    "./supervisor.mjs": {},
++  };
++  const client = { getDaemonStatus: async () => ({ providers: [], relay: { enabled: true } }), reloadDaemonConfig: async () => ({ appliedPaths: ["daemon.name", "agents.providers"], restartRequiredPaths: [], overrideControlledPaths: [] }), close: async () => {} };
++  const sandbox = vm.createContext({ process: { env: { HOME: home, PI_CODING_AGENT_DIR: loc.agentDir, PI_PASEO_STATE_DIR: loc.stateDir, PI_PASEO_RUNTIME_DIR: loc.runtimeDir }, versions: process.versions, platform: "fixture", getuid: () => 1000, execPath: process.execPath }, setTimeout, clearTimeout, console });
++  const loaded = new Map();
++  function load(file) {
++    if (loaded.has(file)) return loaded.get(file).exports;
++    const source = fs.readFileSync(file, "utf8").replaceAll("import.meta.url", JSON.stringify(pathToFileURL(file).href));
++    const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true }, fileName: file + ".ts" }).outputText;
++    const record = { exports: {} };
++    loaded.set(file, record);
++    vm.runInContext(`(function(require,module,exports){${code}\n})`, sandbox, { filename: file })((specifier) => {
++      if (Object.hasOwn(stubs, specifier)) return stubs[specifier];
++      if (specifier.endsWith("/daemon-instance.js")) return { readDaemonInstance: async () => ({ pid: 5000, uid: 1000, startedAt: "fixture" }) };
++      if (specifier.endsWith("/config.js")) return { savePersistedConfig: (dir, config) => writeRecord(path.join(dir, "config.json"), config) };
++      if (specifier.endsWith("/dist/utils/client.js")) return { connectToDaemon: async () => client };
++      if (specifier.startsWith(".")) return load(path.resolve(path.dirname(file), specifier));
++      return require(specifier);
++    }, record, record.exports);
++    return record.exports;
++  }
++  const api = load(path.join(root, "src/host-api.mjs"));
++  const runtime = load(path.join(root, "src/runtime.mjs"));
++  await api.saveConfig({ name: "Commercial fixture" });
++  assert.equal((await api.status()).settings.name, "Commercial fixture", "The saved name is visible in host preferences");
++  await runtime.activate();
++  assert.equal(readRecord(path.join(loc.paseoHome, "config.json")).daemon?.name, "Commercial fixture", "The applied Paseo daemon configuration must use the saved name");
++});
 diff --git a/lib/paseo-onboarding.ts b/lib/paseo-onboarding.ts
 new file mode 100644
 index 0000000..63446e0
@@ -627,10 +1598,10 @@ index 0000000..f7d5089
 +});
 diff --git a/lib/paseo-plugin-lifecycle.ts b/lib/paseo-plugin-lifecycle.ts
 new file mode 100644
-index 0000000..13f8ad4
+index 0000000..fcd9e19
 --- /dev/null
 +++ b/lib/paseo-plugin-lifecycle.ts
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,91 @@
 +/** A confirmed Pi package operation, after its settings write succeeded. */
 +export type PaseoLifecycleAction = "install" | "enable" | "update" | "disable" | "remove";
 +export const PASEO_PACKAGE_NAME = "@woowtech/pi-paseo";
@@ -650,6 +1621,10 @@ index 0000000..13f8ad4
 +  error?: string;
 +};
 +
++export type PaseoOnboardingRemember = (sessionId: string) => void | Promise<void>;
++export type PaseoOnboardingCreator = (prompt?: string, remember?: PaseoOnboardingRemember) => Promise<string>;
++export type PaseoHostHooks = { createOnboarding: PaseoOnboardingCreator };
++
 +export type PaseoHostApi = {
 +  lifecycle: (input: {
 +    action: PaseoLifecycleAction;
@@ -657,8 +1632,8 @@ index 0000000..13f8ad4
 +    source: string;
 +    scope: "global" | "project";
 +    packages: PaseoPackageRef[];
-+  }, hooks: { createOnboarding: () => Promise<string> }) => Promise<PaseoLifecycleResult>;
-+  restore: (hooks: { createOnboarding: () => Promise<string> }) => Promise<PaseoLifecycleResult>;
++  }, hooks: PaseoHostHooks) => Promise<PaseoLifecycleResult>;
++  restore: (hooks: PaseoHostHooks) => Promise<PaseoLifecycleResult>;
 +  status: () => Promise<Record<string, unknown>>;
 +  diagnostics: () => Promise<Record<string, unknown>>;
 +  pair: () => Promise<{ url: string; expiresAt?: string }>;
@@ -696,7 +1671,7 @@ index 0000000..13f8ad4
 +  cwd: string,
 +  target: PaseoPackageRef,
 +  packages: PaseoPackageRef[],
-+  createOnboarding: () => Promise<string>,
++  createOnboarding: PaseoOnboardingCreator,
 +): Promise<PaseoLifecycleResult> {
 +  try {
 +    const result = await api.lifecycle({ action, cwd, source: target.source, scope: target.scope, packages }, { createOnboarding });
@@ -720,10 +1695,10 @@ index 0000000..13f8ad4
 +}
 diff --git a/lib/paseo-plugin.test.mjs b/lib/paseo-plugin.test.mjs
 new file mode 100644
-index 0000000..66a0064
+index 0000000..afefdcf
 --- /dev/null
 +++ b/lib/paseo-plugin.test.mjs
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,411 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import path from "node:path";
@@ -742,12 +1717,15 @@ index 0000000..66a0064
 +
 +// Run the actual host modules with isolated SDK, API and session boundaries.
 +// No account files, services or model requests are used by these regressions.
-+function fixture({ enabled = true, desiredEnabled = enabled, globals = [globalPackage], projects = [], env = {}, trusted = true, existing = [home, projectCwd], files = [], stopFailure = false, owner = globals.find((pkg) => pkg.packageName === lifecycle.PASEO_PACKAGE_NAME) ?? projects[0] } = {}) {
++function fixture({ newOnboarding = false, failAt = "", enabled = true, desiredEnabled = enabled, globals = [globalPackage], projects = [], env = {}, trusted = true, existing = [home, projectCwd], files = [], stopFailure = false, owner = globals.find((pkg) => pkg.packageName === lifecycle.PASEO_PACKAGE_NAME) ?? projects[0] } = {}) {
 +  const calls = [];
++  const onboardingEvents = [];
++  const onboardingMessages = [];
++  let created = 0;
 +  const discoveries = [];
 +  const pathChecks = [];
 +  const trustChecks = [];
-+  const state = { enabled: desiredEnabled, running: desiredEnabled, onboardingSessionId: "existing-session" };
++  const state = { enabled: desiredEnabled, running: desiredEnabled, onboardingSessionId: newOnboarding ? "" : "existing-session" };
 +  const records = new Map([["host-registration", { enabled, cwd: projectCwd }]]);
 +  const processes = new Map();
 +  const signals = [];
@@ -786,7 +1764,21 @@ index 0000000..66a0064
 +    },
 +    "./file-access": { allowFileRoot() {} },
 +    "./project-trust": { getProjectTrustStatus(cwd) { trustChecks.push(cwd); return { trusted }; } },
-+    "./rpc-manager": { startRpcSession: () => assert.fail("Existing onboarding must be reused") },
++    "./rpc-manager": { async startRpcSession() {
++      assert.ok(newOnboarding, "Existing onboarding must be reused");
++      created++;
++      onboardingEvents.push("created");
++      const entries = [];
++      return { realSessionId: "created-session", session: {
++        async send(command) {
++          onboardingEvents.push(command.type);
++          if (command.type === failAt) throw new Error("fixture-private-failure");
++          return command.type === "get_state" && failAt === "prompt" ? { model: { id: "fixture-model" } } : {};
++        },
++        async shutdown() { onboardingEvents.push("shutdown"); if (failAt === "shutdown") throw new Error("fixture-private-failure"); },
++        inner: { sessionManager: { getEntries: () => entries, appendMessage(message) { onboardingEvents.push("append"); onboardingMessages.push(message.content); entries.push({ type: "message", message }); } } },
++      } };
++    } },
 +    "./session-reader": { invalidateSessionListCache() {} },
 +    "./paseo-onboarding": {},
 +    "./plugin-package-lock": { serializePluginPackageOperation: (task) => task() },
@@ -814,17 +1806,17 @@ index 0000000..66a0064
 +    const file = path.join(directory, name);
 +    const source = fs.readFileSync(file, "utf8");
 +    const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true }, fileName: file + ".ts" }).outputText;
-+    const module = { exports: {} };
++    const loadedModule = { exports: {} };
 +    vm.runInContext(`(function(require, module, exports) { ${code}\n })`, context, { filename: file })((specifier) => {
 +      if (apis.has(specifier)) return apis.get(specifier);
 +      if (Object.hasOwn(stubs, specifier)) return stubs[specifier];
 +      throw new Error(`Unexpected fixture dependency: ${specifier}`);
-+    }, module, module.exports);
-+    return module.exports;
++    }, loadedModule, loadedModule.exports);
++    return loadedModule.exports;
 +  }
 +  // Keep the root pause and supervisor migration contracts real; replace only
 +  // process, storage and daemon work. These modules are read, never changed.
-+  const rootDirectory = path.resolve(directory, "../../..");
++  const rootDirectory = path.resolve(process.env.PI_PASEO_PLUGIN_ROOT || path.resolve(directory, "../../.."));
 +  const recordName = (file) => path.basename(file, ".json");
 +  const runtime = {
 +    locations: () => ({ stateDir, agentDir: "/fixture/agent", home }),
@@ -838,7 +1830,7 @@ index 0000000..66a0064
 +      if (!match || !processes.has(Number(match[1]))) throw Object.assign(new Error("Fixture process missing"), { code: "ENOENT" });
 +      return processes.get(Number(match[1])).argv.join("\0") + "\0";
 +    },
-+    openSync: () => 42, closeSync() {},
++    constants: fs.constants, openSync: () => 42, fchmodSync() {}, closeSync() {},
 +    existsSync: () => false,
 +  };
 +  const rootProcess = {
@@ -859,13 +1851,21 @@ index 0000000..66a0064
 +      SettingsManager: { create: () => ({ projectTrusted: true, getGlobalSettings: () => ({ packages: globals.map(entry) }), getProjectSettings: () => ({ packages: projects.map(entry) }) }) },
 +    },
 +    "./runtime.mjs": runtime,
-+    "./state.mjs": { processIdentity: (pid) => processes.get(pid)?.identity ?? null },
++    "./state.mjs": { assertSafePath() {}, processIdentity: (pid) => processes.get(pid)?.identity ?? null },
 +    "./onboarding.mjs": {
 +      readRecord: (file) => ({ ...records.get(recordName(file)) }),
 +      writeRecord: (file, value) => records.set(recordName(file), value),
 +      withLock: async (_file, task) => task(),
 +      onboardingStatus: () => ({ sessionId: state.onboardingSessionId }),
-+      ensureOnboarding: async () => ({ sessionId: state.onboardingSessionId }),
++      ensureOnboarding: async (create) => {
++        if (!state.onboardingSessionId) {
++          await create("Fixture authorized onboarding prompt", (id) => {
++            onboardingEvents.push("remembered");
++            state.onboardingSessionId = id;
++          });
++        }
++        return { sessionId: state.onboardingSessionId };
++      },
 +    },
 +    "node:child_process": { spawn(_command, argv) {
 +      const pid = ++nextPid;
@@ -882,12 +1882,12 @@ index 0000000..66a0064
 +    const file = path.join(rootDirectory, "src", name);
 +    const source = fs.readFileSync(file, "utf8").replaceAll("import.meta.url", JSON.stringify(pathToFileURL(path.join(pkg.installedPath, "src", name)).href));
 +    const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true }, fileName: file + ".ts" }).outputText;
-+    const module = { exports: {} };
++    const loadedModule = { exports: {} };
 +    vm.runInNewContext(`(function(require, module, exports) { ${code}\n })`, { process: rootProcess, console, setTimeout, clearTimeout }, { filename: file })((specifier) => {
 +      assert.ok(Object.hasOwn(dependencies, specifier), `Unexpected root dependency: ${specifier}`);
 +      return dependencies[specifier];
-+    }, module, module.exports);
-+    return module.exports;
++    }, loadedModule, loadedModule.exports);
++    return loadedModule.exports;
 +  }
 +  for (const pkg of packages.filter((entry) => entry.packageName === lifecycle.PASEO_PACKAGE_NAME)) {
 +    const supervisor = loadRoot("supervisor.mjs", pkg, rootStubs);
@@ -898,9 +1898,10 @@ index 0000000..66a0064
 +      async restore(hooks) { calls.push({ method: "restore", apiSource: pkg.source }); return api.restore(hooks); },
 +    });
 +  }
++  if (newOnboarding) stubs["./paseo-onboarding"] = load("paseo-onboarding.ts");
 +  const plugin = load("paseo-plugin.ts");
 +  stubs["./paseo-plugin"] = plugin;
-+  return { ...plugin, ...load("plugin-lifecycle.ts"), calls, state, discoveries, pathChecks, trustChecks, records, processes, signals };
++  return { ...plugin, ...load("plugin-lifecycle.ts"), calls, state, discoveries, pathChecks, trustChecks, records, processes, signals, onboardingEvents, onboardingMessages, createdCount: () => created };
 +}
 +
 +test("failed last-binding removal resumes the previously enabled service and its onboarding", async () => {
@@ -1068,12 +2069,53 @@ index 0000000..66a0064
 +    assert.deepEqual(f.calls.map((call) => call.apiSource), [globalPackage.source]);
 +  });
 +}
++
++
++for (const failAt of ["set_session_name", "get_state", "prompt", "shutdown", ""]) {
++  test(`live host lifecycle checkpoints newly created ID before post-creation work (${failAt || "success"})`, async () => {
++    const f = fixture({ newOnboarding: true, failAt });
++    const first = await f.applyPaseoPackageLifecycle("install", projectCwd, [], [globalPackage], [globalPackage]);
++    assert.equal(f.state.onboardingSessionId, "created-session");
++    assert.deepEqual(f.onboardingEvents.slice(0, 3), ["created", "remembered", "set_session_name"]);
++    if (failAt && failAt !== "prompt") assert.match(first.error, /設定頁/);
++    if (failAt === "prompt") assert.ok(f.onboardingEvents.indexOf("remembered") < f.onboardingEvents.indexOf("prompt"));
++    const retried = await f.applyPaseoPackageLifecycle("enable", projectCwd, [{ ...globalPackage, disabled: true }], [globalPackage], [globalPackage]);
++    assert.equal(retried.onboardingSessionId, "created-session");
++    assert.equal(f.createdCount(), 1, "Post-creation failure must reuse the checkpointed session");
++    assert.doesNotMatch(JSON.stringify(first), /fixture-private-failure/);
++  });
++}
++
++test("startup restore forwards both onboarding arguments through the live host creator", async () => {
++  const f = fixture({ newOnboarding: true });
++  await f.restorePaseoPlugin();
++  assert.equal(f.state.onboardingSessionId, "created-session");
++  assert.deepEqual(f.onboardingEvents.slice(0, 3), ["created", "remembered", "set_session_name"]);
++});
++
++test("remaining-package restore and failed-removal recovery preserve the onboarding checkpoint", async () => {
++  const f = fixture({ newOnboarding: true, projects: [projectPackage] });
++  const removal = await f.preparePluginPackageRemoval(projectCwd, [globalPackage, projectPackage], projectPackage.source, "project");
++  await removal.recover();
++  assert.equal(f.state.onboardingSessionId, "created-session");
++  assert.equal(f.createdCount(), 1);
++  assert.deepEqual(f.onboardingEvents.slice(0, 3), ["created", "remembered", "set_session_name"]);
++});
++
++test("the live host creator uses the supplied authorized prompt after checkpointing", async () => {
++  const f = fixture({ newOnboarding: true });
++  const remembered = [];
++  await f.createPaseoOnboarding(projectCwd, (id) => { remembered.push(id); f.onboardingEvents.push("remembered"); }, "Authorized fixture prompt");
++  assert.deepEqual(remembered, ["created-session"]);
++  assert.deepEqual(f.onboardingMessages, ["Authorized fixture prompt"]);
++  assert.deepEqual(f.onboardingEvents.slice(0, 3), ["created", "remembered", "set_session_name"]);
++});
 diff --git a/lib/paseo-plugin.ts b/lib/paseo-plugin.ts
 new file mode 100644
-index 0000000..4d225a1
+index 0000000..bb72674
 --- /dev/null
 +++ b/lib/paseo-plugin.ts
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,137 @@
 +import { randomUUID } from "node:crypto";
 +import { statSync } from "node:fs";
 +import { homedir } from "node:os";
@@ -1086,7 +2128,7 @@ index 0000000..4d225a1
 +import { paseoHostApiUrl, paseoPackageRoot, readPaseoPackageManifest } from "./paseo-package";
 +import { promptPaseoOnboarding } from "./paseo-onboarding";
 +import { serializePluginPackageOperation } from "./plugin-package-lock";
-+import { dispatchPaseoLifecycle, paseoLifecycleResult, paseoLifecycleTargets, PASEO_PACKAGE_NAME, type PaseoHostApi, type PaseoLifecycleAction, type PaseoLifecycleResult, type PaseoPackageRef } from "./paseo-plugin-lifecycle";
++import { dispatchPaseoLifecycle, paseoLifecycleResult, paseoLifecycleTargets, PASEO_PACKAGE_NAME, type PaseoHostApi, type PaseoOnboardingRemember, type PaseoLifecycleAction, type PaseoLifecycleResult, type PaseoPackageRef } from "./paseo-plugin-lifecycle";
 +
 +export const PASEO_ONBOARDING_PROMPT = `請協助完成這個容器的 Paseo 連線初始化。插件正在背景安裝與啟動 Paseo，沿用容器內 Claude Code、Codex、Pi 的現有登入與權限。
 +請先檢查 Paseo 狀態，說明還需要的連線資訊，並引導我到 /paseo/setup 完成配對與設定。預設使用 Paseo 官方 relay 和 https://app.paseo.sh；官方配對不需要另外提供 Paseo 帳號密碼。
@@ -1099,16 +2141,25 @@ index 0000000..4d225a1
 +  return runtimeGlobal.__piPaseoHost ??= { apis: new Map() };
 +}
 +
-+export async function createPaseoOnboarding(cwd: string): Promise<string> {
++export async function createPaseoOnboarding(cwd: string, remember?: PaseoOnboardingRemember, prompt = PASEO_ONBOARDING_PROMPT): Promise<string> {
 +  const { session, realSessionId } = await startRpcSession(`__paseo__${randomUUID()}`, "", cwd);
-+  await session.send({ type: "set_session_name", name: "Paseo 連線初始化" });
-+  allowFileRoot(cwd);
-+  if (await promptPaseoOnboarding(session, PASEO_ONBOARDING_PROMPT)) {
-+    // Reopen from disk on continuation so the model also sees the saved request.
-+    await session.shutdown();
++  try {
++    // Persist identity before any fallible post-creation command. Recovery must
++    // resume this session even if naming, preflight, prompting or shutdown fails.
++    await remember?.(realSessionId);
++    await session.send({ type: "set_session_name", name: "Paseo 連線初始化" });
++    allowFileRoot(cwd);
++    if (await promptPaseoOnboarding(session, prompt)) {
++      // Reopen from disk on continuation so the model sees the saved request.
++      await session.shutdown();
++    }
++    return realSessionId;
++  } catch (failure) {
++    await session.shutdown().catch(() => undefined);
++    throw failure;
++  } finally {
++    invalidateSessionListCache();
 +  }
-+  invalidateSessionListCache();
-+  return realSessionId;
 +}
 +
 +function isDisabled(entry: unknown): boolean {
@@ -1167,9 +2218,9 @@ index 0000000..4d225a1
 +      const api = remaining ? await loadPaseoHostApi(remaining) : preloaded ?? await loadPaseoHostApi(target, true);
 +      if ((action === "disable" || action === "remove") && remaining) {
 +        // Reconcile the remaining registration without clearing a manual Stop.
-+        result = paseoLifecycleResult(await api.restore({ createOnboarding: () => createPaseoOnboarding(cwd) }));
++        result = paseoLifecycleResult(await api.restore({ createOnboarding: (prompt, remember) => createPaseoOnboarding(cwd, remember, prompt) }));
 +      } else {
-+        result = await dispatchPaseoLifecycle(api, action, cwd, remaining ?? target, packages, () => createPaseoOnboarding(cwd));
++        result = await dispatchPaseoLifecycle(api, action, cwd, remaining ?? target, packages, (prompt, remember) => createPaseoOnboarding(cwd, remember, prompt));
 +      }
 +    } catch {
 +      result = { error: "Paseo 整合服務尚未載入；請檢查插件安裝位置並開啟設定頁。" };
@@ -1196,7 +2247,7 @@ index 0000000..4d225a1
 +    const enabled = packages.find((pkg) => !pkg.disabled);
 +    if (!enabled) return;
 +    const api = await loadPaseoHostApi(enabled);
-+    await api.restore({ createOnboarding: () => createPaseoOnboarding(cwd) });
++    await api.restore({ createOnboarding: (prompt, remember) => createPaseoOnboarding(cwd, remember, prompt) });
 +  }).catch(() => {
 +    // Status/diagnostics expose a safe retry path; never log subprocess errors.
 +    console.warn("[pi-web] Paseo startup recovery needs attention; open /paseo/setup.");
@@ -1204,7 +2255,7 @@ index 0000000..4d225a1
 +}
 diff --git a/lib/paseo-ui.test.mjs b/lib/paseo-ui.test.mjs
 new file mode 100644
-index 0000000..87e5558
+index 0000000..9d3751b
 --- /dev/null
 +++ b/lib/paseo-ui.test.mjs
 @@ -0,0 +1,27 @@
@@ -1215,7 +2266,7 @@ index 0000000..87e5558
 +test("pairing opens only the official app and stays out of public status", () => {
 +  assert.equal(safePaseoPairUrl("https://app.paseo.sh/pair#secret"), "https://app.paseo.sh/pair#secret");
 +  for (const url of ["javascript:alert(1)", "https://app.paseo.sh.evil.example/pair", "https://user:secret@app.paseo.sh", "http://app.paseo.sh", "https://app.paseo.sh:444"]) assert.equal(safePaseoPairUrl(url), null);
-+  assert.deepEqual(paseoPublicStatus({ phase: "ready", pairUrl: "secret", url: "secret", providers: [{ id: "codex", available: true, apiKey: "secret", status: "https://secret" }] }), { phase: "ready", providers: [{ id: "codex", available: true }] });
++  assert.deepEqual(paseoPublicStatus({ phase: "ready", privateTimestamp: { readAt: 1234, value: "secret" }, statusReadAt: 1234, pairUrl: "secret", url: "secret", providers: [{ id: "codex", available: true, apiKey: "secret", status: "https://secret" }] }), { phase: "ready", providers: [{ id: "codex", available: true }] });
 +});
 +
 +test("configuration accepts only the official-relay display name", () => {
@@ -1237,10 +2288,10 @@ index 0000000..87e5558
 +});
 diff --git a/lib/paseo-ui.ts b/lib/paseo-ui.ts
 new file mode 100644
-index 0000000..093267d
+index 0000000..5a2020c
 --- /dev/null
 +++ b/lib/paseo-ui.ts
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,132 @@
 +/** Only the official hosted app is opened by this integration. */
 +export const PASEO_APP_URL = "https://app.paseo.sh";
 +export const PASEO_PROVIDERS = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }, { id: "pi", label: "Pi" }] as const;
@@ -1275,10 +2326,11 @@ index 0000000..093267d
 +
 +export type PaseoProviderStatus = {
 +  id: string; available?: boolean; authenticated?: boolean; chatVerified?: boolean; status?: string;
-+  authentication?: string; chatErrorCode?: string; modes?: Array<{ id: string; label: string }>; defaultModeId?: string;
++  authentication?: string; chatErrorCode?: string; chatCheckedAt?: string; modes?: Array<{ id: string; label: string }>; defaultModeId?: string;
 +};
 +export type PaseoPublicStatus = {
 +  phase?: string; enabled?: boolean; packageEnabled?: boolean; packageInstalled?: boolean; onboardingSessionId?: string; onboardingCompleted?: boolean; chatVerified?: boolean;
++  chatCheckedAt?: string;
 +  daemon?: { running?: boolean; healthy?: boolean; installed?: boolean; relayEnabled?: boolean; relayConnected?: boolean; relayVerified?: boolean; relayVerifiedAt?: string };
 +  providers?: PaseoProviderStatus[];
 +  configuration?: { name?: string };
@@ -1287,6 +2339,9 @@ index 0000000..093267d
 +/** Only named public fields cross the UI boundary; state and pairing never do. */
 +export function paseoPublicStatus(input: unknown): PaseoPublicStatus {
 +  const value = record(input), result: PaseoPublicStatus = {};
++  const acceptance = record(record(value.state).acceptance);
++  const checkedAt = timestamp(value.chatCheckedAt ?? acceptance.checkedAt);
++  if (checkedAt) result.chatCheckedAt = checkedAt;
 +  if (typeof value.phase === "string" && /^[a-zA-Z0-9_-]{1,60}$/.test(value.phase)) result.phase = value.phase;
 +  for (const flag of ["enabled", "packageEnabled", "packageInstalled", "onboardingCompleted", "chatVerified"] as const) if (typeof value[flag] === "boolean") result[flag] = value[flag];
 +  if (paseoSessionUrl(value.onboardingSessionId)) result.onboardingSessionId = value.onboardingSessionId as string;
@@ -1300,12 +2355,14 @@ index 0000000..093267d
 +    if (at) result.daemon.relayVerifiedAt = at;
 +  }
 +  if (Array.isArray(value.providers)) {
-+    result.providers = value.providers.flatMap((entry) => {
++    result.providers = value.providers.slice(0, 20).flatMap((entry) => {
 +      const provider = record(entry), id = provider.id ?? provider.provider;
 +      if (typeof id !== "string" || !["claude", "claude-code", "codex", "pi"].includes(id)) return [];
 +      const row: PaseoProviderStatus = { id };
-+      const acceptance = record(record(value.state).acceptance);
-+      const check = Array.isArray(acceptance.providers) ? record(acceptance.providers.find((entry) => record(entry).provider === id)) : {};
++      const canonicalId = id === "claude-code" ? "claude" : id;
++      const check = Array.isArray(acceptance.providers) ? record(acceptance.providers.find((entry) => record(entry).provider === canonicalId)) : {};
++      const at = timestamp(provider.chatCheckedAt ?? provider.checkedAt ?? check.checkedAt);
++      if (at) row.chatCheckedAt = at;
 +      const code = provider.chatErrorCode ?? check.code;
 +      if (check.passed === true) row.chatVerified = true;
 +      if (typeof code === "string" && /^[A-Z_]{1,60}$/.test(code)) row.chatErrorCode = code;
@@ -1328,10 +2385,10 @@ index 0000000..093267d
 +}
 +
 +export function paseoProviderLabel(provider?: PaseoProviderStatus): string {
-+  if (provider?.chatVerified) return "兩輪對話驗證通過";
 +  if (provider?.chatErrorCode === "PROVIDER_QUOTA_EXHAUSTED" || provider?.chatErrorCode === "PROVIDER_RATE_LIMITED") return "額度／速率限制，尚未完成對話驗證";
 +  if (provider?.authentication === "login_required" || provider?.chatErrorCode === "PROVIDER_AUTH_REQUIRED") return "需要官方登入，尚未完成對話驗證";
 +  if (provider?.chatErrorCode) return `對話驗證尚未通過（${provider.chatErrorCode}）`;
++  if (provider?.chatVerified) return `兩輪對話驗證通過（歷史紀錄${provider.chatCheckedAt ? `：${provider.chatCheckedAt}` : ""}）；目前登入與額度需重新確認`;
 +  if (provider?.authenticated) return "登入已確認，尚未完成對話驗證";
 +  return provider?.available ? "提供者可用，尚未完成對話驗證" : "待診斷確認";
 +}
@@ -1369,7 +2426,7 @@ index 0000000..093267d
 +}
 diff --git a/lib/plugin-lifecycle.ts b/lib/plugin-lifecycle.ts
 new file mode 100644
-index 0000000..a90decd
+index 0000000..776d578
 --- /dev/null
 +++ b/lib/plugin-lifecycle.ts
 @@ -0,0 +1,72 @@
@@ -1377,7 +2434,7 @@ index 0000000..a90decd
 +import { homedir } from "node:os";
 +import { join, resolve } from "node:path";
 +import { applyPaseoPackageLifecycle, createPaseoOnboarding, loadPaseoHostApi, restorePaseoPlugin } from "./paseo-plugin";
-+import { PASEO_PACKAGE_NAME, type PaseoHostApi, type PaseoLifecycleAction, type PaseoPackageRef } from "./paseo-plugin-lifecycle";
++import { PASEO_PACKAGE_NAME, type PaseoHostApi, type PaseoHostHooks, type PaseoLifecycleAction, type PaseoPackageRef } from "./paseo-plugin-lifecycle";
 +import { readRegularFileText } from "./regular-file";
 +
 +/** Generic package route seam; integration discovery stays outside the route. */
@@ -1411,7 +2468,7 @@ index 0000000..a90decd
 +  const api = await loadPaseoHostApi(target, true);
 +  const paseoPackages = packages.filter((pkg) => pkg.packageName === PASEO_PACKAGE_NAME);
 +  const remaining = paseoPackages.find((pkg) => !pkg.disabled && (pkg.source !== source || pkg.scope !== scope));
-+  const hooks = { createOnboarding: () => createPaseoOnboarding(cwd) };
++  const hooks: PaseoHostHooks = { createOnboarding: (prompt, remember) => createPaseoOnboarding(cwd, remember, prompt) };
 +  let wasEnabled = false;
 +  let recovery = api;
 +  try {
@@ -1457,10 +2514,945 @@ index 0000000..9ab367a
 +export function serializePluginPackageOperation<T>(task: () => Promise<T>): Promise<T> {
 +  return serializeByKey(Symbol.for("pi-web:plugin-package-lifecycle"), "packages", task);
 +}
+diff --git a/lib/request-security.ts b/lib/request-security.ts
+index 5d0a938..ecfade8 100644
+--- a/lib/request-security.ts
++++ b/lib/request-security.ts
+@@ -53,7 +53,9 @@ function configuredHostnamesFromEnvironment(): string[] {
+ 
+ function canonicalOrigin(value: string): string | null {
+   try {
+-    return new URL(value).origin;
++    const url = new URL(value);
++    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash || /[\\\s]/.test(value)) return null;
++    return url.origin;
+   } catch {
+     return null;
+   }
+@@ -133,7 +135,8 @@ export function isApiRequestOriginAllowed(request: Request): boolean {
+   const origin = request.headers.get("origin");
+   const fetchSite = request.headers.get("sec-fetch-site");
+   if (fetchSite === "cross-site") return false;
+-  if (!origin) return true;
++  if (origin === null) return true;
++  if (!origin || canonicalOrigin(origin) === null) return false;
+ 
+   const requestOrigin = getRequestOrigin(request);
+   if (requestOrigin !== null && canonicalOrigin(origin) === requestOrigin) return true;
+diff --git a/package-lock.json b/package-lock.json
+index f5926cf..6000229 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -16,8 +16,9 @@
+         "@earendil-works/pi-tui": "1.0.0",
+         "@xterm/addon-fit": "0.11.0",
+         "@xterm/xterm": "6.0.0",
+-        "js-yaml": "^5.2.3",
+-        "next": "16.3.6",
++        "brace-expansion": "5.0.12",
++        "js-yaml": "5.4.1",
++        "next": "16.3.8",
+         "node-pty": "1.2.0-beta.15",
+         "proper-lockfile": "4.1.2",
+         "react": "^19.2.4",
+@@ -42,7 +43,7 @@
+         "@types/web-push": "^3.6.4",
+         "ansi_up": "^6.0.6",
+         "eslint": "^9",
+-        "eslint-config-next": "16.3.6",
++        "eslint-config-next": "16.3.8",
+         "jiti": "^2.7.0",
+         "katex": "^0.16.47",
+         "mammoth": "^1.12.0",
+@@ -2018,9 +2019,9 @@
+       "license": "MIT"
+     },
+     "node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion": {
+-      "version": "5.0.9",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz",
+-      "integrity": "sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==",
++      "version": "5.0.12",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz",
++      "integrity": "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==",
+       "license": "MIT",
+       "dependencies": {
+         "balanced-match": "^4.0.2"
+@@ -2875,9 +2876,9 @@
+       "license": "MIT"
+     },
+     "node_modules/@eslint/config-array/node_modules/brace-expansion": {
+-      "version": "1.1.18",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz",
+-      "integrity": "sha512-Edep/X9fGqVNmzKBVsDYIOtD+z1tuezV70LBjdCst9Tqu76lsnvRiZ6oTic1n+/BIwX6QDGAO94PN4N2SADvtw==",
++      "version": "1.1.21",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
++      "integrity": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+@@ -2973,9 +2974,9 @@
+       "license": "MIT"
+     },
+     "node_modules/@eslint/eslintrc/node_modules/brace-expansion": {
+-      "version": "1.1.18",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz",
+-      "integrity": "sha512-Edep/X9fGqVNmzKBVsDYIOtD+z1tuezV70LBjdCst9Tqu76lsnvRiZ6oTic1n+/BIwX6QDGAO94PN4N2SADvtw==",
++      "version": "1.1.21",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
++      "integrity": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+@@ -3196,9 +3197,9 @@
+       }
+     },
+     "node_modules/@img/sharp-darwin-arm64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.4.tgz",
+-      "integrity": "sha512-Uhfl4V4lhP2nbUVF9+hyH1+luj86f1gUFeo8ALYxFoULoU+G87D43BfeMP8XHsk9boxAnCY/bf2EHwhA7MuGsA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.5.tgz",
++      "integrity": "sha512-QRUlFQ0WxvdWyqqG/WtI3iupfD5rBzmCHXSdPsY91sAtVtTo7Q4cb6zOccZ3gqEqkr0f1As1ehLqmEpDsRf+lg==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3214,13 +3215,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-darwin-arm64": "1.3.3"
++        "@img/sharp-libvips-darwin-arm64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-darwin-x64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.4.tgz",
+-      "integrity": "sha512-hWniXY3bG5qKpkKrAwPe4y+VTPmf086YQAnkxWh7uA1YrlRouWGa0M0Mxj3ZjnXFkv7/TD1bTy9lGUK26vRvWw==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.5.tgz",
++      "integrity": "sha512-+BR255RhDlpygUpOc/Jdt1nT6DQ3XG/ERo5wbcdOf5Q320dKtPCKPLR1LJs9VGXRaMa8l1uUa0tkCNOXiAxZUw==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3236,20 +3237,20 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-darwin-x64": "1.3.3"
++        "@img/sharp-libvips-darwin-x64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-freebsd-wasm32": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.4.tgz",
+-      "integrity": "sha512-lIsKw/BU+kjB4eZjxrYrZmwOJYi3Ajrv66iAlBmUPyKc3HpnloevB1g3wxGD9P/5BbQ1brBGl65VRRrCvQDEqA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.5.tgz",
++      "integrity": "sha512-Y/z91nEZ4uIBX5X3nfTovjU9lHNKFYbL2lpHCLVNmXQK03VIZvXBBt0KxbPGp2SdGSF+2mQU4e+hQaWOt86iAw==",
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+         "freebsd"
+       ],
+       "dependencies": {
+-        "@img/sharp-wasm32": "0.35.4"
++        "@img/sharp-wasm32": "0.35.5"
+       },
+       "engines": {
+         "node": ">=20.9.0"
+@@ -3259,9 +3260,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-darwin-arm64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.3.tgz",
+-      "integrity": "sha512-suTBPTDGrI9WodccaDdwZItTSaBYASlBk1NSfElSHrUfzu3szG6lvIF58+WiFvnfzuK8ZBFS5zE00PxqxnRiPg==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.4.tgz",
++      "integrity": "sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3275,9 +3276,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-darwin-x64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.3.tgz",
+-      "integrity": "sha512-FVJZ5mITMobmXIz/hPDTw0EintTW5H3WfrxwLqEqjiIihlu+hVRyGrFQ60xl0Lxn7Bt3zdpevPaQi0HEzqz9fw==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.4.tgz",
++      "integrity": "sha512-iR2OKH80yi0U+dUplyh3/xdpFvps6YkCwsXenIJxqxR1v9o+xtKTGbS9H7cps+2Vxjc8B1j96p75NmTGjIhtpQ==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3291,9 +3292,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-arm": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.3.tgz",
+-      "integrity": "sha512-3rbU4vqXXc3hY/OiXdl52xZvT0F1yEngWfvqudtPJg/KkyiaQw2DRsFrNzpmLvfavbwOq3qXn36GP8obHRULQA==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.4.tgz",
++      "integrity": "sha512-LmRtTsOHuvM2+wlO2Db37dx5MiZhB0FvSunciw48YjdOkZz9KAiRbm8ujeMOA1INqmei5NapFxYEK1D1ZSidmw==",
+       "cpu": [
+         "arm"
+       ],
+@@ -3307,9 +3308,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-arm64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.3.tgz",
+-      "integrity": "sha512-0DaL0A6Xu6sQSQFwe4iVCrKWU2cCTItnRsYsCdxAMm9NF6twAA9BKnoqy4hqz4+azQ0JHuA26qiUKsf1XJ/v5A==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.4.tgz",
++      "integrity": "sha512-Y3dgX/6lE2QhQb+Gxy0WZxfg9MEm/JBjamZpS2IklP7xIQoKN4hzAm7KcMVGtaVDt3neE9OKBC7vAfonA/Lr1A==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3323,9 +3324,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-ppc64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.3.tgz",
+-      "integrity": "sha512-cdn1OvUBwsXhbC0zSzJnNzf5MZ/mTrobawDvNXBTxe8VtqKAm0sRuEY2Evzovb/w9JMk4TvRxqt1mekSuJz64w==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.4.tgz",
++      "integrity": "sha512-Le6boB8Tai0Nis+gIxIpKx68UDVVIqdR8Tin5Yf1z2LJJQLDJvCDRqRu+jC2qCoD+eIomonmOwB4smBRxfVpYQ==",
+       "cpu": [
+         "ppc64"
+       ],
+@@ -3339,9 +3340,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-riscv64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.3.tgz",
+-      "integrity": "sha512-HjPVx7yKz+0lqdhDlTw1tt90wamBoxhiXpvl1XZpJLiHH4RCJ5yDTqH+VlYPv2fwFs89JFw4c1IexYOcQUi4IQ==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.4.tgz",
++      "integrity": "sha512-aHkkIEHPRdQEegJN20MLmGtxYD9R2wQr3Cwpddnu5+YKMt6Uzax7S9h5gpZTo8wyrGuZSlfQ63OevL5mTyOC7Q==",
+       "cpu": [
+         "riscv64"
+       ],
+@@ -3355,9 +3356,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-s390x": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.3.tgz",
+-      "integrity": "sha512-neWLh+3yCNThxnfy3c4BbVBeGgt9aftno+XbT56iK28RgeDs3UOFWviLWlUu0bArYVYJaFDK+RRohbicUNCm8Q==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.4.tgz",
++      "integrity": "sha512-ra/mB6MikESDUO7Yg+Mi95bFBb9GsObURuhnOv3OqknjGe9sZrG8tCe9q0xSIGrtLgvgw0gKnFWcK4blSgQOuQ==",
+       "cpu": [
+         "s390x"
+       ],
+@@ -3371,9 +3372,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linux-x64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.3.tgz",
+-      "integrity": "sha512-4vKmvAst9nrowcqquKFAyZJUDolUaIp8uRiN0mWFguJ1IplC9/pitXtlnnlU4aa/eJw3J7i67V+pwUL+wZGdsA==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz",
++      "integrity": "sha512-GJ//SSXbnwSDes02umB3nDJLFcQzw8a18V8fyhqr6tV515tOEMdImjjxj1AoafMRz56F3PHgftnj1QEKSU1zkw==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3387,9 +3388,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linuxmusl-arm64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.3.tgz",
+-      "integrity": "sha512-Y9kQaLMuNoB0bPYOOdcZMaseNrFpPodIWWMrx+CZyydf2xn68j9WYc6sWWRrDwNkzCQjKYfc68L7jKjGlHMibw==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.4.tgz",
++      "integrity": "sha512-hvulFwtjUcagsis6BBxHwGFwWoNZjgYmULGVrZcyfNbjA8hKILbRxGg15/7w5HDyXHXUos/j6baAWqnCyQ2DWA==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3403,9 +3404,9 @@
+       }
+     },
+     "node_modules/@img/sharp-libvips-linuxmusl-x64": {
+-      "version": "1.3.3",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.3.tgz",
+-      "integrity": "sha512-fj8Mv0HHfD1Rr+4I68+3agJynxDWtBFgicTbSOb9Bke6pIwzGcJ+RX/yHjmiEGFMCavY/dxvem7MyNaJF+wDiw==",
++      "version": "1.3.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.4.tgz",
++      "integrity": "sha512-6zXKeE/p39I1AmA3cJG35eyBGNqNddLnUXjhwBnsGjFPWqf5VKkDBEqaEkPDoTEtkxwi2vv8Tcr2mDyP4So7Fg==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3419,9 +3420,9 @@
+       }
+     },
+     "node_modules/@img/sharp-linux-arm": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.4.tgz",
+-      "integrity": "sha512-7OAS8gI0EReKGVN2HssHlM6umJgxF5VI3xN0p9FA91p/YO+ou5hiNghLdZ5BEHztwaaK5+bLKRf8x/o2L2nk9A==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.5.tgz",
++      "integrity": "sha512-LEaXK2WdXVK5ykcw0buWyPMsmLLL2vpHLD6yrNSW+JGEL3BZPA4tpKN6iaMc4AxTTAoaX/sU1rOL51lcIz48ZQ==",
+       "cpu": [
+         "arm"
+       ],
+@@ -3437,13 +3438,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-arm": "1.3.3"
++        "@img/sharp-libvips-linux-arm": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linux-arm64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.4.tgz",
+-      "integrity": "sha512-De4jpEnAU8Hd5oT0j1G3uL4ZvTuipVMn7YC6vPaJhy6/7EwEae0SVAoBrUMYQbkLGDm85taVWwuPc1a44LTzCQ==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.5.tgz",
++      "integrity": "sha512-LYVx5JTsOM2CBzmxreh+nl64/3H6Xb09iSLknqH47z2T2DFFxDeFLP5y4dJwe6H7uGQlHPyEEtIqyo3DYsRwdQ==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3459,13 +3460,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-arm64": "1.3.3"
++        "@img/sharp-libvips-linux-arm64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linux-ppc64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.4.tgz",
+-      "integrity": "sha512-2oYZJeIl4kCcMGk4ouZVjnkCtFrpQFlNEtJ6GbxzhHQchwH0NH/qEb9ykmOl29dqwMq+JhFdZn+1ak2FKhI9fQ==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.5.tgz",
++      "integrity": "sha512-QVxAAq8evVRI9ia2vqgwrmWucn5Dfv+JdWzj75pD8omHLPSP7f8p20O8jxzjCcuCEQEOtYOZUmX1hkiZ0kdevA==",
+       "cpu": [
+         "ppc64"
+       ],
+@@ -3481,13 +3482,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-ppc64": "1.3.3"
++        "@img/sharp-libvips-linux-ppc64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linux-riscv64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.4.tgz",
+-      "integrity": "sha512-cPbNChoRURAWdebDIHSenxRpgEdy7JkPydSnUxRm9VvKD7m0/xVaR/8Fzlu81pk5nHEvHH87UZUA7cTtwnbJSA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.5.tgz",
++      "integrity": "sha512-LtdreXguaavKODPIfzJ4kffx7UNt1omwtK0rch4EBbbSTXPnxWmYSayXdLJw0fJzQ97kHt1gL/yh4tvU+nCyRQ==",
+       "cpu": [
+         "riscv64"
+       ],
+@@ -3503,13 +3504,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-riscv64": "1.3.3"
++        "@img/sharp-libvips-linux-riscv64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linux-s390x": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.4.tgz",
+-      "integrity": "sha512-RY0JFY8Fd6RonCBtHz+DvadaPkXDSI1AUn6yWL9TipqkZ1vY8w8evqdgyDFnkm4/K1ve1TvZiaePP5oSd4+WVQ==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.5.tgz",
++      "integrity": "sha512-UZasTOFiYzotTsGOCu42BfUzP6Tu6Do/947iRm1RsLKvlllxwGcn4RN27LibGWceix4Y+Pmw3jsnTcCQIgWjqA==",
+       "cpu": [
+         "s390x"
+       ],
+@@ -3525,13 +3526,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-s390x": "1.3.3"
++        "@img/sharp-libvips-linux-s390x": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linux-x64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.4.tgz",
+-      "integrity": "sha512-9qvvEAuk8k89TfWUoX2htWjbAMX8p+NxCppjpcg5k6xMsjhBQPTsoIh36h9Qde4WRuGpJeYnOjdosDn/cnv+OA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz",
++      "integrity": "sha512-SxFtLTeJInhAA9Q836kux2vZNeOBQEx658qvbboZScr0wIARym3IcGmW7KpVD5sbVg0Ojy+udFQdayYIZyoNog==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3547,13 +3548,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linux-x64": "1.3.3"
++        "@img/sharp-libvips-linux-x64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linuxmusl-arm64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.4.tgz",
+-      "integrity": "sha512-KB5jxpfWQTr0nc3xdHtWChdbifHrBGsd2SM62Eyxrl8afikm+f5qGBU75SJIZBT/S1MC8XyacdlXBMSWq6OURA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.5.tgz",
++      "integrity": "sha512-9HbMclmI1zlNkFRs3z9/eBtDjfD0sGlrX1z6b1qwmiFY5ElDLh4BC0LPBdVp7z1DXFiKlIcznf+ZlsuZzLxQqg==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3569,13 +3570,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linuxmusl-arm64": "1.3.3"
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-linuxmusl-x64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.4.tgz",
+-      "integrity": "sha512-f+eZJZIQNEEd26RPSW+76chwOf1XtA2Y/O+5ocVyLliHkeih3e+jhLVBdNTd2rS3IbNXK8+ug93Vf5ZXtF5Lxg==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.5.tgz",
++      "integrity": "sha512-4KOphqB035HrVdqLZfCgMzzERrQkkzOwRhl4OAkRO1YCldbaFjySXMaK534Mo0V+LndnlJk+sbUyLeU0ULyD1A==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3591,13 +3592,13 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-libvips-linuxmusl-x64": "1.3.3"
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.4"
+       }
+     },
+     "node_modules/@img/sharp-wasm32": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.4.tgz",
+-      "integrity": "sha512-zQnl4Kwp7Q6NHsENtU2T/00Zi+w3AQNwz3+UaTyVBy2FpXrzXzGjndpK61onhZjRtRpQXxCTeqw19bVyXOh7jA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.5.tgz",
++      "integrity": "sha512-Ptsga1su4tQx+LLF1ECS9U6nz5kmrXKo6XVbtR48Ke3ZRxxgaWBu7IDtEe1quo8hiupwm6WFqxVlXaSf7IINGQ==",
+       "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+       "optional": true,
+       "dependencies": {
+@@ -3611,16 +3612,16 @@
+       }
+     },
+     "node_modules/@img/sharp-webcontainers-wasm32": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.4.tgz",
+-      "integrity": "sha512-ESfNkywmCfPNyaZjxooddJQiQ+l/nTpGEOGthxiLnIHXC/CmcBixnfwUleX9mCz9ovrUUvKMap/pm8RYbzfwaA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.5.tgz",
++      "integrity": "sha512-hfhF/FmoQyTUkA0bIKFOtw536BQSeBMe6BF6QyWlrPxT754+TFLaZ7sKKTfvvM0yJgKgaYTwnFCIZ/GuDw5SUA==",
+       "cpu": [
+         "wasm32"
+       ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "dependencies": {
+-        "@img/sharp-wasm32": "0.35.4"
++        "@img/sharp-wasm32": "0.35.5"
+       },
+       "engines": {
+         "node": ">=20.9.0"
+@@ -3630,9 +3631,9 @@
+       }
+     },
+     "node_modules/@img/sharp-win32-arm64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.4.tgz",
+-      "integrity": "sha512-iNdlBX9gLVvqe2I3uIJSIKTq6wckP/DYxZtcqxm09x5Gi24DnFBmPAWZmr60ZyYMG0xlzo6goG3670ar+RXvRw==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.5.tgz",
++      "integrity": "sha512-X4t7g+7ZA5DKblCBEXGjUqqemj4vczING/5viFwAL8h4N3qYeyjwdCvRLHi4EdOUI+2Z7UFlp1VM+p/AuEtm6Q==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3649,9 +3650,9 @@
+       }
+     },
+     "node_modules/@img/sharp-win32-ia32": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.4.tgz",
+-      "integrity": "sha512-kqRsbaa5CS6KHlpxnN7WhE6vAAugXyZButpRdvDWetlv6Qv4N9WTcrWzF7tXfB9T7MsoadqdI8hmwLq6UlLvtw==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.5.tgz",
++      "integrity": "sha512-5Zm82LoBc43nhwNybZlG7Y1KO//Zhsn306fQl29ZOuStHLGTo3BWL83q3cznX0poxSAMuYL1On/BHBxkBeKr6A==",
+       "cpu": [
+         "ia32"
+       ],
+@@ -3668,9 +3669,9 @@
+       }
+     },
+     "node_modules/@img/sharp-win32-x64": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.4.tgz",
+-      "integrity": "sha512-XtmnYhBcrORsJ4XJngyzr/EWP0hRZLAZRFaApdKuviyqF78+ylxh2y06ZmtULAMOnObJ3ucpN0AcwSWnMowTRg==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.5.tgz",
++      "integrity": "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3760,15 +3761,15 @@
+       }
+     },
+     "node_modules/@next/env": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/env/-/env-16.3.6.tgz",
+-      "integrity": "sha512-x9Vblze1EbtltQYnNH38xCPWU3TVfBd1eXqA3+w9+BTpedkkdNpAaltXlGQ/nsc1+E0mVTNrtcbX3GoO09zeLQ==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/env/-/env-16.3.8.tgz",
++      "integrity": "sha512-Al9zqHVV7TJv0eFuOU4U7Lvv74PTih4Ch63sk2xCIpSTkE3udFnaOcnzP2lQVymiL7yS9Cj2iClUXlR3EQ5sEw==",
+       "license": "MIT"
+     },
+     "node_modules/@next/eslint-plugin-next": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/eslint-plugin-next/-/eslint-plugin-next-16.3.6.tgz",
+-      "integrity": "sha512-jowwDX+7DOlDIjJLgTMxudw+k37QnWu1JkZLkSi9MaJBfDYcfhAPMKBhXL0idYzFN/AGg//axnOR4cLkHX/Rng==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/eslint-plugin-next/-/eslint-plugin-next-16.3.8.tgz",
++      "integrity": "sha512-eCR9RcLTZrVS+K3+VOhi0xMdUUGNuriCHHhU1ZoABC/QQ/Gp0OWbLKQxV2/9DkmihYdYRcQWFmZXW8M1AMUXYw==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+@@ -3777,9 +3778,9 @@
+       }
+     },
+     "node_modules/@next/swc-darwin-arm64": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-darwin-arm64/-/swc-darwin-arm64-16.3.6.tgz",
+-      "integrity": "sha512-E/7GEqaUkt8mk/T8v9lAnrhzR06kdq1ZBkC12F8tAMkdIadwNp3H1KqHynDHrpcTlGCUdq/qu6vUL2aYVyYBdw==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-darwin-arm64/-/swc-darwin-arm64-16.3.8.tgz",
++      "integrity": "sha512-2JPRMh2nmQG5CiL7cXGL9AGwnPWJQ//cTtAUCT+w511QHk79SYz3LGv/pc5X643B/WEO0rvu3Yww0hqwt3kgeA==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3793,9 +3794,9 @@
+       }
+     },
+     "node_modules/@next/swc-darwin-x64": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-darwin-x64/-/swc-darwin-x64-16.3.6.tgz",
+-      "integrity": "sha512-yBE893/nDWTlaiBD1p+qgt7NUen4U5R6FXyH0s67Npq1S3E0cVSef1WIXC2xBRgQvwAvJq6DnS6Y6PrY0cy4Ew==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-darwin-x64/-/swc-darwin-x64-16.3.8.tgz",
++      "integrity": "sha512-GZtCCOBKJ4leVIT/Th0llWKhD1ca92lzbQiS5R5ON9QkoiFnilFsebDae1JU2a3HWoKMEmEZWGs1AGLavVM72Q==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3809,9 +3810,9 @@
+       }
+     },
+     "node_modules/@next/swc-linux-arm64-gnu": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-linux-arm64-gnu/-/swc-linux-arm64-gnu-16.3.6.tgz",
+-      "integrity": "sha512-KJDpjBqBPYlvkivmyrp+Qys6k/7ksbqGQvRVc6ZEGfR+cjQxx+nUkJaWmNZJsmoOrqYNbaXByF8wa0lBwDhB3Q==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-linux-arm64-gnu/-/swc-linux-arm64-gnu-16.3.8.tgz",
++      "integrity": "sha512-O659ygeQYqneJ1fBKMpFxIFqYkYswu8IAS1OCKK/4f3ZgJJm1dRz4fVJZRi/kLLWjnBKnebOePA4WNv+sV1pVA==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3825,9 +3826,9 @@
+       }
+     },
+     "node_modules/@next/swc-linux-arm64-musl": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-linux-arm64-musl/-/swc-linux-arm64-musl-16.3.6.tgz",
+-      "integrity": "sha512-mqNg2K+hvWskSRb/QM+Ix412DvBsuSF0XV+frTSw5vmoucNnIlynFwKYew8D01bfATErMOM7Bujrf0BA5DRKFA==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-linux-arm64-musl/-/swc-linux-arm64-musl-16.3.8.tgz",
++      "integrity": "sha512-dSjKSyWpzxoO1d3DIZZcP4XJcNaKeLmxQMFOiYl5vuBRMmweIqnAhty8tAmRsvTss779cK1FtYnDMj40e4TQlg==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3841,9 +3842,9 @@
+       }
+     },
+     "node_modules/@next/swc-linux-x64-gnu": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-linux-x64-gnu/-/swc-linux-x64-gnu-16.3.6.tgz",
+-      "integrity": "sha512-nFncBNGAYouRHjRVaITs9beZRfhX4ssVwpnvPIAbkZVH6LtGoAVlH4bJ8Cnf9SOo9bsXgPFer/GdHtEE3JNOkw==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-linux-x64-gnu/-/swc-linux-x64-gnu-16.3.8.tgz",
++      "integrity": "sha512-lbqOuz3RPRcv+o9msNsJw5x4+Y1ZwPTs6vmL6DCf7i0fZfvng/F59wyeDwqHIvV0mK//RBy/jJkZ+nCKsSMXjQ==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3857,9 +3858,9 @@
+       }
+     },
+     "node_modules/@next/swc-linux-x64-musl": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-linux-x64-musl/-/swc-linux-x64-musl-16.3.6.tgz",
+-      "integrity": "sha512-5Mf3cHDGR/Iz0ng2Bj3zUR3p5QS9YK3Hn2QiAfavFmyF48zwThAjpFoiTKNIcOHLYS4zEk+gzyJ/9deQ2ZB8yQ==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-linux-x64-musl/-/swc-linux-x64-musl-16.3.8.tgz",
++      "integrity": "sha512-+316WswI8ScVgZeUd+1KGaXkHhaYQzCjvH/05TZSpJ8zBizb1a4G7DtO7F12jcBIqMOtsz9ji1t48fmKtzqsGA==",
+       "cpu": [
+         "x64"
+       ],
+@@ -3873,9 +3874,9 @@
+       }
+     },
+     "node_modules/@next/swc-win32-arm64-msvc": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-win32-arm64-msvc/-/swc-win32-arm64-msvc-16.3.6.tgz",
+-      "integrity": "sha512-0jkJy0C2kbrJWTk4YLa3xk80pVBpx8FCHJym7CnUfDAXe/FWv5qT7SQJbR0KuemyxaEDlEx5WT4VQJoTW+/9Qw==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-win32-arm64-msvc/-/swc-win32-arm64-msvc-16.3.8.tgz",
++      "integrity": "sha512-ji0gd4kMYUxO+1fJBIbiBVRCjzG/lloiyCccnlebvb1ZJ5qXCPZqYg4Jl1DrrixnWNMKylzgpmMWx0yNDYXlzw==",
+       "cpu": [
+         "arm64"
+       ],
+@@ -3889,9 +3890,9 @@
+       }
+     },
+     "node_modules/@next/swc-win32-x64-msvc": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/@next/swc-win32-x64-msvc/-/swc-win32-x64-msvc-16.3.6.tgz",
+-      "integrity": "sha512-/YXjI1e5OXcZ7YpxRwgP/1jAV/SBKTzeVKqN2mk7mLpcICsyn3Gl5+dIfDTJp70M0ccMhyMMRso4v6mPDCGepg==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/@next/swc-win32-x64-msvc/-/swc-win32-x64-msvc-16.3.8.tgz",
++      "integrity": "sha512-WcTlaKt/TWkh5kUjdJcUmB1XgZ+1c6fz4Y9fDHL73YNSdGaUWjceeWrrlwF0nv19iABYWC4iAq1oX1w4Bn0vfg==",
+       "cpu": [
+         "x64"
+       ],
+@@ -5777,7 +5778,6 @@
+       "version": "4.0.4",
+       "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz",
+       "integrity": "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": "18 || 20 || >=22"
+@@ -5844,10 +5844,9 @@
+       "license": "MIT"
+     },
+     "node_modules/brace-expansion": {
+-      "version": "5.0.9",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz",
+-      "integrity": "sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==",
+-      "dev": true,
++      "version": "5.0.12",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz",
++      "integrity": "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==",
+       "license": "MIT",
+       "dependencies": {
+         "balanced-match": "^4.0.2"
+@@ -6150,6 +6149,7 @@
+       "version": "7.0.6",
+       "resolved": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz",
+       "integrity": "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==",
++      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "path-key": "^3.1.0",
+@@ -7291,13 +7291,13 @@
+       }
+     },
+     "node_modules/eslint-config-next": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/eslint-config-next/-/eslint-config-next-16.3.6.tgz",
+-      "integrity": "sha512-1Upt3U7BDwU+ilpe2byZjAfts9oNq4d4fv/zXEvs8/4yS+cwOQW/WCxUNy8gCDquX67SzeehDvKblVC6ZBMocQ==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/eslint-config-next/-/eslint-config-next-16.3.8.tgz",
++      "integrity": "sha512-81vovwMe6NGnoFsl0KUJWzlS+y239i3fdsxs49gSEX3pDQW2cuKy+fxUPXNkQqqx6OCPheYPtBlSufc9aZ0k+w==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+-        "@next/eslint-plugin-next": "16.3.6",
++        "@next/eslint-plugin-next": "16.3.8",
+         "eslint-import-resolver-node": "^0.3.6",
+         "eslint-import-resolver-typescript": "^3.5.2",
+         "eslint-plugin-import": "^2.32.0",
+@@ -7325,9 +7325,9 @@
+       "license": "MIT"
+     },
+     "node_modules/eslint-config-next/node_modules/brace-expansion": {
+-      "version": "1.1.18",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz",
+-      "integrity": "sha512-Edep/X9fGqVNmzKBVsDYIOtD+z1tuezV70LBjdCst9Tqu76lsnvRiZ6oTic1n+/BIwX6QDGAO94PN4N2SADvtw==",
++      "version": "1.1.21",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
++      "integrity": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+@@ -7649,9 +7649,9 @@
+       "license": "MIT"
+     },
+     "node_modules/eslint/node_modules/brace-expansion": {
+-      "version": "1.1.18",
+-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.18.tgz",
+-      "integrity": "sha512-Edep/X9fGqVNmzKBVsDYIOtD+z1tuezV70LBjdCst9Tqu76lsnvRiZ6oTic1n+/BIwX6QDGAO94PN4N2SADvtw==",
++      "version": "1.1.21",
++      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
++      "integrity": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+@@ -8735,6 +8735,7 @@
+       "version": "5.3.2",
+       "resolved": "https://registry.npmjs.org/ignore/-/ignore-5.3.2.tgz",
+       "integrity": "sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==",
++      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 4"
+@@ -9286,6 +9287,7 @@
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz",
+       "integrity": "sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==",
++      "dev": true,
+       "license": "ISC"
+     },
+     "node_modules/iterator.prototype": {
+@@ -9324,9 +9326,9 @@
+       "license": "MIT"
+     },
+     "node_modules/js-yaml": {
+-      "version": "5.2.3",
+-      "resolved": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.2.3.tgz",
+-      "integrity": "sha512-n+mUVyUX5bVv7G/G2zyIHOhdxfuU1dY2NOFzTQUWiMUbFss8b57NFlgCCaggU78wSw5KVS9cllzeLyzyR+n5nw==",
++      "version": "5.4.1",
++      "resolved": "https://registry.npmjs.org/js-yaml/-/js-yaml-5.4.1.tgz",
++      "integrity": "sha512-28R/k+NAjeuf7+CKlTxWZVExJGwVVLwY06DgEnOMz2gEpfNkDcD7QvyiVPT0xy0XXhU8vHsd4Ot42OOPdJG7dQ==",
+       "funding": [
+         {
+           "type": "github",
+@@ -11142,12 +11144,12 @@
+       "license": "MIT"
+     },
+     "node_modules/next": {
+-      "version": "16.3.6",
+-      "resolved": "https://registry.npmjs.org/next/-/next-16.3.6.tgz",
+-      "integrity": "sha512-L+otWM/aQbYTx98aZhgEoMb4bZAXx1YVW4UMA/vuCyCoWG5HJyZUili8QAkqzrcC+5///tsz3s0M+SlyB5bLMw==",
++      "version": "16.3.8",
++      "resolved": "https://registry.npmjs.org/next/-/next-16.3.8.tgz",
++      "integrity": "sha512-U7QEZaTini6wKrb8A8hqLLqYQyCetegKjCpJOyxk642vWoMoU1x5PyZCJFvgYgiptA8xc5j/9xYlZFO7w9Sjmw==",
+       "license": "MIT",
+       "dependencies": {
+-        "@next/env": "16.3.6",
++        "@next/env": "16.3.8",
+         "@swc/helpers": "0.5.23",
+         "baseline-browser-mapping": "^2.9.19",
+         "caniuse-lite": "^1.0.30001579",
+@@ -11161,14 +11163,14 @@
+         "node": ">=20.9.0"
+       },
+       "optionalDependencies": {
+-        "@next/swc-darwin-arm64": "16.3.6",
+-        "@next/swc-darwin-x64": "16.3.6",
+-        "@next/swc-linux-arm64-gnu": "16.3.6",
+-        "@next/swc-linux-arm64-musl": "16.3.6",
+-        "@next/swc-linux-x64-gnu": "16.3.6",
+-        "@next/swc-linux-x64-musl": "16.3.6",
+-        "@next/swc-win32-arm64-msvc": "16.3.6",
+-        "@next/swc-win32-x64-msvc": "16.3.6",
++        "@next/swc-darwin-arm64": "16.3.8",
++        "@next/swc-darwin-x64": "16.3.8",
++        "@next/swc-linux-arm64-gnu": "16.3.8",
++        "@next/swc-linux-arm64-musl": "16.3.8",
++        "@next/swc-linux-x64-gnu": "16.3.8",
++        "@next/swc-linux-x64-musl": "16.3.8",
++        "@next/swc-win32-arm64-msvc": "16.3.8",
++        "@next/swc-win32-x64-msvc": "16.3.8",
+         "sharp": "^0.35.4"
+       },
+       "peerDependencies": {
+@@ -11654,6 +11656,7 @@
+       "version": "3.1.1",
+       "resolved": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz",
+       "integrity": "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==",
++      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -12522,9 +12525,9 @@
+       "license": "MIT"
+     },
+     "node_modules/sharp": {
+-      "version": "0.35.4",
+-      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.35.4.tgz",
+-      "integrity": "sha512-n++8XWcj+jCOr2IOl7h8LbKnGBDY4aPbmprMONBNFdn0ImXqpGVv5zliDs0V9HbmbCQLpbuo2ej9rAoOQTvMDA==",
++      "version": "0.35.5",
++      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz",
++      "integrity": "sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==",
+       "license": "Apache-2.0",
+       "optional": true,
+       "dependencies": {
+@@ -12539,31 +12542,31 @@
+         "url": "https://opencollective.com/libvips"
+       },
+       "optionalDependencies": {
+-        "@img/sharp-darwin-arm64": "0.35.4",
+-        "@img/sharp-darwin-x64": "0.35.4",
+-        "@img/sharp-freebsd-wasm32": "0.35.4",
+-        "@img/sharp-libvips-darwin-arm64": "1.3.3",
+-        "@img/sharp-libvips-darwin-x64": "1.3.3",
+-        "@img/sharp-libvips-linux-arm": "1.3.3",
+-        "@img/sharp-libvips-linux-arm64": "1.3.3",
+-        "@img/sharp-libvips-linux-ppc64": "1.3.3",
+-        "@img/sharp-libvips-linux-riscv64": "1.3.3",
+-        "@img/sharp-libvips-linux-s390x": "1.3.3",
+-        "@img/sharp-libvips-linux-x64": "1.3.3",
+-        "@img/sharp-libvips-linuxmusl-arm64": "1.3.3",
+-        "@img/sharp-libvips-linuxmusl-x64": "1.3.3",
+-        "@img/sharp-linux-arm": "0.35.4",
+-        "@img/sharp-linux-arm64": "0.35.4",
+-        "@img/sharp-linux-ppc64": "0.35.4",
+-        "@img/sharp-linux-riscv64": "0.35.4",
+-        "@img/sharp-linux-s390x": "0.35.4",
+-        "@img/sharp-linux-x64": "0.35.4",
+-        "@img/sharp-linuxmusl-arm64": "0.35.4",
+-        "@img/sharp-linuxmusl-x64": "0.35.4",
+-        "@img/sharp-webcontainers-wasm32": "0.35.4",
+-        "@img/sharp-win32-arm64": "0.35.4",
+-        "@img/sharp-win32-ia32": "0.35.4",
+-        "@img/sharp-win32-x64": "0.35.4"
++        "@img/sharp-darwin-arm64": "0.35.5",
++        "@img/sharp-darwin-x64": "0.35.5",
++        "@img/sharp-freebsd-wasm32": "0.35.5",
++        "@img/sharp-libvips-darwin-arm64": "1.3.4",
++        "@img/sharp-libvips-darwin-x64": "1.3.4",
++        "@img/sharp-libvips-linux-arm": "1.3.4",
++        "@img/sharp-libvips-linux-arm64": "1.3.4",
++        "@img/sharp-libvips-linux-ppc64": "1.3.4",
++        "@img/sharp-libvips-linux-riscv64": "1.3.4",
++        "@img/sharp-libvips-linux-s390x": "1.3.4",
++        "@img/sharp-libvips-linux-x64": "1.3.4",
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.4",
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.4",
++        "@img/sharp-linux-arm": "0.35.5",
++        "@img/sharp-linux-arm64": "0.35.5",
++        "@img/sharp-linux-ppc64": "0.35.5",
++        "@img/sharp-linux-riscv64": "0.35.5",
++        "@img/sharp-linux-s390x": "0.35.5",
++        "@img/sharp-linux-x64": "0.35.5",
++        "@img/sharp-linuxmusl-arm64": "0.35.5",
++        "@img/sharp-linuxmusl-x64": "0.35.5",
++        "@img/sharp-webcontainers-wasm32": "0.35.5",
++        "@img/sharp-win32-arm64": "0.35.5",
++        "@img/sharp-win32-ia32": "0.35.5",
++        "@img/sharp-win32-x64": "0.35.5"
+       },
+       "peerDependenciesMeta": {
+         "@types/node": {
+@@ -12575,6 +12578,7 @@
+       "version": "2.0.0",
+       "resolved": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz",
+       "integrity": "sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==",
++      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "shebang-regex": "^3.0.0"
+@@ -12587,6 +12591,7 @@
+       "version": "3.0.0",
+       "resolved": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz",
+       "integrity": "sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==",
++      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -12675,9 +12680,9 @@
+       "license": "ISC"
+     },
+     "node_modules/source-map-js": {
+-      "version": "1.2.1",
+-      "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz",
+-      "integrity": "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==",
++      "version": "1.2.2",
++      "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.2.tgz",
++      "integrity": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
+       "license": "BSD-3-Clause",
+       "engines": {
+         "node": ">=0.10.0"
+@@ -13615,6 +13620,7 @@
+       "version": "2.0.2",
+       "resolved": "https://registry.npmjs.org/which/-/which-2.0.2.tgz",
+       "integrity": "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==",
++      "dev": true,
+       "license": "ISC",
+       "dependencies": {
+         "isexe": "^2.0.0"
+diff --git a/package.json b/package.json
+index e1e903c..a659556 100644
+--- a/package.json
++++ b/package.json
+@@ -54,15 +54,16 @@
+     "@earendil-works/pi-tui": "1.0.0",
+     "@xterm/addon-fit": "0.11.0",
+     "@xterm/xterm": "6.0.0",
+-    "js-yaml": "^5.2.3",
+-    "next": "16.3.6",
++    "js-yaml": "5.4.1",
++    "next": "16.3.8",
+     "node-pty": "1.2.0-beta.15",
+     "proper-lockfile": "4.1.2",
+     "react": "^19.2.4",
+     "react-dom": "^19.2.4",
+     "semver": "7.8.5",
+     "undici": "8.11.0",
+-    "web-push": "^3.6.7"
++    "web-push": "^3.6.7",
++    "brace-expansion": "5.0.12"
+   },
+   "devDependencies": {
+     "@tailwindcss/postcss": "^4.2.2",
+@@ -77,7 +78,7 @@
+     "@types/web-push": "^3.6.4",
+     "ansi_up": "^6.0.6",
+     "eslint": "^9",
+-    "eslint-config-next": "16.3.6",
++    "eslint-config-next": "16.3.8",
+     "jiti": "^2.7.0",
+     "katex": "^0.16.47",
+     "mammoth": "^1.12.0",
+@@ -94,5 +95,12 @@
+     "remark-math": "^6.0.0",
+     "tailwindcss": "^4.2.2",
+     "typescript": "^5"
++  },
++  "overrides": {
++    "source-map-js": "1.2.2",
++    "sharp": "0.35.5",
++    "minimatch@10": {
++      "brace-expansion": "5.0.12"
++    }
+   }
+ }
 diff --git a/proxy.ts b/proxy.ts
-index 1977e56..25613e3 100644
+index 1977e56..2e489f4 100644
 --- a/proxy.ts
 +++ b/proxy.ts
+@@ -34,9 +34,9 @@ export function proxy(request: NextRequest) {
+ 
+   if (!isTrustedRequest) {
+     if (!isApiRequest) {
+-      return new NextResponse("Untrusted request", { status: 403 });
++      return new NextResponse("Untrusted request", { status: 403, headers: { "Cache-Control": "no-store" } });
+     }
+-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
++    return NextResponse.json({ error: "Untrusted API request" }, { status: 403, headers: { "Cache-Control": "no-store" } });
+   }
+ 
+   const password = process.env.PI_WEB_PASSWORD;
 @@ -71,7 +71,7 @@ export function proxy(request: NextRequest) {
    if (!authenticated) {
      if (!isApiRequest) {

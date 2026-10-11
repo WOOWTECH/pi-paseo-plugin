@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { repairSdkDependency } from './repair-sdk-dependency.mjs';
 
 export const PI_WEB_REPOSITORY = 'https://github.com/agegr/pi-web';
 export const PI_WEB_BASE = '6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068';
@@ -31,7 +32,14 @@ function safeDirectory(dir, home) {
     if (exists(current)) {
       const stat = fs.lstatSync(current);
       if (!stat.isDirectory() || stat.isSymbolicLink()) fail('UNSAFE_INSTALL_PATH');
-    } else fs.mkdirSync(current, { mode: 0o700 });
+    } else {
+      try { fs.mkdirSync(current, { mode: 0o700 }); }
+      catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const stat = fs.lstatSync(current);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail('UNSAFE_INSTALL_PATH');
+      }
+    }
   }
   fs.accessSync(dir, fs.constants.W_OK);
 }
@@ -41,36 +49,134 @@ function atomic(file, value, mode = 0o600, expected) {
   try {
     const fd = fs.openSync(temp, 'wx', mode);
     try { fs.writeFileSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    if (expected !== undefined && (!exists(file) || fs.readFileSync(file, 'utf8') !== expected)) fail('ROUTING_CHANGED_RETRY');
+    // This detects edits observed before replacement, not an atomic filesystem
+    // CAS. Uncooperative writers can still race this check and rename. Our own
+    // installers serialize using the permanent kernel-lock file below.
+    if (expected !== undefined && (expected === null ? exists(file) : !exists(file) || fs.readFileSync(file, 'utf8') !== expected)) fail('ROUTING_CHANGED_RETRY');
     fs.renameSync(temp, file);
   } finally { fs.rmSync(temp, { force: true }); }
 }
 function json(file, value) { atomic(file, JSON.stringify(value, null, 2) + '\n'); }
+function routingTransaction() {
+  const changes = [];
+  return {
+    write(file, value, mode = 0o600, expected) {
+      let previous = null;
+      if (exists(file)) {
+        if (!fs.lstatSync(file).isFile()) fail('UNSAFE_METADATA_PATH');
+        previous = { value: fs.readFileSync(file, 'utf8'), mode: fs.statSync(file).mode & 0o777 };
+      }
+      atomic(file, value, mode, expected === undefined ? previous?.value ?? null : expected);
+      changes.push({ file, value, previous });
+    },
+    rollback() {
+      let failed = false;
+      for (const { file, value, previous } of changes.reverse()) {
+        try {
+          if (!exists(file) || !fs.lstatSync(file).isFile() || fs.readFileSync(file, 'utf8') !== value) fail('ROUTING_CHANGED_RETRY');
+          if (previous) atomic(file, previous.value, previous.mode, value);
+          else fs.unlinkSync(file);
+        } catch { failed = true; }
+      }
+      if (failed) fail('HOST_INSTALL_ROLLBACK_FAILED');
+    },
+  };
+}
 
 // Child output is deliberately drained without being logged: npm/git can echo
 // credentials from external configuration or lifecycle scripts on failure.
-export function runCommand(command, args, { cwd, env, timeoutMs = 900000 } = {}) {
+export function runCommand(command, args, { cwd, env, timeoutMs = 900000, killGraceMs = 1000, input, lockFd } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    let output = '', oversized = false, timedOut = false;
+    // A separate process group lets us reap npm/git descendants even when their
+    // direct parent exits while they retain the inherited output pipes.
+    // Ordinary npm/build workers inherit this group. A process deliberately
+    // creating another session escapes it; pipe closure still bounds our wait,
+    // but complete containment of such processes requires an OS supervisor.
+    const stdio = [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'];
+    if (lockFd !== undefined) stdio.push(lockFd);
+    const child = spawn(command, args, { cwd, env, stdio, shell: false, detached: process.platform !== 'win32' });
+    const output = [];
+    let bytes = 0, failure = null, killTimer, finished = false, stopping = false;
+    const signal = name => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, name);
+        else child.kill(name);
+      } catch (error) { if (error.code !== 'ESRCH') child.kill(name); }
+    };
+    const stop = code => {
+      if (finished) return;
+      if (code && !failure) failure = code;
+      if (stopping) return;
+      stopping = true;
+      signal('SIGTERM');
+      killTimer = setTimeout(() => {
+        signal('SIGKILL');
+        // An escaped descendant must not keep the installer's pipe open.
+        child.stdout.destroy(); child.stderr.destroy();
+      }, killGraceMs);
+    };
+    const interrupted = () => stop('COMMAND_INTERRUPTED');
+    const finish = code => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer); clearTimeout(killTimer);
+      for (const name of ['SIGINT', 'SIGTERM']) process.off(name, interrupted);
+      if (code) reject(new HostInstallError(code));
+      else resolve(Buffer.concat(output, bytes).toString('utf8').trim());
+    };
     child.stdout.on('data', chunk => {
-      if (output.length + chunk.length <= 4 * 1024 * 1024) output += chunk.toString();
-      else oversized = true;
+      if (failure) return;
+      if (bytes + chunk.length > 4 * 1024 * 1024) stop('COMMAND_OUTPUT_LIMIT');
+      else { bytes += chunk.length; output.push(chunk); }
     });
     child.stderr.on('data', () => {});
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new HostInstallError('COMMAND_UNAVAILABLE')); });
+    if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(input); }
+    const timer = setTimeout(() => stop('COMMAND_TIMEOUT'), timeoutMs);
+    for (const name of ['SIGINT', 'SIGTERM']) process.on(name, interrupted);
+    child.once('error', () => finish('COMMAND_UNAVAILABLE'));
+    // Exit can precede close indefinitely when a worker retains a pipe. Clean
+    // up workers even after successful parent exit; preserve its result code.
+    child.once('exit', code => stop(code === 0 ? null : 'COMMAND_FAILED'));
     child.once('close', code => {
-      clearTimeout(timer);
-      if (timedOut || oversized || code !== 0) reject(new HostInstallError(timedOut ? 'COMMAND_TIMEOUT' : 'COMMAND_FAILED'));
-      else resolve(output.trim());
+      // Closing output is not proof that the command's descendants exited.
+      signal('SIGKILL');
+      finish(failure || (code !== 0 ? 'COMMAND_FAILED' : null));
     });
   });
 }
-function identity(pid) {
-  try { const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]; } catch { return null; }
+function processInfo(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return { state: fields[0], identity: fields[19] };
+  } catch { return null; }
 }
+function identity(pid) { return processInfo(pid)?.identity ?? null; }
 async function locked(root, fn, timeoutMs) {
+  if (process.platform !== 'linux') return tokenLocked(root, fn, timeoutMs);
+  // Never unlink this inode. flock locks the shared open file description;
+  // keeping our inherited descriptor open holds the lock after flock exits.
+  // This closes stale-lock removal races between participating installers and
+  // releases automatically on installer death, including zombie owners.
+  const file = path.join(root, '.install-host.guard');
+  let fd;
+  try { fd = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600); }
+  catch (error) { if (error.code === 'ELOOP') fail('UNSAFE_INSTALL_PATH'); throw error; }
+  try {
+    if (!fs.fstatSync(fd).isFile()) fail('UNSAFE_INSTALL_PATH');
+    try {
+      await runCommand('flock', ['--exclusive', '--timeout', String(Math.max(0, timeoutMs) / 1000), '3'], {
+        lockFd: fd, timeoutMs: timeoutMs + 1000, killGraceMs: 100,
+      });
+    } catch (error) {
+      if (error.code === 'COMMAND_FAILED' || error.code === 'COMMAND_TIMEOUT') fail('HOST_INSTALL_BUSY');
+      if (error.code === 'COMMAND_UNAVAILABLE') fail('HOST_INSTALL_LOCK_UNAVAILABLE');
+      throw error;
+    }
+    return await tokenLocked(root, fn, timeoutMs);
+  } finally { fs.closeSync(fd); }
+}
+async function tokenLocked(root, fn, timeoutMs) {
   const file = path.join(root, '.install-host.lock');
   const token = randomUUID(), deadline = Date.now() + timeoutMs;
   while (true) {
@@ -80,16 +186,26 @@ async function locked(root, fn, timeoutMs) {
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      if (fs.lstatSync(file).isSymbolicLink()) fail('UNSAFE_INSTALL_PATH');
-      let owner, original;
-      try { original = fs.readFileSync(file, 'utf8'); owner = JSON.parse(original); } catch {}
-      let live = false;
-      if (owner && Number.isInteger(owner.pid) && owner.pid > 0) {
-        try { process.kill(owner.pid, 0); live = !owner.identity || !identity(owner.pid) || owner.identity === identity(owner.pid); }
-        catch (e) { live = e.code !== 'ESRCH'; }
-      }
-      const old = Date.now() - fs.statSync(file).mtimeMs > 30000;
-      if (!live && old && fs.readFileSync(file, 'utf8') === original) { fs.unlinkSync(file); continue; }
+      try {
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile()) fail('UNSAFE_INSTALL_PATH');
+        const original = fs.readFileSync(file, 'utf8');
+        let owner;
+        try { owner = JSON.parse(original); } catch {}
+        let live = false;
+        if (owner && Number.isInteger(owner.pid) && owner.pid > 0 && typeof owner.token === 'string' && owner.token.length > 0 &&
+            (owner.identity === null || typeof owner.identity === 'string')) {
+          try {
+            process.kill(owner.pid, 0);
+            const current = processInfo(owner.pid);
+            live = !['Z', 'X'].includes(current?.state) && (!owner.identity || !current?.identity || owner.identity === current.identity);
+          }
+          catch (e) { live = e.code !== 'ESRCH'; }
+        }
+        const current = fs.lstatSync(file);
+        if (!live && Date.now() - stat.mtimeMs > 30000 && current.dev === stat.dev && current.ino === stat.ino &&
+            fs.readFileSync(file, 'utf8') === original) { fs.unlinkSync(file); continue; }
+      } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
       if (Date.now() >= deadline) fail('HOST_INSTALL_BUSY');
       await delay(100);
     }
@@ -145,10 +261,29 @@ async function copyPrebuilt(source, stage, run, env, meta) {
       if (!fs.lstatSync(right).isSymbolicLink() || fs.readlinkSync(left) !== fs.readlinkSync(right)) fail('PREBUILT_SOURCE_MISMATCH');
     } else if (!fs.lstatSync(right).isFile() || sha(fs.readFileSync(left)) !== sha(fs.readFileSync(right))) fail('PREBUILT_SOURCE_MISMATCH');
   }
-  for (const directory of ['node_modules', '.next']) fs.cpSync(path.join(source, directory), path.join(stage, directory), {
+  const artifacts = ['node_modules', '.next'].map(directory => ({ source: fs.realpathSync(path.join(source, directory)), destination: path.join(stage, directory) }));
+  for (const artifact of artifacts) fs.cpSync(artifact.source, artifact.destination, {
     recursive: true, dereference: false, verbatimSymlinks: true,
-    filter: file => !file.startsWith(path.join(source, '.next/cache') + path.sep) && file !== path.join(source, '.next/cache'),
+    filter: file => file !== path.join(artifacts[1].source, 'cache') && !within(path.join(artifacts[1].source, 'cache'), file),
   });
+  // Keep npm's relative .bin links functional, while remapping absolute links
+  // into the copied release. External artifact links cannot be made immutable.
+  function relocate(directory, artifact) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) relocate(file, artifact);
+      else if (entry.isSymbolicLink()) {
+        const original = path.join(artifact.source, path.relative(artifact.destination, file));
+        const target = fs.realpathSync(original);
+        const mapping = artifacts.find(item => target === item.source || within(item.source, target));
+        if (!mapping) fail('PREBUILT_SOURCE_MISMATCH');
+        const copiedTarget = path.join(mapping.destination, path.relative(mapping.source, target));
+        fs.unlinkSync(file);
+        fs.symlinkSync(path.relative(path.dirname(file), copiedTarget), file);
+      }
+    }
+  }
+  for (const artifact of artifacts) relocate(artifact.destination, artifact);
   verifyBuild(stage);
 }
 function findNative(home, root, env, explicit) {
@@ -165,7 +300,7 @@ function findNative(home, root, env, explicit) {
 function wrapper(nativeBin, fallback) {
   return `#!/usr/bin/env node\n${MARKER}\nimport fs from 'node:fs';\nimport {spawn} from 'node:child_process';\nconst adapter=${JSON.stringify(nativeBin)};\nconst fallback=${JSON.stringify(fallback)};\nconst ready=fs.existsSync(adapter)&&fs.existsSync(${JSON.stringify(path.resolve(nativeBin, '../../.next/BUILD_ID'))});\nconst child=ready?spawn(${JSON.stringify(process.execPath)},[adapter,...process.argv.slice(2)],{stdio:'inherit',env:process.env}):spawn(fallback,process.argv.slice(2),{stdio:'inherit',env:process.env});\nfor(const signal of ['SIGINT','SIGTERM','SIGHUP'])process.on(signal,()=>child.kill(signal));\nchild.on('error',()=>{process.stderr.write('Pi Paseo web launcher failed.\\n');process.exitCode=1;});\nchild.on('exit',(code,signal)=>{process.exitCode=code??(signal?1:0);});\n`;
 }
-function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHostPath, nativeLauncher }) {
+function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHostPath, nativeLauncher, write }) {
   const shim = path.join(home, '.local/bin/pi-web');
   let metadata = sharedHostPath && exists(sharedHostPath) ? sharedHostPath : null;
   let routingStatus = 'shared-runtime';
@@ -188,14 +323,22 @@ function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHo
     if (config.realWeb !== nativeBin) {
       if (!Object.hasOwn(config, 'realWebBeforePiPaseo')) config.realWebBeforePiPaseo = config.realWeb;
       config.realWeb = nativeBin;
-      atomic(metadata, JSON.stringify(config, null, 2) + '\n', fs.statSync(metadata).mode & 0o777, original);
+      write(metadata, JSON.stringify(config, null, 2) + '\n', fs.statSync(metadata).mode & 0o777, original);
     }
     return { status: routingStatus, launcher: config.shim || shim, metadata, previousNative: config.realWebBeforePiPaseo || null };
   }
   const routingFile = path.join(root, 'host-routing.json');
+  const resumeFile = path.join(root, 'host-routing-resume.json');
   let record;
   if (exists(routingFile)) record = readJson(routingFile);
   const current = exists(shim) ? fs.readFileSync(shim, 'utf8') : null;
+  if (exists(resumeFile)) {
+    if (!fs.lstatSync(resumeFile).isFile()) fail('UNSAFE_METADATA_PATH');
+    const resume = readJson(resumeFile);
+    if (resume.schemaVersion === 1 && resume.launcher === shim && typeof resume.previousNative === 'string' &&
+        path.isAbsolute(resume.previousNative) && /^[a-f0-9]{64}$/.test(resume.wrapperSha256 || '') &&
+        current !== null && sha(current) === resume.wrapperSha256 && current.includes(MARKER)) record = resume;
+  }
   if (current !== null && (!record || sha(current) !== record.wrapperSha256 || !current.includes(MARKER))) {
     return { status: 'manual-routing-required', launcher: shim, reason: 'Existing launcher preserved; chain it to pendingRestart explicitly.' };
   }
@@ -203,8 +346,12 @@ function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHo
   if (!fallback || !executable(fallback)) fail('NATIVE_PI_WEB_UNAVAILABLE');
   safeDirectory(path.dirname(shim), home);
   const source = wrapper(nativeBin, fallback);
-  if (current !== source) atomic(shim, source, 0o755, current ?? undefined);
-  json(routingFile, { schemaVersion: 1, launcher: shim, previousNative: fallback, wrapperSha256: sha(source) });
+  const receipt = JSON.stringify({ schemaVersion: 1, launcher: shim, previousNative: fallback, wrapperSha256: sha(source) }, null, 2) + '\n';
+  // Persist ownership before publishing the wrapper. If killed before the
+  // ordinary receipt is written, retry recognizes only these exact bytes.
+  write(resumeFile, receipt);
+  if (current !== source) write(shim, source, 0o755, current);
+  write(routingFile, receipt);
   return { status: 'user-wrapper', launcher: shim, previousNative: fallback };
 }
 
@@ -259,6 +406,7 @@ export async function installHost(options = {}) {
           // Next's default counts host CPUs, which can exceed container quotas.
           const buildEnv = { ...env, HOME: home, CI: '1', CIRCLE_NODE_TOTAL: '3', NEXT_TELEMETRY_DISABLED: '1', PI_PASEO_SKIP_POSTINSTALL: '1', npm_config_production: 'false', NPM_CONFIG_PRODUCTION: 'false' };
           await run('npm', ['ci', '--include=dev', '--no-audit', '--no-fund'], { cwd: stage, env: { ...buildEnv, NODE_ENV: 'development' } });
+          repairSdkDependency(stage);
           await run('npm', ['run', 'build'], { cwd: stage, env: { ...buildEnv, NODE_ENV: 'production' } });
         }
         verifyBuild(stage);
@@ -268,20 +416,44 @@ export async function installHost(options = {}) {
           buildId: fs.readFileSync(path.join(stage, '.next/BUILD_ID'), 'utf8').trim(), prebuilt: !!options.prebuiltRoot, installedAt: new Date().toISOString() });
         release = path.join(releases, `${key}-${randomUUID()}`);
         fs.renameSync(stage, release);
-        const tempLink = path.join(root, `.pi-web-${randomUUID()}`);
-        try { fs.symlinkSync(path.relative(root, release), tempLink, 'dir'); fs.renameSync(tempLink, destination); }
-        finally { fs.rmSync(tempLink, { force: true }); }
       } catch (error) { fs.rmSync(stage, { recursive: true, force: true }); throw error; }
     }
     const nativeBin = path.join(destination, 'bin/pi-web.js');
-    const routing = installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHostPath, nativeLauncher: options.nativeLauncher });
-    const firstLauncher = (env.PATH || '').split(path.delimiter).filter(Boolean)
-      .map(dir => path.resolve(dir, 'pi-web')).find(executable);
-    const result = { status: reused ? 'already-installed' : 'installed', adapterRoot: destination, releaseRoot: release, baseCommit: PI_WEB_BASE, piWebVersion: PI_WEB_VERSION,
-      patchSha256: meta.patchSha256, reused, routing, pendingRestart: nativeBin, restartRequired: true, restarted: false,
-      launcherDirectory: path.dirname(routing.launcher), pathUpdateRequired: firstLauncher !== routing.launcher };
-    json(path.join(root, 'host-install.json'), result);
-    return result;
+    const transaction = routingTransaction();
+    const previousLink = active === null ? null : fs.readlinkSync(destination);
+    const nextLink = path.relative(root, release);
+    let published = false;
+    const publish = target => {
+      const tempLink = path.join(root, `.pi-web-${randomUUID()}`);
+      try { fs.symlinkSync(target, tempLink, 'dir'); fs.renameSync(tempLink, destination); }
+      finally { fs.rmSync(tempLink, { force: true }); }
+    };
+    try {
+      if (!reused) { publish(nextLink); published = true; }
+      const routing = installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHostPath, nativeLauncher: options.nativeLauncher, write: transaction.write });
+      const firstLauncher = (env.PATH || '').split(path.delimiter).filter(Boolean)
+        .map(dir => path.resolve(dir, 'pi-web')).find(executable);
+      const result = { status: reused ? 'already-installed' : 'installed', adapterRoot: destination, releaseRoot: release, baseCommit: PI_WEB_BASE, piWebVersion: PI_WEB_VERSION,
+        patchSha256: meta.patchSha256, reused, routing, pendingRestart: nativeBin, restartRequired: true, restarted: false,
+        launcherDirectory: path.dirname(routing.launcher), pathUpdateRequired: firstLauncher !== routing.launcher };
+      transaction.write(path.join(root, 'host-install.json'), JSON.stringify(result, null, 2) + '\n');
+      return result;
+    } catch (error) {
+      let rollbackFailed = false;
+      if (published) {
+        try {
+          if (!exists(destination) || !fs.lstatSync(destination).isSymbolicLink() || fs.readlinkSync(destination) !== nextLink) fail('ROUTING_CHANGED_RETRY');
+          if (previousLink === null) fs.unlinkSync(destination);
+          else publish(previousLink);
+        } catch { rollbackFailed = true; }
+      }
+      try { transaction.rollback(); } catch { rollbackFailed = true; }
+      // If concurrent routing changes prevent recovery, keep the built release
+      // available for the operator rather than deleting a potentially used path.
+      if (!reused && !rollbackFailed) fs.rmSync(release, { recursive: true, force: true });
+      if (rollbackFailed) fail('HOST_INSTALL_ROLLBACK_FAILED');
+      throw error;
+    }
   }, options.lockTimeoutMs ?? 900000);
 }
 

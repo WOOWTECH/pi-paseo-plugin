@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {DefaultPackageManager, SettingsManager} from '@earendil-works/pi-coding-agent';
 import * as runtime from './runtime.mjs';
-import {processIdentity} from './state.mjs';
+import {processIdentity, assertSafePath} from './state.mjs';
 import { readRecord, writeRecord, withLock, ensureOnboarding, createViaLocalWeb } from './onboarding.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -53,9 +53,12 @@ export async function startSupervisor({fallbackOnboarding=false,cwd}={}) {
    if(old.packageRoot===root)return {running:true,pid:old.pid};
    await stopOwnedSupervisor(old,5000);
   }
-  const log=fs.openSync(path.join(loc.stateDir,'supervisor.log'),'a',0o600);
+  const logFile=path.join(loc.stateDir,'supervisor.log');
+  assertSafePath(logFile);
+  const log=fs.openSync(logFile,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW,0o600);
   let child;
   try {
+   fs.fchmodSync(log,0o600);
    child=spawn(process.execPath,[path.join(root,'bin/cli.mjs'),'supervise',...(fallbackOnboarding?['--fallback-onboarding']:[])],{cwd:cwd||readRecord(path.join(loc.stateDir,'host-registration.json')).cwd||process.cwd(),detached:true,stdio:['ignore',log,log],env:process.env});
   } finally {fs.closeSync(log);}
   await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
@@ -93,7 +96,7 @@ export async function supervise({fallbackOnboarding=false}={}) {
     if(!packageEnabled(loc)){await runtime.deactivate();break;}
     if(fallbackOnboarding) {
      const api=await import('./onboarding.mjs');
-     if(!stop&&!api.onboardingStatus(loc).sessionId) await ensureOnboarding(p=>createViaLocalWeb(p,loc),loc);
+     if(!stop&&!api.onboardingStatus(loc).sessionId) await ensureOnboarding((p,remember)=>createViaLocalWeb(p,loc,remember),loc);
     }
     retries=0;
    } catch(e) {

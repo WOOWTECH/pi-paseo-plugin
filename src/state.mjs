@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { spawnSync } from 'child_process';
 
 export class RuntimeError extends Error {
   constructor(code, message = code) { super(message); this.name = 'RuntimeError'; this.code = code; }
@@ -12,18 +13,41 @@ export function locations() {
   const agentDir = path.resolve(process.env.PI_CODING_AGENT_DIR || process.env.PI_AGENT_DATA_DIR || (fs.existsSync('/data/pi-agent') ? '/data/pi-agent' : path.join(home, '.pi/agent')));
   const stateDir = path.resolve(process.env.PI_PASEO_STATE_DIR || path.join(agentDir, 'pi-paseo'));
   let savedPort;
+  assertSafePath(path.join(stateDir, 'state.json'));
   try { savedPort = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8')).port; } catch {}
   const port = Number(savedPort || process.env.PI_PASEO_PORT || 6769);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new RuntimeError('INVALID_PORT');
   return { home, agentDir, stateDir, paseoHome: path.join(stateDir, 'daemon'), runtimeDir: path.resolve(process.env.PI_PASEO_RUNTIME_DIR || path.join(home, '.local/share/pi-paseo/runtime')), port };
 }
+// Reject links in any component, including dangling links and redirected parents.
+export function assertSafePath(file) {
+  let current = path.resolve(file), leaf;
+  while (true) {
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        // macOS exposes its root-owned temporary paths through fixed system
+        // aliases. User-created or redirected aliases remain unsafe.
+        const systemAlias = process.platform === 'darwin' && stat.uid === 0 &&
+          ['/var', '/tmp'].includes(current) &&
+          path.resolve(path.dirname(current), fs.readlinkSync(current)) === '/private' + current;
+        if (!systemAlias) throw new RuntimeError('UNSAFE_SYMLINK');
+      }
+      if (current === path.resolve(file)) leaf = stat;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const parent = path.dirname(current);
+    if (parent === current) return leaf;
+    current = parent;
+  }
+}
 export function privateDirectory(dir) {
-  if (fs.existsSync(dir) && fs.lstatSync(dir).isSymbolicLink()) throw new RuntimeError('UNSAFE_SYMLINK');
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
+  assertSafePath(dir);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertSafePath(dir); fs.chmodSync(dir, 0o700);
 }
 export function atomicJson(file, value) {
   privateDirectory(path.dirname(file));
-  if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw new RuntimeError('UNSAFE_SYMLINK');
+  assertSafePath(file);
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     const fd = fs.openSync(temp, 'wx', 0o600);
@@ -42,7 +66,7 @@ function assertPublic(value) {
 export function readState() {
   const file = path.join(locations().stateDir, 'state.json');
   try {
-    if (fs.lstatSync(file).isSymbolicLink()) throw new RuntimeError('UNSAFE_SYMLINK');
+    assertSafePath(file);
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RuntimeError('STATE_CORRUPT');
     assertPublic(value); return value;
@@ -59,35 +83,118 @@ export function processIdentity(pid) {
     return `alive:${pid}`;
   } catch { return null; }
 }
-function acquire(file) {
-  const token = randomUUID();
+const acquisitionGraceMs = 30000;
+function sameFile(a, b) { return a?.ino === b?.ino && a?.dev === b?.dev && a?.mtimeMs === b?.mtimeMs; }
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+export function checkLockSignal(signal) {
+  if (signal?.aborted) throw new RuntimeError('LOCK_ABORTED');
+}
+export async function pauseForLock(ms, signal) {
+  checkLockSignal(signal);
+  try { await delay(ms, undefined, { signal }); }
+  catch (error) { if (error.name === 'AbortError') throw new RuntimeError('LOCK_ABORTED'); throw error; }
+}
+/**
+ * Linux requires util-linux flock; other platforms fail closed. The persistent
+ * guard must never be unlinked: every participant must lock the same inode.
+ * flock inherits fd 3, so its lock remains on our open file description after
+ * the utility exits. Closing our fd releases it even on process death. Only
+ * acquisition/reclamation/publication run here, never an async operation body.
+ */
+export function withLockTransition(file, fn, { timeoutMs = 1000, signal } = {}) {
+  checkLockSignal(signal);
+  if (process.platform !== 'linux') throw new RuntimeError('LOCK_GUARD_UNSUPPORTED');
+  const guard = file + '.guard';
+  assertSafePath(guard);
+  let fd;
   try {
-    const fd = fs.openSync(file, 'wx', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid), token, createdAt: new Date().toISOString() })); } finally { fs.closeSync(fd); }
-    return () => {
-      try { if (JSON.parse(fs.readFileSync(file, 'utf8')).token === token) fs.unlinkSync(file); } catch {}
-    };
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    try {
-      const owner = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (owner.identity && processIdentity(owner.pid) === owner.identity) return null;
-      const before = fs.statSync(file);
-      const again = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (again.token === owner.token && fs.statSync(file).ino === before.ino) fs.unlinkSync(file);
-    } catch (failure) {
-      // A newly opened file can still be empty until its owner writes. Never remove that live acquisition.
-      if (failure.code !== 'ENOENT') return null;
+    fd = fs.openSync(guard, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+    const stat = fs.fstatSync(fd), current = assertSafePath(guard);
+    if (!stat.isFile() || stat.nlink !== 1 || current?.ino !== stat.ino || current?.dev !== stat.dev) throw new RuntimeError('UNSAFE_LOCK');
+    fs.fchmodSync(fd, 0o600);
+    const result = spawnSync('flock', ['--exclusive', '--nonblock', '--conflict-exit-code', '73', '3'], {
+      stdio: ['ignore', 'ignore', 'ignore', fd], shell: false,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', LC_ALL: 'C' },
+      timeout: Math.max(1, Math.min(1000, timeoutMs)), killSignal: 'SIGKILL',
+    });
+    if (result.error) {
+      throw new RuntimeError(result.error.code === 'ENOENT' ? 'LOCK_GUARD_UNAVAILABLE' : result.error.code === 'ETIMEDOUT' ? 'LOCK_GUARD_TIMEOUT' : 'LOCK_GUARD_FAILED');
     }
-    return null;
+    checkLockSignal(signal);
+    if (result.status === 73) return null;
+    if (result.status !== 0 || result.signal) throw new RuntimeError('LOCK_GUARD_FAILED');
+    return fn();
+  } catch (error) {
+    if (error instanceof RuntimeError) throw error;
+    throw new RuntimeError(error.code === 'ELOOP' ? 'UNSAFE_SYMLINK' : 'LOCK_GUARD_FAILED');
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function acquire(file, options) {
+  return withLockTransition(file, () => acquireGuarded(file), options);
+}
+function acquireGuarded(file) {
+  assertSafePath(file);
+  const token = randomUUID();
+  // A reclaimed lock is published again before releasing the OS guard.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(file, 'wx', 0o600);
+      let acquired;
+      try {
+        acquired = fs.fstatSync(fd);
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid), token, createdAt: new Date().toISOString() }));
+        fs.fsyncSync(fd);
+      } catch (error) {
+        const current = assertSafePath(file);
+        if (acquired && current?.ino === acquired.ino && current?.dev === acquired.dev) fs.unlinkSync(file);
+        throw error;
+      } finally { fs.closeSync(fd); }
+      return () => {
+        // A live owner cannot be reclaimed by guarded acquirers. Release does
+        // not need another subprocess or a wait on the transition guard.
+        try {
+          const current = assertSafePath(file);
+          if (current?.ino === acquired.ino && current?.dev === acquired.dev && JSON.parse(fs.readFileSync(file, 'utf8')).token === token) fs.unlinkSync(file);
+        } catch {}
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const before = assertSafePath(file);
+        const contents = fs.readFileSync(file, 'utf8');
+        let owner;
+        try { owner = JSON.parse(contents); } catch {}
+        if (owner && typeof owner === 'object') {
+          const identity = processIdentity(owner.pid);
+          if (owner.identity && identity === owner.identity) return null;
+          // If process metadata is unavailable, retain a demonstrably live owner.
+          if (!identity && pidAlive(owner.pid)) return null;
+          if (!owner.identity && pidAlive(owner.pid)) return null;
+        } else if (Date.now() - before.mtimeMs <= acquisitionGraceMs) {
+          // Protect an incomplete acquisition from an older, unguarded version.
+          return null;
+        }
+        if (sameFile(before, assertSafePath(file)) && fs.readFileSync(file, 'utf8') === contents) { fs.unlinkSync(file); continue; }
+      } catch (failure) {
+        if (failure.code === 'UNSAFE_SYMLINK') throw failure;
+        if (failure.code === 'ENOENT') continue;
+        return null;
+      }
+      return null;
+    }
   }
+  return null;
 }
 export function updateState(patch) {
   assertPublic(patch); const dir = locations().stateDir; privateDirectory(dir);
   const file = path.join(dir, 'state.lock'); const deadline = Date.now() + 3000; let release;
-  while (!(release = acquire(file))) {
+  while (!release) {
     if (Date.now() >= deadline) throw new RuntimeError('STATE_BUSY');
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    release = acquire(file, { timeoutMs: deadline - Date.now() });
+    if (!release) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(20, Math.max(1, deadline - Date.now())));
   }
   try {
     const current = readState();
@@ -95,9 +202,16 @@ export function updateState(patch) {
     atomicJson(path.join(dir, 'state.json'), updated); return updated;
   } finally { release(); }
 }
-export async function withRuntimeLock(fn, { timeoutMs = 300000 } = {}) {
+export async function withRuntimeLock(fn, { timeoutMs = 300000, signal } = {}) {
+  checkLockSignal(signal);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RuntimeError('INVALID_LOCK_OPTIONS');
   const dir = locations().stateDir; privateDirectory(dir); const file = path.join(dir, 'runtime.lock');
   const deadline = Date.now() + timeoutMs; let release;
-  while (!(release = acquire(file))) { if (Date.now() >= deadline) throw new RuntimeError('RUNTIME_BUSY'); await delay(100); }
+  while (!release) {
+    checkLockSignal(signal);
+    if (Date.now() >= deadline) throw new RuntimeError('RUNTIME_BUSY');
+    release = acquire(file, { timeoutMs: deadline - Date.now(), signal });
+    if (!release) await pauseForLock(Math.min(100, Math.max(1, deadline - Date.now())), signal);
+  }
   try { return await fn(); } finally { release(); }
 }

@@ -17,7 +17,7 @@ try {
   // Run postinstall with its opt-out: module imports still exercise runtime peers.
   await runCommand('npm', ['install', '--omit=dev', '--legacy-peer-deps', '--no-audit', '--no-fund', path.join(temp, pack.filename)], { cwd: temp, env });
   const output = await runCommand(process.execPath, ['--input-type=module', '-e',
-    'const api=await import("@woowtech/pi-paseo/host-api"); const s=await api.status(); if(s.installed||s.daemon.running||typeof api.listModels!=="function")process.exit(1); console.log("PRODUCTION_PACKAGE_OK");'], { cwd: temp, env });
+    'const api=await import("@woowtech/pi-paseo/host-api"); const s=await api.status(); if(s.installed||s.daemon.running||typeof api.listModels!=="function")process.exit(1); const {createRequire}=await import("node:module");const fs=await import("node:fs");const path=await import("node:path");const req=createRequire(import.meta.resolve("@woowtech/pi-paseo/host-api"));const sdk=req.resolve.paths("@earendil-works/pi-coding-agent").map(p=>path.join(p,"@earendil-works/pi-coding-agent")).find(p=>fs.existsSync(path.join(p,"package.json")));const sr=createRequire(path.join(sdk,"package.json"));const br=createRequire(sr.resolve("minimatch"));if(JSON.parse(fs.readFileSync(br.resolve("brace-expansion/package.json"))).version!=="5.0.12"||sr("minimatch").braceExpand("{a,b}").join()!=="a,b")process.exit(1);console.log("PRODUCTION_PACKAGE_OK");'], { cwd: temp, env });
   if (output !== 'PRODUCTION_PACKAGE_OK') throw new Error('PRODUCTION_PACKAGE_CHECK_FAILED');
   console.log(JSON.stringify({ passed: true, installation: 'production-without-dev-dependencies', daemonStarted: false }));
 } catch {

@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { privateDirectory, RuntimeError } from '../src/state.mjs';
 import { PROVIDER_PACKAGES, providersPrefix, resolveProviderLaunchers, configureProviders } from '../src/provider-launchers.mjs';
+import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
+import * as runtimeLayout from '../src/runtime-layout.mjs';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-launchers-'));
@@ -71,6 +73,7 @@ test('valid mounted commands stay in place without any private installation or v
 
 test('only missing Claude and Codex install into the private prefix using fixed official packages', async t => {
   const f = fixture(t); const pi = f.mounted('pi');
+  f.env.PI_WEB_PASSWORD='web-password-sentinel';
   const launchers = await f.resolve({ installMissing: true });
   const installs = f.calls.filter(c => c.command === f.npm);
   assert.equal(installs.length, 2);
@@ -190,13 +193,15 @@ test('Paseo provider configuration binds absolute binaries and reuses account di
 
 test('runtime applies new private commands with the official reload API and reports RESTART_REQUIRED safely', async t => {
   const f = fixture(t); const pi = f.mounted('pi');
+  f.env.PI_WEB_PASSWORD='web-password-sentinel';
   Object.assign(f.loc, { stateDir: path.join(f.loc.home, 'state'), runtimeDir: path.join(f.loc.home, 'runtime'), port: 6769 });
   f.loc.paseoHome = path.join(f.loc.stateDir, 'daemon');
   fs.mkdirSync(f.loc.paseoHome, { recursive: true });
-  const cliRoot = path.join(f.loc.runtimeDir, 'node_modules/@getpaseo/cli');
-  const ui = path.join(f.loc.runtimeDir, 'node_modules/@getpaseo/server/dist/server/web-ui/index.html');
+  const cliRoot = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/cli');
+  const ui = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/server/dist/server/web-ui/index.html');
   fs.mkdirSync(cliRoot, { recursive: true }); fs.mkdirSync(path.dirname(ui), { recursive: true });
   fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: '0.11.2' })); fs.writeFileSync(ui, 'fixture UI');
+  runtimeLayout.markRuntimeReady(f.loc);
   let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running' };
   fs.writeFileSync(path.join(f.loc.paseoHome, '.pi-paseo-owner.json'), JSON.stringify({ installationId: state.installationId, home: f.loc.paseoHome }));
   const configFile = path.join(f.loc.paseoHome, 'config.json');
@@ -223,7 +228,7 @@ test('runtime applies new private commands with the official reload API and repo
   const module = { exports: {} }, require = createRequire(import.meta.url);
   const localRequire = spec => {
     if (spec === './state.mjs') return {
-      locations: () => f.loc, readState: () => state, updateState: patch => (state = { ...state, ...patch }),
+      locations: () => f.loc, readState: () => state, updateState: patch => (state = { ...state, ...patch, updatedAt:String(Number(state.updatedAt||0)+1) }),
       privateDirectory, RuntimeError, withRuntimeLock: fn => fn(), processIdentity: pid => pid === instance.pid ? 'fixture-process' : null,
     };
     if (spec === './process.mjs') return {
@@ -234,6 +239,7 @@ test('runtime applies new private commands with the official reload API and repo
         assert.equal(command, '/fixture/node');
         assert.deepEqual(Array.from(args), [path.join(cliRoot, 'bin/paseo'), '--version']);
         assert.equal(options.env.HOME, f.loc.home);
+        assert.equal(options.env.PI_WEB_PASSWORD,undefined);
         return '0.11.2';
       },
     };
@@ -243,6 +249,9 @@ test('runtime applies new private commands with the official reload API and repo
     };
     if (spec === './provider-reply.mjs') return { providerReplyError: () => assert.fail('no provider conversations') };
     if (spec === './chat-result.mjs') return {};
+    if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
+    if (spec === './runtime-layout.mjs') return runtimeLayout;
+    if (spec === './acceptance-agent.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };
     if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => fs.writeFileSync(configFile, JSON.stringify(config)) };

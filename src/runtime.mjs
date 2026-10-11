@@ -9,16 +9,22 @@ import { findExecutable, runProcess } from './process.mjs';
 import { resolveProviderLaunchers, configureProviders } from './provider-launchers.mjs';
 import { providerReplyError } from './provider-reply.mjs';
 import { assistantEntries, latestAssistantCursor, chatResult } from './chat-result.mjs';
+import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
+import {usingAcceptanceAgent} from './acceptance-agent.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,RUNTIME_REVISION} from './runtime-layout.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
 const PROVIDERS = ['claude', 'codex', 'pi'];
 const safeCode = error => /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code || '') ? error.code : 'RUNTIME_FAILED';
-function packageRoot(pkg = 'cli') { return path.join(locations().runtimeDir, 'node_modules/@getpaseo', pkg); }
+function packageRoot(pkg = 'cli') { return path.join(runtimeDirectory(locations()), 'node_modules/@getpaseo', pkg); }
 function cliPath() { return path.join(packageRoot(), 'bin/paseo'); }
 function runtimeVersion() { try { return JSON.parse(fs.readFileSync(path.join(packageRoot(), 'package.json'), 'utf8')).version; } catch { return null; } }
 function inheritedEnv() {
   const loc = locations(); const env = { ...process.env, HOME: loc.home, PI_CODING_AGENT_DIR: loc.agentDir, PI_AGENT_DATA_DIR: process.env.PI_AGENT_DATA_DIR || loc.agentDir, PASEO_HOME: loc.paseoHome, NO_COLOR: '1' };
   delete env.PASEO_HOST; delete env.PASEO_AGENT_ID; delete env.PASEO_WORKSPACE_ID; delete env.PASEO_PASSWORD;
+  // Web login protects the host UI; provider children do not need this credential.
+  delete env.PI_WEB_PASSWORD;
+  env.PI_PASEO_RUNTIME_REVISION=RUNTIME_REVISION;
   return env;
 }
 async function cli(args, options = {}) {
@@ -40,9 +46,14 @@ function ensureOwnedHome() {
 function ownsHome() {
   try { const marker = JSON.parse(fs.readFileSync(ownerFile(), 'utf8')); return marker.installationId === readState().installationId && marker.home === locations().paseoHome; } catch { return false; }
 }
-async function serverModule(relative) { return import(pathToFileURL(path.join(packageRoot('server'), relative)).href); }
+function legacyVersion() {try{return JSON.parse(fs.readFileSync(path.join(locations().runtimeDir,'node_modules/@getpaseo/cli/package.json'))).version;}catch{return null;}}
+async function serverModule(relative) { const root=fs.existsSync(packageRoot('server'))?packageRoot('server'):path.join(locations().runtimeDir,'node_modules/@getpaseo/server');return import(pathToFileURL(path.join(root, relative)).href); }
 async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
-async function currentInstance() { if (runtimeVersion() !== PASEO_VERSION || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
+async function currentInstance() { if ((runtimeVersion() !== PASEO_VERSION&&legacyVersion()!==PASEO_VERSION) || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
+function instanceNeedsRuntimeRestart(instance) {
+ if(process.platform!=='linux')return false;
+ try{return !fs.readFileSync(`/proc/${instance.pid}/environ`,'utf8').split('\0').includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`);}catch{return true;}
+}
 async function verifyInstanceOwnership(instance) {
   if (!ownsHome() || !instance || !processIdentity(instance.pid)) throw new RuntimeError('DAEMON_NOT_OWNED');
   if (instance.uid !== (process.getuid?.() ?? instance.uid)) throw new RuntimeError('DAEMON_NOT_OWNED');
@@ -62,14 +73,16 @@ async function verifyInstanceOwnership(instance) {
 }
 async function installRuntime() {
   privateDirectory(locations().runtimeDir);
-  if (runtimeVersion() !== PASEO_VERSION) {
+  if (!runtimeReady(locations())) {
     const npm = findExecutable('npm'); if (!npm) throw new RuntimeError('NPM_UNAVAILABLE');
-    await runProcess(npm, ['install', '--prefix', locations().runtimeDir, '--no-audit', '--no-fund', '--save-exact', `@getpaseo/cli@${PASEO_VERSION}`], { timeoutMs: 300000, env: inheritedEnv() });
+    const root=prepareRuntimeManifest(locations());
+    await runProcess(npm, ['ci', '--prefix', root, '--omit=dev', '--no-audit', '--no-fund'], { timeoutMs: 300000, env: inheritedEnv() });
   }
   const version = await runProcess(process.execPath, [cliPath(), '--version'], { env: inheritedEnv() });
   if (version.trim() !== PASEO_VERSION || runtimeVersion() !== PASEO_VERSION) throw new RuntimeError('VERSION_MISMATCH');
   if (!fs.existsSync(path.join(packageRoot('server'), 'dist/server/web-ui/index.html'))) throw new RuntimeError('WEB_UI_MISSING');
-  updateState({ installedVersion: PASEO_VERSION });
+  markRuntimeReady(locations());
+  updateState({ installedVersion: PASEO_VERSION,installedRuntimeRevision:RUNTIME_REVISION });
 }
 async function choosePort(preferred) {
   for (let port = preferred; port <= Math.min(65535, preferred + 50); port++) {
@@ -86,10 +99,16 @@ async function writeConfig(port, launchers) {
   let config = {};
   if (fs.existsSync(file)) { try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); } }
   const providers = configureProviders(config.agents?.providers, launchers, loc, inheritedEnv());
+  let name=config.daemon?.name;
+  try {
+    const preferences=JSON.parse(fs.readFileSync(path.join(loc.stateDir,'preferences.json'),'utf8'));
+    if(typeof preferences.name!=='string'||preferences.name.length>100||/[\x00-\x1f]/.test(preferences.name))throw new RuntimeError('CONFIG_INVALID');
+    name=preferences.name;
+  } catch(error) {if(error.code!=='ENOENT')throw new RuntimeError('CONFIG_INVALID');}
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
   config = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
-    daemon: { ...config.daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: { ...config.daemon?.mcp, enabled: true } },
+    daemon: { ...config.daemon, ...(name?{name}:{}), listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: { ...config.daemon?.mcp, enabled: true } },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
@@ -120,6 +139,10 @@ export async function activate(options = {}) {
       const existing = await currentInstance(); const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
         await verifyInstanceOwnership(existing);
+        if(instanceNeedsRuntimeRestart(existing)) {
+          updateState({phase:'restart_required',lastError:{code:'RESTART_REQUIRED',at:new Date().toISOString()}});
+          return status();
+        }
         const pending = readState().providerReloadPending;
         const needsApply = await writeConfig(locations().port, launchers) || (pending?.pid === existing.pid && pending?.startedAt === existing.startedAt);
         updateState({ providerReloadPending: { pid: existing.pid, startedAt: existing.startedAt } });
@@ -160,15 +183,22 @@ export async function deactivate() {
   });
 }
 export async function status() {
-  const state = readState(); const installed = runtimeVersion() === PASEO_VERSION; const owned = ownsHome();
+  return singleFlight(`status:${locations().paseoHome}`,readStatus);
+}
+async function readStatus() {
+  const state = readState(); const installed = runtimeReady(locations()); const owned = ownsHome();
   const daemon = { running: false, reachable: false, owned, pid: null, listen: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
   let providers = [], diagnosticCode = state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null;
-  if (installed && owned) {
+  if ((installed||legacyVersion()===PASEO_VERSION) && owned) {
     try {
       const instance = await currentInstance();
       if (instance) {
         await verifyInstanceOwnership(instance); daemon.running = true; daemon.pid = instance.pid; daemon.listen = instance.listen;
-        const result = await withClient(client => client.getDaemonStatus({ timeout: 5000 }), 8000);
+        if(instanceNeedsRuntimeRestart(instance))diagnosticCode='RESTART_REQUIRED';
+        const key=JSON.stringify([locations().paseoHome,instance.pid,instance.startedAt,state.updatedAt]);
+        const sample = await daemonStatusWindow(key,()=>withClient(client => client.getDaemonStatus({ timeout: 5000 }), 8000));
+        const result=sample.value;
+        daemon.statusCheckedAt=new Date(sample.checkedAt).toISOString();daemon.statusMaxAgeMs=3000;
         daemon.reachable = true; daemon.workerPid = result.pid; daemon.relayEnabled = result.relay?.enabled === true; daemon.relayConnected = typeof result.relay?.connected === 'boolean' ? result.relay.connected : null;
         providers = (result.providers || []).filter(row => PROVIDERS.includes(row.provider)).map(safeProvider);
       }
@@ -196,6 +226,9 @@ export async function diagnose() {
 }
 export async function listModels(provider) {
   if (!PROVIDERS.includes(provider)) throw new RuntimeError('INVALID_PROVIDER');
+  return singleFlight(`models:${locations().paseoHome}:${provider}`,()=>readModels(provider));
+}
+async function readModels(provider) {
   return withClient(async client => {
     const result = await client.listProviderModels(provider);
     const snapshot = await client.getProvidersSnapshot(); const entry = snapshot.entries.find(row => row.provider === provider);
@@ -234,8 +267,7 @@ export async function acceptance(options = {}) {
         const marker = `PI_PASEO_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
         const workspace = await client.createWorkspace({ source: { kind: 'directory', path: cwd } });
         if (!workspace.workspace?.id) throw new RuntimeError('WORKSPACE_CREATE_FAILED');
-        const agent = await client.createAgent({ provider, model, modeId, cwd, workspaceId: workspace.workspace.id, title: `Pi Paseo ${provider} connection check`, initialPrompt: `Connection check only. Do not use tools or edit files. Remember ${marker}. Reply with exactly ${marker}.`, labels: { 'pi-paseo-acceptance': 'true' } });
-        row.agentId = agent.id;
+        await usingAcceptanceAgent(client,{ provider, model, modeId, cwd, workspaceId: workspace.workspace.id, title: `Pi Paseo ${provider} connection check`, initialPrompt: `Connection check only. Do not use tools or edit files. Remember ${marker}. Reply with exactly ${marker}.`, labels: { 'pi-paseo-acceptance': 'true' } },row,async agent=>{
         const first = await client.waitForFinish(agent.id, timeoutMs);
         if (first.status !== 'idle') throw new RuntimeError(first.status === 'permission' ? 'PERMISSION_REQUIRED' : first.status === 'timeout' ? 'PROVIDER_TIMEOUT' : 'PROVIDER_TURN_FAILED');
         const firstEntries = await assistantEntries(client, agent.id);
@@ -249,6 +281,7 @@ export async function acceptance(options = {}) {
         const followup = secondEntries.at(-1)?.item.text || ''; row.followup = latestAssistantCursor(secondEntries) !== latestAssistantCursor(firstEntries) && String(followup).includes(marker);
         if (providerReplyError(followup)) throw new RuntimeError(providerReplyError(followup));
         row.passed = row.firstReply && row.followup;
+        });
       }, timeoutMs * 2 + 30000);
     } catch (error) { row.code = safeCode(error); }
     results.push(row);
@@ -256,7 +289,7 @@ export async function acceptance(options = {}) {
     if (options.onProgress) await options.onProgress({ ...row });
   }
   const merged = [...previous.filter(row => !selectedProviders.includes(row.provider)), ...results];
-  const result = { checkedAt: new Date().toISOString(), passed: PROVIDERS.every(provider => merged.some(row => row.provider === provider && row.passed)), providers: merged };
+  const result = { checkedAt: new Date().toISOString(), passed: PROVIDERS.every(provider => merged.some(row => row.provider === provider && row.passed && row.cleanup?.archived!==false)), providers: merged };
   updateState({ acceptance: result }); return result;
 }
 function chatInput(message) {

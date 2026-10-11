@@ -32,7 +32,7 @@ function fixture(t) {
   let nextPid = 4100;
   let onSignal = (pid, signal) => { if (signal === 'SIGTERM') processes.delete(pid); };
   const fakeProcess = Object.assign(signals, {
-    pid: 4000, platform: 'linux', execPath: process.execPath, env: {}, cwd: () => loc.home,
+    pid: 4000, platform: 'linux', execPath: process.execPath, env: { HOME: loc.home, PI_CODING_AGENT_DIR: loc.agentDir, PI_PASEO_STATE_DIR: loc.stateDir, PI_PASEO_RUNTIME_DIR: path.join(dir, 'runtime') }, cwd: () => loc.home,
     kill(pid, signal = 'SIGTERM') {
       if (signal === 0 && pid === this.pid) return true;
       if (!processes.has(pid)) throw Object.assign(new Error('No process'), { code: 'ESRCH' });
@@ -80,7 +80,7 @@ function fixture(t) {
       } };
       if (spec === '@earendil-works/pi-coding-agent') return { DefaultPackageManager, SettingsManager };
       if (spec.endsWith('/runtime.mjs')) return runtime;
-      if (spec.endsWith('/state.mjs')) return { processIdentity: pid => processes.get(pid)?.identity ?? null };
+      if (spec.endsWith('/state.mjs')) return { ...load('src/state.mjs'), locations: () => loc, processIdentity: pid => pid === fakeProcess.pid ? 'self' : processes.get(pid)?.identity ?? null };
       if (spec.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(absolute), spec)));
       return require(spec);
     };
@@ -96,7 +96,7 @@ function fixture(t) {
     return pid;
   }
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { loc, calls, processes, signals, runtime, write, packages, owned, load, setSignalHandler: fn => { onSignal = fn; } };
+  return { loc, calls, processes, signals, runtime, write, packages, owned, load, fakeProcess, fakeFs, setSignalHandler: fn => { onSignal = fn; } };
 }
 
 const enabledPackages = [{ source: root, installedPath: root, disabled: false, scope: 'global' }];
@@ -110,7 +110,7 @@ async function postinstallCli(f) {
   const cliProcess = { argv: ['node', 'cli.mjs', 'postinstall'], env: {},
     stdout: { write: text => { output += text; } }, stderr: { write: text => { errors += text; } } };
   await vm.runInNewContext(`(async()=>{${source}\n})()`, {
-    runtime: f.runtime, host: f.load('src/host-api.mjs'), process: cliProcess,
+    runtime: f.runtime, host: f.load('src/host-api.mjs'), process: cliProcess,repairSdkDependency:()=>({skipped:true}),
     installerImport: async () => ({ installHost: async () => ({ restartRequired: true }) }),
   });
   return { output, errors, exitCode: cliProcess.exitCode };
@@ -378,4 +378,33 @@ test('project Git settings resolve through Pi installedPath using the recorded c
   assert.equal(f.load('src/supervisor.mjs').packageEnabled(f.loc), true);
   fs.writeFileSync(file, JSON.stringify({ packages: [{ source, extensions: [] }] }));
   assert.equal(f.load('src/supervisor.mjs').packageEnabled(f.loc), false);
+});
+
+test('supervisor startup refuses a symlinked log before spawning', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  const target = path.join(f.loc.home, 'external.log');
+  fs.writeFileSync(target, 'external-data');
+  const log = path.join(f.loc.stateDir, 'supervisor.log');
+  fs.symlinkSync(target, log);
+  await assert.rejects(f.load('src/supervisor.mjs').startSupervisor(), error => error.code === 'UNSAFE_SYMLINK');
+  assert.equal(fs.lstatSync(log).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'external-data');
+  assert.equal(f.calls.some(row => row[0] === 'spawn'), false);
+});
+
+
+test('state path safety preserves only macOS fixed root-owned temporary aliases', t => {
+  const f = fixture(t);
+  f.fakeProcess.platform = 'darwin';
+  const originalStat = f.fakeFs.lstatSync;
+  f.fakeFs.lstatSync = file => String(file) === '/var' ? { isSymbolicLink: () => true, uid: 0 } : originalStat(file);
+  f.fakeFs.readlinkSync = () => 'private/var';
+  const state = f.load('src/state.mjs');
+  assert.doesNotThrow(() => state.assertSafePath('/var/pi-paseo-test-does-not-exist'));
+  f.fakeFs.readlinkSync = () => '/elsewhere';
+  assert.throws(() => state.assertSafePath('/var/pi-paseo-test-does-not-exist'), error => error.code === 'UNSAFE_SYMLINK');
+  f.fakeFs.readlinkSync = () => 'private/var';
+  f.fakeFs.lstatSync = file => String(file) === '/var' ? { isSymbolicLink: () => true, uid: 1000 } : originalStat(file);
+  assert.throws(() => state.assertSafePath('/var/pi-paseo-test-does-not-exist'), error => error.code === 'UNSAFE_SYMLINK');
 });
