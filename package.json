@@ -56,6 +56,7 @@
     "host/adapter.patch",
     "host/adapter-meta.json",
     "scripts",
+    "docs/validation.md",
     "README.md",
     "LICENSE"
   ],
