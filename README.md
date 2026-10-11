@@ -38,7 +38,7 @@ cd pi-paseo-plugin
 bash scripts/install.sh --source "$PWD"
 ```
 
-安裝器從目前 checkout 的完整 commit SHA 建立持久化副本，以 lockfile 安裝依賴，註冊 Pi package，套用經 SHA-256 校驗的 Pi Web 補丁並建置正式整合層，再啟動 Paseo。已安裝相同版本時沿用既有建置與初始化對話。建置失敗保留舊版本及原有入口。
+安裝器從目前 checkout 的完整 commit SHA 建立持久化副本，以 lockfile 安裝依賴，註冊 Pi package，套用經 SHA-256 校驗的 Pi Web 補丁並建置正式整合層，再啟動 Paseo。建置使用兩個 Next.js worker。已安裝相同版本時沿用既有建置與初始化對話；更新保留使用者手動停止的狀態。建置失敗保留舊版本及原有入口。
 
 Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只準備下一次啟動的入口並回報 `restartRequired`；請透過原服務管理方式重新啟動。原容器以 PATH 呼叫 `pi-web` 時可使用持久化 launcher；已有 shared-runtime 或 Omnigent 啟動器時沿用其原始呼叫鏈。若回報 `manual-routing-required`，請將現有 launcher 的 Pi Web 終端入口接到回報的 `pendingRestart` 路徑。
 
@@ -102,6 +102,8 @@ npm pack --ignore-scripts
 對話驗收成功以實際 assistant 回覆與新的續聊訊息判定。CLI 存在、模型清單出現或 provider idle 都不能代表可對話。若 Claude 回報 `PROVIDER_QUOTA_EXHAUSTED`，請等待帳號額度恢復或在官方登入入口改用有額度的授權帳號，再重跑驗收。
 
 ## 官方參考
+
+實際安裝、三種 provider 對話及 relay 驗證結果見 [驗證紀錄](docs/validation.md)。
 
 - [Paseo 連線方式](https://paseo.sh/docs/connectivity.md)
 - [Paseo 自架 Web UI](https://paseo.sh/docs/web-ui.md)
