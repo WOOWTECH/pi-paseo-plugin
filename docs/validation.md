@@ -12,7 +12,9 @@
 - 初始化對話在真實 ID 確認後立即存檔；命名、prompt 或 shutdown 失敗仍保留同一對話。
 - 更新採不可變 source/runtime 版本目錄、核心鎖、時限與程序群組清理；發布中斷後可依 hash receipt 恢復。回滾保留已偵測的外部改動。
 
-Pi 5 同一環境連續 5 組、每組 4 個並行 runtime 狀態讀取：0.1.0 P50 2,190 ms、P95 3,225 ms；0.1.1 暖快取 P50 3 ms、P95 4 ms。此數字為 runtime 函式量測，並非外部 HTTP 延遲；冷查詢仍需 provider 探測。快取使用單調時鐘，校時不延長上限 3 秒；停止及程序身分變更每次重新確認。
+Pi 5 同一環境連續 5 組、每組 4 個並行 runtime 狀態讀取：0.1.0 P50 2,190 ms、P95 3,225 ms；最終部署的 0.1.3 暖快取 P50 3 ms、P95 4 ms。此數字為 runtime 函式量測，並非外部 HTTP 延遲；冷查詢仍需 provider 探測。快取使用單調時鐘，校時不延長上限 3 秒；停止及程序身分變更每次重新確認。
+
+從驗收主機連續發出 20 次已登入的正式 HTTPS 狀態請求，P50 750 ms、P95 2,375 ms、最大 2,626 ms；包含入口代理、網路及快取過期後的冷探測。因此此次尚未證明外部端到端 P95 顯著下降。
 
 在 Pi 5 的獨立測試 daemon 使用上述修補 runtime 與現有帳號，完成以下真實驗收；每項有新的續聊回覆，並在最後歸檔測試 agent、停止測試 daemon。
 
@@ -21,6 +23,20 @@ Pi 5 同一環境連續 5 組、每組 4 個並行 runtime 狀態讀取：0.1.0 
 | Claude Code | `claude-opus-5-5` | 通過 | 通過 | 通過 |
 | Codex | `gpt-6.1-sol` | 通過 | 通過 | 通過 |
 | Pi | `openai-codex/gpt-5.6-sol` | 通過 | 通過 | 通過 |
+
+已將 Pi 5 正式部署切換到公開 `v0.1.3`，固定 source commit `415e0aa37b6244a63270c216087325d4a944f8b7`。正式主機建置使用固定 Pi Web 基底，完整 prebuilt 的 65,153 個檔案大小、SHA-256 或 symlink 目標均經核對。原安裝及建置保留供回滾；Pi package 登記已替換為單一新來源。
+
+- 兩個 0.1.3 發行 CI 都通過：[main](https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/38175896202)、[tag](https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/38175896089)。
+- 正式服務重啟及入口防護更新後，再次完成上述三種 provider 的首輪、續聊與歸檔；最後一次驗收時間為 `2026-10-11T21:51:41.897Z`。測試保留對話紀錄，只歸檔此次建立的 agent。
+- 沿用原初始化對話，沒有重複建立；重啟後容器就緒，重啟數為 0。一次觀察記憶體約 1,433 MiB，低於 4 GiB 限制，這不是容量上限測試。
+- 正式設定頁回應 200；桌面 1,440 px 與手機 390 px 沒有水平溢位或 JavaScript 錯誤。
+- 從設定頁生成配對、開啟官方 Paseo 並完成 Connect；透過 relay 讀取本容器工作區。更新入口防護後重新配對仍通過。
+- 在官方 Paseo 實際選取 Claude `Opus 5.5`、Codex `GPT-6.1-Sol`、Pi `GPT-5.6 Sol`。目錄分別為 17/7/9 個模型、5/3/0 個 provider 權限模式；Pi 此版本沒有額外權限模式選單，提供模型思考設定。
+- Claude 模式選单實際顯示 Plan mode、Always ask、Accept file edits、Auto mode、Bypass，並成功選取 Always ask。
+- 官方 Paseo UI 選取 Codex 的 Default permissions 後，送出兩輪訊息並收到正確的記憶回覆；沒有 JavaScript 錯誤，測試 agent 已歸檔。
+- 外部 API 拒絕無效 JSON 400、內容類型 415、無效 action 400、超過 16 KiB 的 body 413，以及不可存取工作目錄 404；回應帶 `private, no-store` 與 `no-referrer`。
+
+外部驗收另發現既有 Nginx 登入代理會清空 Origin：直連插件後端為 403 的異站請求，經代理卻回傳 200。已在代理加入僅針對 Paseo API 的來源檢查，通過 `nginx -t`、重新部署並重跑原始重現；異站 Origin 與瀏覽器 cross-site 現在均回傳 403，且具有上述隱私標頭。原 ConfigMap 留存於私人部署備份；部署方式見 [代理來源防護](proxy-origin.md)。
 
 驗收範圍為 Linux 單一 Pi Web 使用者環境；尚未以長期 soak 或大量並行模型對話建立容量/SLA 承諾。狀態快取和歷史對話驗證不能代替目前 provider 登入、額度及實際連線。外部非合作寫入者的最後檔案 rename race、刻意逃離 session 的程序需由部署管理及 OS/容器隔離處理。
 

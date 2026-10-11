@@ -113,6 +113,10 @@ npm pack --ignore-scripts
 
 安裝器使用程序群組時限與 Linux 核心鎖，建置或發布失敗回滾自身變更。更新期間請避免外部同時編輯 launcher；安裝器保留偵測到的外部改動，檔案系統不提供跨外部寫入者的原子 compare-and-swap。程序群組無法涵蓋刻意逃離 session 的程序，部署隔離依賴容器及其資源限制。
 
+從舊的 Git 安裝來源改用不可變版本路徑時，請將原 Pi package 登記替換成新來源，維持一個有效的 Paseo 登記；不同路徑不會被 Pi 自動視為同一套件。先備份 settings，保留原本的停用狀態及初始化對話。Pi 5 此次升級已完成來源替換，舊來源與建置保留供回滾。
+
+反向代理若會清空 `Origin` 或改寫 `Host`，必須在改寫前驗證來源；也需保留並拒絕瀏覽器的 `Sec-Fetch-Site: cross-site`。Pi 5 的入口代理已對 `/api/plugin-paseo` 加入限定正式網址的檢查。部署範例與驗收方式見 [代理來源防護](docs/proxy-origin.md)。
+
 Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以固定官方 `brace-expansion` 5.0.12 替換其私有受影響依賴，並由回歸測試驗證 API 相容性。請使用發行 lockfile 和安裝流程，避免在使用中的套件目錄執行 `npm install` 或 `npm ci`。
 
 完整驗收紀錄與已知限制見 [驗證紀錄](docs/validation.md)。
