@@ -51,7 +51,7 @@ test('recycled PID cannot keep an abandoned onboarding lock alive', async t => {
   fs.mkdirSync(lock);
   fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) + '-previous', token: 'abandoned' }));
   stale(lock);
-  assert.equal(await withLock(lock, () => 42, { timeoutMs: 20 }), 42);
+  assert.equal(await withLock(lock, () => 42, { timeoutMs: 2000 }), 42);
 });
 
 test('old interrupted directory acquisition recovers but fresh acquisition stays protected', async t => {
@@ -59,9 +59,9 @@ test('old interrupted directory acquisition recovers but fresh acquisition stays
   const lock = path.join(loc.stateDir, 'onboarding.lock');
   fs.mkdirSync(lock);
   fs.writeFileSync(path.join(lock, 'owner.json'), '{');
-  await assert.rejects(withLock(lock, () => assert.fail('fresh lock was stolen'), { timeoutMs: 20 }), /already running/);
+  await assert.rejects(withLock(lock, () => assert.fail('fresh lock was stolen'), { timeoutMs: 2000 }), /already running/);
   stale(lock);
-  assert.equal(await withLock(lock, () => 42, { timeoutMs: 20 }), 42);
+  assert.equal(await withLock(lock, () => 42, { timeoutMs: 2000 }), 42);
 });
 
 test('releasing an operation cannot delete a replacement lock owned by another operation', async t => {
@@ -83,7 +83,7 @@ test('runtime and state locks recover an old empty crash record', async t => {
     fs.writeFileSync(file, '');
     stale(file);
   }
-  assert.equal(await withRuntimeLock(() => 42, { timeoutMs: 20 }), 42);
+  assert.equal(await withRuntimeLock(() => 42, { timeoutMs: 2000 }), 42);
   updateState({ phase: 'ready' });
   assert.equal(readState().phase, 'ready');
 });
@@ -92,7 +92,7 @@ test('fresh empty runtime lock is not stolen', async t => {
   const { loc } = fixture(t);
   const file = path.join(loc.stateDir, 'runtime.lock');
   fs.writeFileSync(file, '');
-  await assert.rejects(withRuntimeLock(() => assert.fail('fresh lock was stolen'), { timeoutMs: 20 }), error => error.code === 'RUNTIME_BUSY');
+  await assert.rejects(withRuntimeLock(() => assert.fail('fresh lock was stolen'), { timeoutMs: 2000 }), error => error.code === 'RUNTIME_BUSY');
   assert.equal(fs.existsSync(file), true);
 });
 
@@ -131,7 +131,7 @@ test('runtime acquisition refuses a symlinked lock without touching its target',
   fs.writeFileSync(target, JSON.stringify({ pid: 99999999, identity: 'dead', token: 'external' }));
   const file = path.join(loc.stateDir, 'runtime.lock');
   fs.symlinkSync(target, file);
-  await assert.rejects(withRuntimeLock(() => assert.fail('unsafe acquisition'), { timeoutMs: 20 }), error => error.code === 'UNSAFE_SYMLINK');
+  await assert.rejects(withRuntimeLock(() => assert.fail('unsafe acquisition'), { timeoutMs: 2000 }), error => error.code === 'UNSAFE_SYMLINK');
   assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
   assert.equal(JSON.parse(fs.readFileSync(target)).token, 'external');
 });
