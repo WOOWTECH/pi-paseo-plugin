@@ -1,6 +1,6 @@
 {
   "name": "@woowtech/pi-paseo",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Pi Agent / Pi Web plugin for automatic Paseo setup, remote pairing, Claude Code, Codex and Pi conversations.",
   "type": "module",
   "license": "MIT",

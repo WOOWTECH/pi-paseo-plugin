@@ -22,7 +22,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.6`。若同一 Pi Web 也安裝 Omnigent `v0.3.12`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。各版本的實測範圍請參考驗證紀錄。
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.7`。若同一 Pi Web 也安裝 Omnigent `v0.3.12`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。各版本的實測範圍請參考驗證紀錄。
 
 或在 Pi Web 使用者的終端直接執行：
 
@@ -175,3 +175,14 @@ Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以
 ### 手機捲動修正（v0.1.5）
 
 Paseo 設定面板與獨立初始化頁各自提供有高度限制的垂直捲動區域，長模型名稱會換行。更新插件後請重建並重新啟動 Pi Web，再重新整理瀏覽器。主機驗證包含手機直向、橫向、桌面，以及展開 60 個模型後的實際觸控／滑鼠捲動回歸測試。
+
+### 同時升級兩個插件
+
+已有舊版 Omnigent／Paseo 的環境，先升級 Omnigent，再安裝對應的 Paseo。固定版本組合不可交叉混用：
+
+```sh
+pi install git:github.com/WOOWTECH/pi-omnigent-plugin@v0.3.12
+pi install git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.7
+```
+
+Paseo 安裝器會交給 Omnigent 建立共用介面；完成後重啟 Pi Web，再到 `/paseo/setup` 配對。收到 `RESTART_REQUIRED` 時，完成重啟後重新整理並驗證三種引擎對話。首次編譯建議預留至少 3 GiB 可用磁碟空間；實測不足 1 GiB 時套件安裝可能因 `ENOSPC` 失敗。官方 Paseo 的主機顯示名稱請在 Paseo App 內修改；插件的「容器備註」僅存於設定頁。

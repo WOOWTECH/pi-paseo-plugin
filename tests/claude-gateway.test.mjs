@@ -235,3 +235,12 @@ test('oversized credential output is rejected without forwarding any token bytes
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, 'OMNIGENT_GATEWAY_AUTH_FAILED\n');
 });
+
+test('host command shims before the real Omnigent venv do not disable Claude after restart',async t=>{
+ const f=fixture(t),shim=path.join(f.root,'host-shims');fs.mkdirSync(shim);
+ fs.writeFileSync(path.join(shim,'omnigent'),'#!/bin/sh\nexit 91\n',{mode:0o700});
+ const gateway=await resolveClaudeGateway(f.loc,{env:{...f.env,PATH:shim+path.delimiter+f.env.PATH},run:f.run});
+ assert.equal(gateway.python,path.join(f.env.PATH,'python'));
+ assert.equal(gateway.models.default,'gateway/large');
+ assert.equal(f.calls.some(c=>c.command===path.join(shim,'omnigent')),false);
+});

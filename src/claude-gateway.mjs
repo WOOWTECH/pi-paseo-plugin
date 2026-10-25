@@ -173,13 +173,16 @@ except Exception as error:
 `;
 
 function interpreter(env) {
-  const omnigent = findExecutable('omnigent', env);
-  if (!omnigent) throw new RuntimeError('OMNIGENT_GATEWAY_UNSUPPORTED');
-  const directory = path.dirname(fs.realpathSync(omnigent));
-  // uv/pip/venv launchers use the interpreter beside the installed entrypoint.
-  const python = findExecutable(path.join(directory, 'python'), env) || findExecutable(path.join(directory, 'python3'), env);
-  if (!python) throw new RuntimeError('OMNIGENT_GATEWAY_UNSUPPORTED');
-  return python;
+  // Pi Web prepends host command shims. A shim has no adjacent interpreter;
+  // inspect later PATH entries for the installed uv/pip/venv entrypoint.
+  for (const component of (env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const omnigent = findExecutable(path.resolve(component, 'omnigent'), env);
+    if (!omnigent) continue;
+    const directory = path.dirname(fs.realpathSync(omnigent));
+    const python = findExecutable(path.join(directory, 'python'), env) || findExecutable(path.join(directory, 'python3'), env);
+    if (python) return python;
+  }
+  throw new RuntimeError('OMNIGENT_GATEWAY_UNSUPPORTED');
 }
 export async function resolveClaudeGateway(loc, { env = process.env, run = runProcess } = {}) {
   const config = path.resolve(env.OMNIGENT_CONFIG_HOME || path.join(loc.home, '.omnigent'), 'config.yaml');
