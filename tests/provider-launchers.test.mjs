@@ -251,7 +251,7 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './chat-result.mjs') return {};
     if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
     if (spec === './runtime-layout.mjs') return runtimeLayout;
-    if (spec === './acceptance-agent.mjs') return {};
+    if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };
     if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => fs.writeFileSync(configFile, JSON.stringify(config)) };

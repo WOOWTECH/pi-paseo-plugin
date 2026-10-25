@@ -11,6 +11,7 @@ import { providerReplyError } from './provider-reply.mjs';
 import { assistantEntries, latestAssistantCursor, chatResult } from './chat-result.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
+import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,RUNTIME_REVISION} from './runtime-layout.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
@@ -265,9 +266,8 @@ export async function acceptance(options = {}) {
       row.model = model; row.modeId = modeId || null;
       await withClient(async client => {
         const marker = `PI_PASEO_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
-        const workspace = await client.createWorkspace({ source: { kind: 'directory', path: cwd } });
-        if (!workspace.workspace?.id) throw new RuntimeError('WORKSPACE_CREATE_FAILED');
-        await usingAcceptanceAgent(client,{ provider, model, modeId, cwd, workspaceId: workspace.workspace.id, title: `Pi Paseo ${provider} connection check`, initialPrompt: `Connection check only. Do not use tools or edit files. Remember ${marker}. Reply with exactly ${marker}.`, labels: { 'pi-paseo-acceptance': 'true' } },row,async agent=>{
+        const workspaceId = await acceptanceWorkspace(client,cwd);
+        await usingAcceptanceAgent(client,{ provider, model, modeId, cwd, workspaceId, title: `Pi Paseo ${provider} connection check`, initialPrompt: `Connection check only. Do not use tools or edit files. Remember ${marker}. Reply with exactly ${marker}.`, labels: { 'pi-paseo-acceptance': 'true' } },row,async agent=>{
         const first = await client.waitForFinish(agent.id, timeoutMs);
         if (first.status !== 'idle') throw new RuntimeError(first.status === 'permission' ? 'PERMISSION_REQUIRED' : first.status === 'timeout' ? 'PROVIDER_TIMEOUT' : 'PROVIDER_TURN_FAILED');
         const firstEntries = await assistantEntries(client, agent.id);
