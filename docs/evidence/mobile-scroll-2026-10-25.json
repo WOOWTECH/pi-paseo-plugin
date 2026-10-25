@@ -1,0 +1,92 @@
+{
+  "checkedAt": "2026-10-25T09:54:39.497041+00:00",
+  "versions": {
+    "paseo": "0.1.5",
+    "combinedUi": "0.3.10"
+  },
+  "rootCause": "Paseo content had no bounded scroll container inside an overflow-hidden application layout.",
+  "redRegression": {
+    "settingsTouchBottomReachable": false,
+    "standaloneSetupTouchBottomReachable": false
+  },
+  "deployedLiveStatusCheck": {
+    "viewport": {
+      "width": 390,
+      "height": 780
+    },
+    "touchSwipes": 8,
+    "bottomReachable": true,
+    "scrollTop": 340,
+    "lastButtonBottom": 755.375,
+    "pageErrors": 0,
+    "paseoStatusMocked": false
+  },
+  "deployedLayoutRegression": {
+    "cases": [
+      {
+        "case": "phone",
+        "touch": true,
+        "bottomControls": true,
+        "expandedCatalog": true,
+        "returnToTop": true,
+        "pageErrors": 0
+      },
+      {
+        "case": "small-phone",
+        "touch": true,
+        "bottomControls": true,
+        "expandedCatalog": true,
+        "returnToTop": true,
+        "pageErrors": 0
+      },
+      {
+        "case": "landscape",
+        "touch": true,
+        "bottomControls": true,
+        "expandedCatalog": true,
+        "returnToTop": true,
+        "pageErrors": 0
+      },
+      {
+        "case": "desktop",
+        "touch": false,
+        "bottomControls": true,
+        "expandedCatalog": true,
+        "returnToTop": true,
+        "pageErrors": 0
+      },
+      {
+        "case": "setup-phone",
+        "touch": true,
+        "bottomControls": true,
+        "expandedCatalog": true,
+        "returnToTop": true,
+        "pageErrors": 0
+      }
+    ],
+    "paseoStatusAndModelCatalogMocked": true,
+    "expandedModels": 60,
+    "scrollIntoViewUsed": false
+  },
+  "standaloneBuildRegressionCases": 4,
+  "preservedFileChecks": {
+    "claude": true,
+    "codex": true,
+    "paseoConfig": true,
+    "pairing": true,
+    "piAuth": true
+  },
+  "tests": {
+    "paseoPlugin": 94,
+    "paseoInstaller": 44,
+    "standaloneHost": 92,
+    "combinedHostTargeted": 67,
+    "omnigentNode": 117,
+    "omnigentPython": 53
+  },
+  "limits": [
+    "Chromium touch emulation; no physical phone hardware acceptance",
+    "Layout catalog tests use synthetic models and do not exercise model inference",
+    "Prior provider conversation acceptance is historical; no new chat claims from this CSS change"
+  ]
+}
