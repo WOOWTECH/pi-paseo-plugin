@@ -418,15 +418,15 @@
         "status": "passed",
         "commit": "d2c27fb625726c4b748543dde15fad799655f20a"
       },
-      "reason": "PROVIDER_BILLING_AND_QUOTA",
+      "reason": "CLAUDE_GATEWAY_BILLING_REQUIRED",
       "infrastructureAcceptance": "passed",
       "latestEvidence": "evidence/pi4-account-recovery-2026-10-25.json",
       "accountRecovery": {
-        "checkedAt": "2026-10-25T17:33:09.945Z",
-        "piNativeOAuth": "passed_sdk_and_official_web_two_turns",
+        "checkedAt": "2026-10-25T18:48:23.508Z",
+        "piNativeOAuth": "passed_sdk_after_codex_account_change",
         "model": "openai-codex/gpt-6.1-sol",
         "claude": "upstream_billing_402",
-        "codex": "official_web_401_device_login_pending",
+        "codex": "passed_new_device_auth_sdk_and_official_web_two_turns",
         "evidence": "evidence/pi4-account-recovery-2026-10-25.json",
         "deployedPaseoPlugin": "0.1.8",
         "postRestartPiWeb": "passed_two_turns_and_reload"

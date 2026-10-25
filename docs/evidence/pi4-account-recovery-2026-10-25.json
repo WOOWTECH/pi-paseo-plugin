@@ -1,6 +1,6 @@
 {
   "target": "pi4",
-  "checkedAt": "2026-10-25T17:53:18.480050+00:00",
+  "checkedAt": "2026-10-25T18:48:23.508Z",
   "allProvidersPassed": false,
   "testedDeploymentVersion": "0.1.8",
   "pi": {
@@ -10,7 +10,7 @@
       "firstReply": true,
       "followup": true,
       "archived": true,
-      "checkedAt": "2026-10-25T17:49:46.732Z"
+      "checkedAt": "2026-10-25T18:48:23.508Z"
     },
     "officialWeb": {
       "modelSelected": true,
@@ -25,19 +25,35 @@
   },
   "claude": {
     "passed": false,
-    "reason": "UPSTREAM_BILLING_HTTP_402"
+    "reason": "UPSTREAM_BILLING_HTTP_402",
+    "checkedAt": "2026-10-25T18:48:23.508Z"
   },
   "codex": {
-    "passed": false,
-    "reason": "PROVIDER_AUTH_REQUIRED",
-    "newLogin": "pending_user_device_authorization",
+    "passed": true,
+    "model": "gpt-6.1-sol",
+    "credentialSource": "user-authorized ChatGPT device OAuth on Pi4",
+    "newLogin": "completed",
     "loginStagedWithoutRemovingLiveAuth": true,
+    "nativeProviderConfigConfirmed": true,
+    "sdk": {
+      "checkedAt": "2026-10-25T18:46:24.045Z",
+      "firstReply": true,
+      "followup": true,
+      "archived": true,
+      "modeId": "auto"
+    },
     "officialWeb": {
-      "passed": false,
-      "reason": "WORKSPACE_ROUTING_DISCOVERY_HTTP_401",
+      "selectedMode": "Default permissions",
+      "selectedModeVisible": true,
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 4012,
+      "secondReplyMs": 2418,
+      "reconnectedAfterReload": true,
+      "pageErrors": [],
+      "passed": true,
       "testAgentArchived": true
     },
-    "nativeProviderConfigConfirmed": true
+    "previousFailure": "WORKSPACE_ROUTING_DISCOVERY_HTTP_401"
   },
   "credentialCopiedFromAnotherEnvironment": false,
   "piDefaultModelChanged": false,
@@ -110,5 +126,36 @@
       "missing": [],
       "persistentBzip2Passed": true
     }
+  },
+  "authRecovery": {
+    "codexAuthReplacedAfterSuccessfulAuthorization": true,
+    "otherSixCriticalFilesPreserved": true,
+    "authFileMode": "0600",
+    "stagedLoginDirectoriesRemaining": 0
+  },
+  "hostStatus": {
+    "checkedAt": "2026-10-25T18:50:10.448Z",
+    "http": 200,
+    "allProvidersVerified": false,
+    "daemonHealthy": true,
+    "onboardingCompleted": true,
+    "providers": [
+      {
+        "id": "claude",
+        "chatVerified": false,
+        "code": "PROVIDER_BILLING_REQUIRED"
+      },
+      {
+        "id": "codex",
+        "chatVerified": true,
+        "code": null
+      },
+      {
+        "id": "pi",
+        "chatVerified": true,
+        "code": null
+      }
+    ],
+    "unarchivedAgents": 0
   }
 }

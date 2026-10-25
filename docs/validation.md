@@ -1,4 +1,4 @@
-> Pi4 最新進展：Pi 沿用原有 OAuth，選取 `openai-codex/gpt-6.1-sol` 已通過官方 Web 的兩輪對話與重新整理測試；Claude／Codex 尚待帳號恢復。詳見 [帳號與模型路由驗證](pi4-account-recovery-2026-10-25.md)。32 GiB 儲存及語音復原見[先前紀錄](pi4-storage-recovery-2026-10-25.md)，下方早期成功紀錄不能代替目前帳號可用性。
+> Pi4 最新進展：Codex 新帳號已通過 SDK 與官方 Web 的兩輪對話、選模及重新整理；Pi 原生 OAuth 也再次通過。僅 Claude gateway 仍有 HTTP 402 帳務阻塞。詳見[帳號與模型路由驗證](pi4-account-recovery-2026-10-25.md)。程式版本為公開 `v0.1.8`。
 
 # 官方登入完成後的三種 provider 驗收（2026-10-25）
 
