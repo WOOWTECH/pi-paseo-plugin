@@ -18,6 +18,8 @@
 
 另在全新隔離瀏覽器從 Pi7 設定頁產生官方 `app.paseo.sh` 配對連結，按 Connect 後讀取插件建立的空驗收工作區。官方 Paseo 介面的模型選單顯示 Claude 17、Codex 8、Pi 53 個模型；選取 Pi `litellm/openrouter/free`，從遠端介面送出首輪與續聊，兩次都取得正確的 `PI7_REMOTE_OK` 回覆。測試 Agent 完成後為 idle，隨即歸檔；瀏覽器無 JavaScript 錯誤。該隔離瀏覽器的配對只用於測試，使用者自己的 Paseo 裝置仍須配對。Paseo 0.11.2 daemon 的即時 relay 欄位未提供布林連線狀態，而插件尚未將這次外部瀏覽器驗證寫入 `relayVerification`，因此 UI 的歷史驗證仍顯示 false；實際遠端對話結果以上述完整兩輪為準。
 
+同日以另一個全新隔離 Chromium 複驗官方 Web Remote。測試程序在記憶體中讀取 Pi7 權限 0600 的私有配對檔，不輸出配對網址；在 `app.paseo.sh` 按 Connect 後看見 Pi7 驗收工作區，從 Web 端開啟 Agent 並看到 Claude 17、Codex 8、Pi 53 個模型。選取 Pi 的 `litellm/openrouter/free`，首輪回覆及同一 Agent 續聊均精確回傳新產生的驗收標記；當次等待約 9.7 秒及 4.4 秒，僅代表這次操作，不作延遲承諾。網頁無 JavaScript 錯誤。測試 Agent `d51f1815-6aca-4e42-aab2-04fe86c9fa02` 經官方 CLI 確認為 idle，並於 `2026-10-25T05:05:29Z` 歸檔；隔離瀏覽器 profile 已刪除。此複驗再次證實 Web Remote 可完成 Pi7 的模型選擇和兩輪對話；使用者自己的瀏覽器配對與 Claude／Codex 登入仍是分開待完成的操作。插件狀態的 `relayVerified` 仍為 false，不能據此否定已觀察到的 Web 對話。
+
 # 0.1.3 商業部署驗證
 
 2026-10-11，以 `471bbbb` 的 0.1.0 為基準，在獨立 checkout 及 Pi 5 實測。
