@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-25T11:27:05.215508+00:00",
+  "paseoPlugin": {
+    "version": "0.1.7",
+    "commit": "9315fef802d37ccc310ac2cb25ab52557335b217",
+    "ci": "https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/40187865769"
+  },
+  "omnigentPlugin": {
+    "version": "0.3.12",
+    "commit": "12d592983a6ea2e6a96c59bf8125d70fb932e73c",
+    "ci": "https://github.com/WOOWTECH/pi-omnigent-plugin/actions/runs/40187880023"
+  },
+  "paseoRuntime": "0.11.2",
+  "tests": {
+    "paseoUnit": 117,
+    "paseoInstallerAndBootstrap": 44,
+    "nativeHost": 92,
+    "combinedUiSelectedSuite": 55,
+    "omnigentJavaScript": 130,
+    "omnigentPython": 54,
+    "typecheck": "passed",
+    "productionBuild": "passed"
+  },
+  "targets": [
+    {
+      "target": "pi2",
+      "status": "passed",
+      "setup": {
+        "target": "pi2",
+        "noteSaved": true,
+        "notePersistedAfterReload": true,
+        "catalogs": [
+          {
+            "provider": "claude",
+            "modelCount": 2,
+            "modes": 5
+          },
+          {
+            "provider": "codex",
+            "modelCount": 7,
+            "modes": 3
+          },
+          {
+            "provider": "pi",
+            "modelCount": 63,
+            "modes": 0
+          }
+        ],
+        "pageErrors": []
+      },
+      "officialWeb": [
+        {
+          "provider": "claude",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "selectedMode": "Always ask",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 6624,
+          "secondReplyMs": 2425,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "codex",
+          "model": "GPT-6.1-Sol",
+          "selectedMode": "Default permissions",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 5111,
+          "secondReplyMs": 3470,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "pi",
+          "model": "litellm/chatgpt/gpt-6.1-sol",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 10590,
+          "secondReplyMs": 2923,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        }
+      ],
+      "scrollLayout": [
+        {
+          "case": "phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "small-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "landscape",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "desktop",
+          "touch": false,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "setup-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        }
+      ],
+      "lifecycle": {
+        "onboardingPreserved": true,
+        "pairingPreserved": true,
+        "buildCacheAbsent": true,
+        "composition": "omnigent+paseo",
+        "expectedSections": [
+          "mcp",
+          "omnigent",
+          "paseo"
+        ],
+        "daemonReachable": true
+      }
+    },
+    {
+      "target": "pi3",
+      "status": "passed",
+      "setup": {
+        "target": "pi3",
+        "noteSaved": true,
+        "notePersistedAfterReload": true,
+        "catalogs": [
+          {
+            "provider": "claude",
+            "modelCount": 2,
+            "modes": 5
+          },
+          {
+            "provider": "codex",
+            "modelCount": 7,
+            "modes": 3
+          },
+          {
+            "provider": "pi",
+            "modelCount": 75,
+            "modes": 0
+          }
+        ],
+        "pageErrors": []
+      },
+      "officialWeb": [
+        {
+          "provider": "claude",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "selectedMode": "Always ask",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 7018,
+          "secondReplyMs": 1911,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "codex",
+          "model": "GPT-6.1-Sol",
+          "selectedMode": "Default permissions",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 5540,
+          "secondReplyMs": 2519,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "pi",
+          "model": "litellm/chatgpt/gpt-6.1-sol",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 12597,
+          "secondReplyMs": 3932,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        }
+      ],
+      "scrollLayout": [
+        {
+          "case": "phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "small-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "landscape",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "desktop",
+          "touch": false,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "setup-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        }
+      ],
+      "lifecycle": {
+        "onboardingPreserved": true,
+        "pairingPreserved": true,
+        "buildCacheAbsent": true,
+        "composition": "omnigent+paseo",
+        "expectedSections": [
+          "mcp",
+          "omnigent",
+          "paseo"
+        ],
+        "daemonReachable": true
+      }
+    },
+    {
+      "target": "pi4",
+      "status": "blocked",
+      "reason": "STORAGE_EXHAUSTED_AND_PENDING_VOLUME_RECOVERY_APPROVAL",
+      "existingServiceAvailable": true,
+      "paseoRuntimeInstalled": false
+    }
+  ],
+  "limits": [
+    "Only the listed models and conversation paths were exercised; this is not exhaustive model or sustained-load validation.",
+    "Mobile scrolling was verified with Chromium touch emulation, not physical phones; long model lists used synthetic data.",
+    "Suite counts can overlap and must not be added as a unique test total; reply timings are individual samples, not load benchmarks.",
+    "Claude Code used the existing Omnigent DeepSeek gateway, not an Anthropic subscription.",
+    "Relay proof is historical browser evidence; the daemon does not expose a confirmed current relay connection state.",
+    "Pi4 storage recovery requires explicit approval; it is not counted as installed or accepted."
+  ]
+}
