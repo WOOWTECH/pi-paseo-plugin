@@ -61,6 +61,12 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
 
+### 選用 Omnigent gateway 作為 Codex 模型來源
+
+有 OpenAI Responses 相容 Omnigent 路由的部署，可參考[通用封裝範例](examples/omnigent-codex-gateway.py)，用 Paseo [自訂 provider](https://paseo.sh/docs/custom-providers) 的 `extends: "codex"`、`command`、`env` 和 `models` 建立獨立選項。範例需要 Python YAML 套件，以及 `PI_PASEO_OMNIGENT_CONFIG`、`PI_PASEO_OMNIGENT_PROVIDER`、`PI_PASEO_CODEX_BINARY`；可用 `PI_PASEO_CODEX_HOME` 指定私有 Codex home。範例每次啟動從受保護的 Omnigent 設定執行既有 `pi auth print-api-key` 命令，把憑證放在 Codex 子程序環境，專用 `config.toml` 只寫入路由和模型。部署者須保護設定檔與工作目錄，並在變更後執行 `paseo reload`。
+
+本插件的標準安裝不會自動接管既有 gateway，也不會更改內建 `codex` provider 的登入。自訂路由的可用性應以該路由的實際對話驗收；它不代表 OpenAI 官方帳號已登入。Codex [自訂模型提供者設定](https://learn.chatgpt.com/docs/config-file/config-advanced) 說明協定和憑證環境變數。
+
 ## Pi 操作
 
 - `/paseo`：狀態及設定入口。

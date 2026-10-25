@@ -59,6 +59,7 @@
     "host/adapter-meta.json",
     "scripts",
     "docs/validation.md",
+    "examples",
     "README.md",
     "LICENSE",
     "runtime/package.json",
