@@ -100,16 +100,14 @@ async function writeConfig(port, launchers) {
   let config = {};
   if (fs.existsSync(file)) { try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); } }
   const providers = configureProviders(config.agents?.providers, launchers, loc, inheritedEnv());
-  let name=config.daemon?.name;
-  try {
-    const preferences=JSON.parse(fs.readFileSync(path.join(loc.stateDir,'preferences.json'),'utf8'));
-    if(typeof preferences.name!=='string'||preferences.name.length>100||/[\x00-\x1f]/.test(preferences.name))throw new RuntimeError('CONFIG_INVALID');
-    name=preferences.name;
-  } catch(error) {if(error.code!=='ENOENT')throw new RuntimeError('CONFIG_INVALID');}
+  // Paseo 0.11.2 rejects daemon.name. Display preferences belong to the
+  // host plugin; remove any legacy injected name while retaining other fields.
+  const daemon = { ...config.daemon };
+  delete daemon.name;
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
   config = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
-    daemon: { ...config.daemon, ...(name?{name}:{}), listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: { ...config.daemon?.mcp, enabled: true } },
+    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: { ...config.daemon?.mcp, enabled: true } },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },

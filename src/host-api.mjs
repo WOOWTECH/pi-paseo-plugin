@@ -46,11 +46,13 @@ export async function pair() {
 export async function saveConfig(input) {
   if (!input||typeof input!=='object'||Array.isArray(input)) throw new Error('Invalid settings');
   if (Object.keys(input).some(k=>!['name'].includes(k))) throw new Error('Unsupported setting');
-  const name=typeof input.name==='string'?input.name.trim():'';
-  if (name.length>100||/[\x00-\x1f]/.test(name)) throw new Error('Invalid name');
+  if (input.name!==undefined&&typeof input.name!=='string') throw new Error('Invalid name');
+  const name=(input.name||'').trim();
+  if (name.length>100||/[\x00-\x1f\x7f]/.test(name)) throw new Error('Invalid name');
   writeRecord(path.join(runtime.locations().stateDir,'preferences.json'),{name:name||'Pi Agent',connection:'relay'});
-  const snapshot=await runtime.status();
-  if(snapshot.installed&&snapshot.enabled&&snapshot.daemon.running&&!snapshot.diagnosticCode)await runtime.activate();
+  // This is a plugin display label. Paseo 0.11.2 has no daemon.name field
+  // or rename RPC; its Web app stores renamed host labels on the client.
+  // Saving a label must not depend on provider/daemon activation.
   return {saved:true};
 }
 export async function completeOnboarding() {

@@ -61,6 +61,10 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
 
+### 顯示名稱
+
+設定頁的名稱是 Pi Web 插件的顯示標籤，可使用大小寫、中文及空白，長度上限 100 字元；空白名稱會使用 `Pi Agent`。儲存標籤不會啟停服務或重新驗證帳號。Paseo 0.11.2 的 daemon 設定不支援 `name`／`displayName`：官方 Web 初始名稱來自容器 hostname，改名則儲存在 Paseo 客戶端。需要變更官方 Web 顯示名稱時，請在該介面重新命名 host；插件不宣稱已同步此名稱。既有插件名稱偏好會保留，重新啟動會移除過去錯誤注入的 `daemon.name`，避免 `CONFIG_INVALID`。
+
 ### 沿用 Omnigent 選定的 Claude gateway
 
 若同一使用者的 `~/.omnigent/config.yaml`（或 `OMNIGENT_CONFIG_HOME/config.yaml`）已將 Anthropic 預設 provider 設為 `kind: gateway`，插件啟動／繼續初始化時會沿用該選擇。這項整合需要 PATH 中可用的 Omnigent 與其 Python 環境，以及 `anthropic.auth_command`、`anthropic.models.default`；模型清單只列出該設定宣告的實際模型，會展開 tier 別名並合併重複項目。它沿用既有 gateway 授權，不表示 Claude 官方訂閱已登入。
