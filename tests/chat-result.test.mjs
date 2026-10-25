@@ -17,6 +17,12 @@ test('a follow-up in a full 50-message timeline window returns the new reply', a
   assert.equal(result.reply, 'remembered marker');
 });
 
+test('a Claude gateway 402 assistant reply is never reported as a completed chat', async () => {
+  const billing = await chatResult(client([message(1, 'API Error: 402 {"error":{"message":"upstream provider declined request for billing reason"}}')]), 'agent', 'claude', 'model', 1000);
+  assert.equal(billing.status, 'error');
+  assert.equal(billing.code, 'PROVIDER_BILLING_REQUIRED');
+});
+
 test('idle without a new assistant message cannot return the previous reply as success', async () => {
   const entries = [message(10, 'stale reply')];
   const result = await chatResult(client(entries), 'agent', 'codex', 'model', 1000, latestAssistantCursor(entries));

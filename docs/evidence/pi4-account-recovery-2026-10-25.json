@@ -1,0 +1,32 @@
+{
+  "target": "pi4",
+  "checkedAt": "2026-10-25T17:33:09.945Z",
+  "allProvidersPassed": false,
+  "testedDeploymentVersion": "0.1.7",
+  "pi": {
+    "model": "openai-codex/gpt-6.1-sol",
+    "credentialSource": "existing Pi4 OAuth",
+    "sdk": { "firstReply": true, "followup": true, "archived": true },
+    "officialWeb": {
+      "modelSelected": true,
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 8056,
+      "secondReplyMs": 2405,
+      "reconnectedAfterReload": true,
+      "pageErrors": [],
+      "archived": true
+    }
+  },
+  "claude": { "passed": false, "reason": "UPSTREAM_BILLING_HTTP_402" },
+  "codex": { "passed": false, "reason": "PROVIDER_TURN_FAILED", "newLogin": "pending_user_device_authorization" },
+  "credentialCopiedFromAnotherEnvironment": false,
+  "piDefaultModelChanged": false,
+  "regressionFix": {
+    "version": "0.1.8",
+    "billingReplyCannotCompleteChat": true,
+    "localTestsPassed": 119,
+    "typecheck": true,
+    "packageCheck": true,
+    "deployedToPi4": false
+  }
+}

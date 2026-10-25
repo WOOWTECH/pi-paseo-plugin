@@ -20,6 +20,8 @@ PVC 已申請 32 GiB，但 Longhorn 1.10.2 引擎與檔案系統仍停在 20 GiB
 
 ## 最新模型驗證與限制
 
+後續 `17:33 UTC` 的驗證已確認 Pi 原生 OAuth 路由可以對話，並完成官方 Web 複驗；詳見[帳號恢復進展](pi4-account-recovery-2026-10-25.md)。以下為儲存修復完成時的 gateway／舊帳號測試結果，不能套用到另一個授權來源。
+
 官方 Paseo Web 的兩個既有 Claude gateway 模型均回 HTTP 402 帳務拒絕；Codex 的原授權回使用額度已用盡；Pi 的既有 ChatGPT gateway 模型回 HTTP 429 `usage_limit_reached`。先前成功的兩輪對話屬於當時驗證，不能代表這次仍然通過。最新驗證狀態已更新，失敗的測試 agent 歸檔保留診斷紀錄。
 
 另外透過 SDK 測試 Pi 既有的 `litellm/qwen3-4b-cluster1`，首輪回覆亦未通過，回報 `PROVIDER_TURN_FAILED`，測試 agent 已歸檔。未將此錯誤推定為帳務問題，也未將目錄中可選取的其他模型視為已通過。
