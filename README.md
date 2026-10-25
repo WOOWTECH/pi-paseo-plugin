@@ -61,11 +61,19 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
 
+### 沿用 Omnigent 選定的 Claude gateway
+
+若同一使用者的 `~/.omnigent/config.yaml`（或 `OMNIGENT_CONFIG_HOME/config.yaml`）已將 Anthropic 預設 provider 設為 `kind: gateway`，插件啟動／繼續初始化時會沿用該選擇。這項整合需要 PATH 中可用的 Omnigent 與其 Python 環境，以及 `anthropic.auth_command`、`anthropic.models.default`；模型清單只列出該設定宣告的實際模型，會展開 tier 別名並合併重複項目。它沿用既有 gateway 授權，不表示 Claude 官方訂閱已登入。
+
+驗證命令由 Claude 的 invocation-local `apiKeyHelper` 按需執行，最長快取 15 分鐘；插件不把命令或產生的憑證寫入 Paseo 設定、啟動檔或日誌，也不修改 Omnigent 設定與官方登入檔。插件私有目錄內的 `0700` 啟動檔只存路徑與設定指紋，讓 Paseo 的 Claude SDK 能用單一執行檔啟動。驗證命令的輸出上限為 4 KB、逾時為 20 秒，失敗只回報固定錯誤碼。
+
+在 Omnigent 切回官方 Claude provider 後，按 Paseo 的「啟動／繼續初始化」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
+
 ### 選用 Omnigent gateway 作為 Codex 模型來源
 
 有 OpenAI Responses 相容 Omnigent 路由的部署，可參考[通用封裝範例](examples/omnigent-codex-gateway.py)，用 Paseo [自訂 provider](https://paseo.sh/docs/custom-providers) 的 `extends: "codex"`、`command`、`env` 和 `models` 建立獨立選項。範例需要 Python YAML 套件，以及 `PI_PASEO_OMNIGENT_CONFIG`、`PI_PASEO_OMNIGENT_PROVIDER`、`PI_PASEO_CODEX_BINARY`；可用 `PI_PASEO_CODEX_HOME` 指定私有 Codex home。範例每次啟動從受保護的 Omnigent 設定執行既有 `pi auth print-api-key` 命令，把憑證放在 Codex 子程序環境，專用 `config.toml` 只寫入路由和模型。部署者須保護設定檔與工作目錄，並在變更後執行 `paseo --home /path/to/paseo-home daemon reload`，指定這個插件管理的 daemon home。
 
-本插件的標準安裝不會自動接管既有 gateway，也不會更改內建 `codex` provider 的登入。自訂路由的可用性應以該路由的實際對話驗收；它不代表 OpenAI 官方帳號已登入。Codex [自訂模型提供者設定](https://learn.chatgpt.com/docs/config-file/config-advanced) 說明協定和憑證環境變數。
+Codex 的 gateway 仍須另外設定；標準安裝不會更改內建 `codex` provider 的登入。自訂路由的可用性應以該路由的實際對話驗收；它不代表 OpenAI 官方帳號已登入。Codex [自訂模型提供者設定](https://learn.chatgpt.com/docs/config-file/config-advanced) 說明協定和憑證環境變數。
 
 ### 官方 Codex 與 gateway 的設定隔離
 

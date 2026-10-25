@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { findExecutable, runProcess } from './process.mjs';
 import { privateDirectory } from './state.mjs';
+import { resolveClaudeGateway, configureClaudeGateway } from './claude-gateway.mjs';
 
 // Pi1-validated pins, checked against https://registry.npmjs.org before shipping.
 export const PROVIDER_PACKAGES = Object.freeze({
@@ -58,6 +59,12 @@ export async function resolveProviderLaunchers(loc, { installMissing = false, en
       result[provider].startup = 'PROVIDER_INSTALL_FAILED';
     }
   }
+  if (result.claude.startup === 'ready') {
+    try {
+      const gateway = await resolveClaudeGateway(loc, { env: providerEnv, run });
+      if (gateway) result.claude.gateway = gateway;
+    } catch (error) { result.claude.startup = error.code; }
+  }
   return result;
 }
 export function configureProviders(previous, launchers, loc, env = process.env) {
@@ -66,5 +73,6 @@ export function configureProviders(previous, launchers, loc, env = process.env) 
     const launcher = launchers[provider];
     providers[provider] = { ...providers[provider], enabled: launcher.startup === 'ready', command: launcher.command ? [path.resolve(launcher.command)] : undefined, env: { ...providers[provider]?.env, HOME: loc.home, PI_CODING_AGENT_DIR: loc.agentDir, PI_AGENT_DATA_DIR: env.PI_AGENT_DATA_DIR || loc.agentDir } };
   }
+  providers.claude = configureClaudeGateway(providers.claude, launchers.claude.gateway, launchers.claude.command, loc);
   return providers;
 }
