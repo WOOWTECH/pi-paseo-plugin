@@ -22,7 +22,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.4`。若同一 Pi Web 也安裝 Omnigent `v0.3.3`，兩個安裝器共用一份整合建置；重新啟動後，全域設定順序為 **MCP → Omnigent → Paseo**。
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.4`。若同一 Pi Web 也安裝 Omnigent `v0.3.5`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。
 
 或在 Pi Web 使用者的終端直接執行：
 

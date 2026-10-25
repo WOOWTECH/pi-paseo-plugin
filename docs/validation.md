@@ -1,3 +1,15 @@
+# Pi7 併裝驗收：Paseo 0.1.4、Omnigent 0.3.5
+
+2026-10-25 在 Pi7 持久化容器安裝兩個公開 Git tag，執行 `pi-omnigent install-ui` 建置共用 Pi Web 0.10.0 介面，重啟工作負載。當次 Pod 就緒且重啟數為 0；Paseo daemon 由插件管理並可連線。初始化對話「Paseo 連線初始化」只建立一筆，重啟後仍存在。兩個 repo 的 GitHub `private` 欄位均為 `false`。
+
+- [Paseo v0.1.4 CI](https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/40158799457) 通過；[Omnigent v0.3.5 CI](https://github.com/WOOWTECH/pi-omnigent-plugin/actions/runs/40160314218) 的 Node 22.19、Node 22.23、原生 UI 與共用 UI 工作均通過。
+- 桌面版設定列按 **MCP → Omnigent → Paseo** 顯示；手機 390 px 選單含 `Paseo`，文件沒有水平溢出，兩者均無瀏覽器 JavaScript 錯誤。修正了 v0.3.4 實際顯示 `settings.paseo` 的標籤問題。
+- 設定面板產生 `https://app.paseo.sh` 官方配對連結；儲存配對資訊的私人檔案權限為 0600。公開狀態 API 回傳 `private, no-store`，沒有輸出配對連結。Pi Web 外層未授權請求回傳 401，內層跨站寫入回傳 403。
+- 固定 Paseo 0.11.2 的動態模型目錄當下列出 Claude 17、Codex 8、Pi 53 個模型，模式分別為 5、3、0。這些數量會隨上游及帳號狀態變動。
+- Pi provider 使用 `litellm/openrouter/free` 完成首輪與續聊兩次實際回覆，驗收 agent 已歸檔；最後一次檢查為 `2026-10-25T04:11:35Z`。
+- Pi7 的 Claude Code 與 Codex 官方 CLI 均顯示未登入。實際兩輪驗收分別回報 `PROVIDER_AUTH_REQUIRED`、`PROVIDER_TURN_FAILED`，因此這兩個 provider **尚未通過 Pi7 對話驗收**。Omnigent server 此容器亦尚未登入。
+- 官方 relay 的配對連結已生成，但尚未在另一端完成 Connect；`relayVerified` 仍為 false。完成官方登入與 Connect 後，需重跑三個 provider 的首輪、續聊、模型選擇及遠端連線驗收，才能將 Pi7 標記為完整上線。
+
 # 0.1.3 商業部署驗證
 
 2026-10-11，以 `471bbbb` 的 0.1.0 為基準，在獨立 checkout 及 Pi 5 實測。
