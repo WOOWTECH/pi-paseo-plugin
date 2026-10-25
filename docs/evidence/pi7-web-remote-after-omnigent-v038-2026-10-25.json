@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "date": "2026-10-25",
-  "deployment": "paas-ws-504a2b17/svc-08cf5049-pi-agent",
+  "deployment": "Pi7 production Pi Agent workload",
   "paseoPluginVersion": "0.1.4",
   "omnigentPluginVersion": "0.3.8",
   "paseoDaemonVersion": "0.11.2",
