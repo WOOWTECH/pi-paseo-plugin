@@ -1,3 +1,11 @@
+# Pi7 升至 Omnigent 0.3.7 後的 Paseo Web Remote 複驗（2026-10-25）
+
+Pi7 重新啟動後，Paseo 0.1.4 的 0.11.2 daemon 仍由插件管理、可達且啟用官方 relay；Pi Web 原生設定列維持 **MCP → Omnigent → Paseo**，兩個分頁都在實際瀏覽器開啟，原生 API 均回 200，沒有 JavaScript 錯誤。`relayConnected` 仍無布林值，插件的 `relayVerified` 仍為 false；這兩個欄位不能替代遠端實際對話證據。
+
+直接透過 daemon 指定 Pi `litellm/deepseek/deepseek-v4.1-flash`，首輪與續聊都回傳正確標記，測試 agent 已歸檔。另一個全新隔離瀏覽器只在記憶體中讀取私有配對檔，到官方 `app.paseo.sh` 按 Connect，從 Web Remote 選同一固定模型；兩輪對話都正確回傳標記，約 19.2 秒及 1.9 秒，網頁無 JavaScript 錯誤。當次兩筆可辨識的瀏覽器驗收代理均已歸檔，活躍測試代理為 0，隔離 profile 已刪除。這是單次量測，不是延遲保證；使用者自己的裝置仍需在受保護設定頁完成配對。[非機密複驗回條](evidence/pi7-web-remote-after-omnigent-v037-2026-10-25.json) 不含配對網址或對話正文。
+
+同次檢查也發現預設 `litellm/openrouter/free` 在隔離瀏覽器的行為不穩定：一次未在 120 秒內得到指定首輪回覆，另一次首輪正確、續聊雖有回覆卻未記住上一輪標記。直接 daemon 測試此模型曾通過，所以目前不能判定是模型路由、Web Remote 或短暫上游狀態造成。商業操作應從實際驗證成功的模型中明確選取，並持續監測。Pi7 的 Paseo Claude／Codex 仍分別回報 `PROVIDER_AUTH_REQUIRED`／`PROVIDER_TURN_FAILED`；Omnigent 對這兩個原生引擎的成功回條不能代替 Paseo CLI 的官方登入與逐一對話驗收。
+
 # Pi7 併裝驗收：Paseo 0.1.4、Omnigent 0.3.5 → 0.3.6
 
 2026-10-25 在 Pi7 持久化容器安裝兩個公開 Git tag，執行 `pi-omnigent install-ui` 建置共用 Pi Web 0.10.0 介面，重啟工作負載。當次 Pod 就緒且重啟數為 0；Paseo daemon 由插件管理並可連線。初始化對話「Paseo 連線初始化」只建立一筆，重啟後仍存在。兩個 repo 的 GitHub `private` 欄位均為 `false`。

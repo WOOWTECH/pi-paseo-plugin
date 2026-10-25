@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-25",
+  "deployment": "paas-ws-504a2b17/svc-08cf5049-pi-agent",
+  "paseoPluginVersion": "0.1.4",
+  "omnigentPluginVersion": "0.3.7",
+  "paseoDaemonVersion": "0.11.2",
+  "daemon": {"running": true, "reachable": true, "relayEnabled": true, "relayConnected": null, "relayVerified": false},
+  "piProviderModelsListed": 53,
+  "nativePiWeb": {
+    "settingsSections": ["mcp", "omnigent", "paseo"],
+    "omnigentApiStatus": 200,
+    "paseoApiStatus": 200,
+    "panelsOpened": ["omnigent", "paseo"],
+    "browserPageErrors": 0
+  },
+  "directPiAcceptance": {
+    "checkedAt": "2026-10-25T06:42:07.429Z",
+    "model": "litellm/deepseek/deepseek-v4.1-flash",
+    "firstReplyMatched": true,
+    "followupMatched": true,
+    "testAgentArchived": true
+  },
+  "officialWebRemote": {
+    "host": "app.paseo.sh",
+    "isolatedBrowserProfileDeleted": true,
+    "pairingFileKeptPrivate": true,
+    "provider": "pi",
+    "model": "litellm/deepseek/deepseek-v4.1-flash",
+    "firstReplyMatched": true,
+    "followupMatched": true,
+    "firstReplyMs": 19195,
+    "secondReplyMs": 1902,
+    "browserPageErrors": 0,
+    "testAgentsArchived": 2,
+    "activeTestAgentsRemaining": 0
+  },
+  "defaultFreeModelObservation": {
+    "model": "litellm/openrouter/free",
+    "firstAttempt": "No exact first reply within 120 seconds",
+    "secondAttempt": "First reply matched; followup received but did not remember the marker",
+    "cause": "undetermined"
+  },
+  "remainingProviders": {
+    "claude": "PROVIDER_AUTH_REQUIRED",
+    "codex": "PROVIDER_TURN_FAILED"
+  },
+  "limitation": "The successful isolated browser pairing does not pair the user's own device. Relay status has no boolean connected signal, and plugin relayVerified remains false."
+}
