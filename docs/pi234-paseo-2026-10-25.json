@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-25T11:27:05.215508+00:00",
+  "checkedAt": "2026-10-25T15:45:42.530Z",
   "paseoPlugin": {
     "version": "0.1.7",
     "commit": "9315fef802d37ccc310ac2cb25ab52557335b217",
@@ -139,7 +139,8 @@
           "paseo"
         ],
         "daemonReachable": true
-      }
+      },
+      "checkedAt": "2026-10-25T11:27:05.215508+00:00"
     },
     {
       "target": "pi3",
@@ -257,14 +258,159 @@
           "paseo"
         ],
         "daemonReachable": true
-      }
+      },
+      "checkedAt": "2026-10-25T11:27:05.215508+00:00"
     },
     {
       "target": "pi4",
-      "status": "blocked",
-      "reason": "STORAGE_EXHAUSTED_AND_PENDING_VOLUME_RECOVERY_APPROVAL",
-      "existingServiceAvailable": true,
-      "paseoRuntimeInstalled": false
+      "status": "passed",
+      "acceptanceScope": "Listed text-chat paths and UI checks only",
+      "commercialDeploymentReady": false,
+      "checkedAt": "2026-10-25T15:45:42.530Z",
+      "setup": {
+        "target": "pi4",
+        "noteSaved": true,
+        "notePersistedAfterReload": true,
+        "catalogs": [
+          {
+            "provider": "claude",
+            "modelCount": 2,
+            "modes": 5
+          },
+          {
+            "provider": "codex",
+            "modelCount": 7,
+            "modes": 3
+          },
+          {
+            "provider": "pi",
+            "modelCount": 72,
+            "modes": 0
+          }
+        ],
+        "pageErrors": []
+      },
+      "officialWeb": [
+        {
+          "provider": "claude",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "selectedMode": "Always ask",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 6566,
+          "secondReplyMs": 6520,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "codex",
+          "model": "GPT-6.1-Sol",
+          "selectedMode": "Default permissions",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 5031,
+          "secondReplyMs": 3987,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        },
+        {
+          "provider": "pi",
+          "model": "litellm/chatgpt/gpt-6.1-sol",
+          "selectedModeVisible": true,
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 11684,
+          "secondReplyMs": 2391,
+          "reconnectedAfterReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true
+        }
+      ],
+      "scrollLayout": [
+        {
+          "case": "phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "small-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "landscape",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "desktop",
+          "touch": false,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        },
+        {
+          "case": "setup-phone",
+          "touch": true,
+          "bottomControls": true,
+          "expandedCatalog": true,
+          "returnToTop": true,
+          "pageErrors": 0
+        }
+      ],
+      "lifecycle": {
+        "onboardingPreserved": true,
+        "omnigentOnboardingPreserved": true,
+        "pairingPreserved": true,
+        "existingAuthAndModelFilesPreserved": true,
+        "buildCacheAbsent": true,
+        "composition": "omnigent+paseo",
+        "expectedSections": [
+          "mcp",
+          "omnigent",
+          "paseo"
+        ],
+        "daemonReachable": true,
+        "onboardingCompleted": true,
+        "relayVerified": true
+      },
+      "restartReconnect": {
+        "checkedAt": "2026-10-25T15:43:23.242Z",
+        "officialHost": "app.paseo.sh",
+        "reconnectedAfterPodRestart": true,
+        "reconnectedAfterPageReload": true,
+        "pageErrors": []
+      },
+      "storage": {
+        "approvedCleanupItems": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "approvedCleanupFreedBytes": 1868562432,
+        "retainedFinalVideosVerified": 3,
+        "additionalInstallationSpeechCacheFreedBytes": 771723264,
+        "localSpeechDisabled": true,
+        "localSpeechDownloadsAbsent": true,
+        "capacityBytes": 20957446144,
+        "availableBytes": 782684160,
+        "volumeExpansionResolved": false,
+        "crossNodeAttachResolved": false,
+        "temporaryWorkloadNodePin": true,
+        "failoverVerified": false
+      }
     }
   ],
   "limits": [
@@ -273,6 +419,6 @@
     "Suite counts can overlap and must not be added as a unique test total; reply timings are individual samples, not load benchmarks.",
     "Claude Code used the existing Omnigent DeepSeek gateway, not an Anthropic subscription.",
     "Relay proof is historical browser evidence; the daemon does not expose a confirmed current relay connection state.",
-    "Pi4 storage recovery requires explicit approval; it is not counted as installed or accepted."
+    "Pi4 text-chat acceptance passed after approved cleanup; free disk remains below 1 GiB. Local dictation and voice mode are disabled. Volume expansion and cross-node attachment remain unresolved; the workload is temporarily pinned to the already attached node. This is not commercial capacity or failover acceptance."
   ]
 }
