@@ -8,13 +8,15 @@
 - 固定 Paseo 0.11.2 的動態模型目錄當下列出 Claude 17、Codex 8、Pi 53 個模型，模式分別為 5、3、0。這些數量會隨上游及帳號狀態變動。
 - Pi provider 使用 `litellm/openrouter/free` 完成首輪與續聊兩次實際回覆，驗收 agent 已歸檔；最後一次檢查為 `2026-10-25T04:11:35Z`。
 - Pi7 的 Claude Code 與 Codex 官方 CLI 均顯示未登入。實際兩輪驗收分別回報 `PROVIDER_AUTH_REQUIRED`、`PROVIDER_TURN_FAILED`，因此這兩個 provider **尚未通過 Pi7 對話驗收**。Omnigent server 此容器亦尚未登入。
-- 官方 relay 的配對連結已生成，但尚未在另一端完成 Connect；`relayVerified` 仍為 false。完成官方登入與 Connect 後，需重跑三個 provider 的首輪、續聊、模型選擇及遠端連線驗收，才能將 Pi7 標記為完整上線。
+- 此階段官方 relay 的配對連結已生成，但尚未在另一端完成 Connect；`relayVerified` 仍為 false。後續遠端實測見下方；Claude／Codex 仍需各自完成官方登入與對話驗收，才能將 Pi7 標記為三種 provider 完整上線。
 
 同日將 Omnigent 升至公開 `v0.3.6`，其 [發行 CI](https://github.com/WOOWTECH/pi-omnigent-plugin/actions/runs/40161080957) 與 [main CI](https://github.com/WOOWTECH/pi-omnigent-plugin/actions/runs/40161080793) 均通過。Pi7 共用介面 receipt 為 `omnigent+paseo`，包含 `mcp`、`omnigent`、`paseo` 三個設定區，仍以固定 Pi Web commit 建置。新 Pod 就緒、重啟數 0，初始化對話與私人配對檔案均留存，Paseo daemon 可達。
 
 - 桌面與 390 px 手機重新驗證設定列、Paseo 分頁及無 JavaScript 錯誤；手機無水平溢出。
 - 分別從原生設定面板按「讀取 Claude Code／Codex／Pi 模型」，三次 API 均回傳 200 並更新介面；模型數為 17／8／53，模式數為 5／3／0。
-- 新 Pod 的 Pi provider 再次完成兩輪實際對話與測試 agent 歸檔，時間為 `2026-10-25T04:18:18Z`。Claude／Codex 登入與 Paseo Remote Connect 仍待完成；relay 即時連線未知，歷史驗證為 false。
+- 新 Pod 的 Pi provider 再次完成兩輪實際對話與測試 agent 歸檔，時間為 `2026-10-25T04:18:18Z`。Claude／Codex 登入仍待完成；relay 即時連線欄位未知，插件歷史驗證為 false。
+
+另在全新隔離瀏覽器從 Pi7 設定頁產生官方 `app.paseo.sh` 配對連結，按 Connect 後讀取插件建立的空驗收工作區。官方 Paseo 介面的模型選單顯示 Claude 17、Codex 8、Pi 53 個模型；選取 Pi `litellm/openrouter/free`，從遠端介面送出首輪與續聊，兩次都取得正確的 `PI7_REMOTE_OK` 回覆。測試 Agent 完成後為 idle，隨即歸檔；瀏覽器無 JavaScript 錯誤。該隔離瀏覽器的配對只用於測試，使用者自己的 Paseo 裝置仍須配對。Paseo 0.11.2 daemon 的即時 relay 欄位未提供布林連線狀態，而插件尚未將這次外部瀏覽器驗證寫入 `relayVerification`，因此 UI 的歷史驗證仍顯示 false；實際遠端對話結果以上述完整兩輪為準。
 
 # 0.1.3 商業部署驗證
 
