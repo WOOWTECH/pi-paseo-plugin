@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-25",
+  "deployment": "paas-ws-504a2b17/svc-08cf5049-pi-agent",
+  "paseoPluginVersion": "0.1.4",
+  "omnigentPluginVersion": "0.3.8",
+  "paseoDaemonVersion": "0.11.2",
+  "pod": {"readyContainers": 2, "totalContainers": 2, "containerRestarts": [0, 0]},
+  "daemon": {"running": true, "reachable": true, "relayEnabled": true, "relayConnected": null, "relayVerified": false},
+  "nativePiWeb": {
+    "settingsSections": ["mcp", "omnigent", "paseo"],
+    "homeHttpStatus": 200,
+    "omnigentApiStatus": 200,
+    "paseoApiStatus": 200,
+    "panelsOpened": ["omnigent", "paseo"],
+    "browserPageErrors": 0
+  },
+  "officialWebRemote": {
+    "host": "app.paseo.sh",
+    "provider": "pi",
+    "model": "litellm/deepseek/deepseek-v4.1-flash",
+    "firstReplyMatched": true,
+    "followupMatched": true,
+    "firstReplyMs": 10149,
+    "secondReplyMs": 1399,
+    "browserPageErrors": 0,
+    "testAgentCreatedAt": "2026-10-25T07:04:25.896Z",
+    "testAgentArchived": true,
+    "isolatedBrowserProfileDeleted": true,
+    "pairingFileKeptPrivate": true
+  },
+  "remaining": "Claude and Codex are not yet verified through Paseo's own provider CLIs; the user's own device still needs private pairing."
+}
