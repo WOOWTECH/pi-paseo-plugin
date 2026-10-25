@@ -63,9 +63,29 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 ### 選用 Omnigent gateway 作為 Codex 模型來源
 
-有 OpenAI Responses 相容 Omnigent 路由的部署，可參考[通用封裝範例](examples/omnigent-codex-gateway.py)，用 Paseo [自訂 provider](https://paseo.sh/docs/custom-providers) 的 `extends: "codex"`、`command`、`env` 和 `models` 建立獨立選項。範例需要 Python YAML 套件，以及 `PI_PASEO_OMNIGENT_CONFIG`、`PI_PASEO_OMNIGENT_PROVIDER`、`PI_PASEO_CODEX_BINARY`；可用 `PI_PASEO_CODEX_HOME` 指定私有 Codex home。範例每次啟動從受保護的 Omnigent 設定執行既有 `pi auth print-api-key` 命令，把憑證放在 Codex 子程序環境，專用 `config.toml` 只寫入路由和模型。部署者須保護設定檔與工作目錄，並在變更後執行 `paseo reload`。
+有 OpenAI Responses 相容 Omnigent 路由的部署，可參考[通用封裝範例](examples/omnigent-codex-gateway.py)，用 Paseo [自訂 provider](https://paseo.sh/docs/custom-providers) 的 `extends: "codex"`、`command`、`env` 和 `models` 建立獨立選項。範例需要 Python YAML 套件，以及 `PI_PASEO_OMNIGENT_CONFIG`、`PI_PASEO_OMNIGENT_PROVIDER`、`PI_PASEO_CODEX_BINARY`；可用 `PI_PASEO_CODEX_HOME` 指定私有 Codex home。範例每次啟動從受保護的 Omnigent 設定執行既有 `pi auth print-api-key` 命令，把憑證放在 Codex 子程序環境，專用 `config.toml` 只寫入路由和模型。部署者須保護設定檔與工作目錄，並在變更後執行 `paseo --home /path/to/paseo-home daemon reload`，指定這個插件管理的 daemon home。
 
 本插件的標準安裝不會自動接管既有 gateway，也不會更改內建 `codex` provider 的登入。自訂路由的可用性應以該路由的實際對話驗收；它不代表 OpenAI 官方帳號已登入。Codex [自訂模型提供者設定](https://learn.chatgpt.com/docs/config-file/config-advanced) 說明協定和憑證環境變數。
+
+### 官方 Codex 與 gateway 的設定隔離
+
+若官方登入成功，內建 Codex 的模型清單卻只有 gateway 模型，請檢查它實際使用的 `CODEX_HOME/config.toml`。其他整合工具可能在共用設定加入 `model_catalog_json`，導致登入有效、模型目錄卻指向另一條路由。2026-10-25 的實機驗收曾重現並解決此情況。
+
+需要兩種來源並存時，為官方 Codex 建立獨立的私有目錄，並將下列 `env` 合併到既有 Paseo 設定；保留其他 provider 及設定：
+
+```json
+{
+  "agents": {
+    "providers": {
+      "codex": {
+        "env": { "CODEX_HOME": "/path/to/private/paseo-codex-home" }
+      }
+    }
+  }
+}
+```
+
+目錄權限使用 `0700`、憑證檔使用 `0600`。在同一執行使用者下，以相同 `CODEX_HOME` 和 provider 的官方 CLI 完成 `codex login --device-auth`；後續重新登入也必須使用這個目錄。若共用啟動器會改寫模型設定，登入時使用 provider `command` 指定的原始官方執行檔。此目錄不應沿用 gateway 的 `model_catalog_json` 或路由設定。完成後重載指定 daemon，重新讀取模型並執行兩輪驗收；官方 Codex 與自訂 gateway 都應各自驗證。
 
 ## Pi 操作
 

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-25",
+  "scope": "Single-user Linux deployment; live two-turn checks using existing authorized accounts",
+  "pluginVersion": "0.1.4",
+  "daemonVersion": "0.11.2",
+  "chatVerified": true,
+  "onboardingCompleted": true,
+  "onboardingSessionPreserved": true,
+  "relayHistoricalVerificationRecorded": true,
+  "nativeWeb": {
+    "homeStatus": 200,
+    "omnigentPanelOpened": true,
+    "paseoPanelOpened": true,
+    "omnigentApiStatus": 200,
+    "paseoApiStatus": 200,
+    "pageErrorCount": 0,
+    "statusCacheControl": "private, no-store"
+  },
+  "providers": [
+    {
+      "provider": "claude",
+      "officialLogin": true,
+      "daemonTwoTurn": true,
+      "model": "claude-opus-5-5",
+      "modeId": "default",
+      "webRemote": {
+        "host": "app.paseo.sh",
+        "modelSelected": true,
+        "modeSelected": "Always ask",
+        "twoTurnReplies": true,
+        "firstReplyMs": 6552,
+        "secondReplyMs": 3439,
+        "pageErrorCount": 0
+      },
+      "testAgentsArchived": true
+    },
+    {
+      "provider": "codex",
+      "officialLogin": true,
+      "daemonTwoTurn": true,
+      "model": "gpt-6.1-sol",
+      "modeId": "auto",
+      "webRemote": {
+        "host": "app.paseo.sh",
+        "modelSelected": true,
+        "modeSelected": "Default permissions",
+        "twoTurnReplies": true,
+        "firstReplyMs": 4575,
+        "secondReplyMs": 1937,
+        "pageErrorCount": 0
+      },
+      "testAgentsArchived": true
+    },
+    {
+      "provider": "pi",
+      "daemonTwoTurn": true,
+      "webRemoteRecheckedInThisRun": false,
+      "testAgentsArchived": true
+    }
+  ],
+  "customGatewayTwoTurnRegressionPassed": true,
+  "browserProfilesRemoved": true,
+  "configurationFix": "Isolated the official Codex provider home from a shared gateway model catalog; applied by daemon config reload",
+  "limits": [
+    "Single observations, not latency or capacity guarantees",
+    "Provider credentials, quota and available models can change",
+    "Each user device must complete its own private pairing"
+  ]
+}

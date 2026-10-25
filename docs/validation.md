@@ -1,3 +1,20 @@
+# 官方登入完成後的三種 provider 驗收（2026-10-25）
+
+在部署環境完成 Claude Code 官方帳號登入與 Codex ChatGPT 裝置授權後，再由插件對 Claude、Codex、Pi 各發送兩輪驗收訊息。三者均取得首輪標記與新的續聊記憶回覆，測試 agent 全部歸檔，`chatVerified` 更新為 true。這項結果取代下方較早紀錄中「Claude／Codex 待登入」的狀態。
+
+Pi Web 的 Omnigent、Paseo 面板均實際開啟，首頁及兩個 API 回應 200，沒有 JavaScript 錯誤。完成標記沿用原初始化對話，`onboardingCompleted=true`；狀態 API 保持 `private, no-store`。插件 94 項測試、TypeScript 與文件差異檢查通過。
+
+另以全新隔離瀏覽器連接官方 `app.paseo.sh`，逐一完成以下操作；沒有 JavaScript 錯誤，測試 agent 已歸檔，瀏覽器 profile 已刪除。
+
+| Provider | 模型 | 實際選取模式 | 首輪 | 續聊 |
+| --- | --- | --- | --- | --- |
+| Claude Code | Opus 5.5 | Always ask | 通過，約 6.6 秒 | 通過，約 3.4 秒 |
+| Codex | GPT-6.1-Sol | Default permissions | 通過，約 4.6 秒 | 通過，約 1.9 秒 |
+
+Pi 的本次 daemon 兩輪複驗通過；其瀏覽器驗證見下方既有 Web Remote 紀錄。上述延遲是單次操作量測，未建立並行容量或 SLA。官方網頁實測證據已寫入插件的 relay 歷史驗證，與 daemon 不提供布林值的即時連線欄位分開呈現；新使用者裝置仍須自行配對。
+
+本次同時找出共用 Codex 設定中的 `model_catalog_json` 會使官方登入讀到 gateway 模型清單。為官方 provider 指定獨立 `CODEX_HOME`，移除該目錄中的 gateway 型錄設定並熱重載後，官方模型與兩輪對話恢復；原有自訂 gateway 也另行通過兩輪回歸驗證。操作方式見 [設定隔離說明](../README.md#官方-codex-與-gateway-的設定隔離)。完整帳號與部署資訊只保留在私有環境，公開回條僅列[不含機密的驗收結果](evidence/official-provider-auth-2026-10-25.json)。
+
 # Pi7 Omnigent 0.3.8 正式重啟後的 Paseo 複驗（2026-10-25）
 
 Pi7 已升至公開 Omnigent 0.3.8 並重新建置共用 Pi Web；新 Pod 兩個容器就緒、重啟數皆為 0。隔離瀏覽器從本機轉發的 Pi Web 實際點開 Omnigent 與 Paseo 分頁，首頁及兩個 API 回 200，沒有 JavaScript 錯誤。Paseo 0.1.4 daemon 仍在運作並可達，官方 relay 已啟用；其即時連線欄位仍是未知，插件歷史驗證仍為 false。
