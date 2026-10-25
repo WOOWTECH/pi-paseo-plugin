@@ -136,14 +136,15 @@ test('runtime acquisition refuses a symlinked lock without touching its target',
   assert.equal(JSON.parse(fs.readFileSync(target)).token, 'external');
 });
 
-for (const failedType of ['set_session_name', 'prompt']) {
-  test('local onboarding persists the confirmed session before a failing ' + failedType, async t => {
+test('local onboarding sends the first prompt in the creation request and checkpoints before naming', async t => {
     const { loc } = fixture(t);
     let creations = 0;
     const remembered = [];
+    const commands = [];
     await webFixture(t, async (route, body) => {
+      commands.push({ route, type: body.type, message: body.message });
       if (route === '/api/agent/new') { creations++; return { body: { sessionId: 'confirmed-session' } }; }
-      if (body.type === failedType) {
+      if (body.type === 'set_session_name') {
         remembered.push(onboardingStatus(loc).sessionId);
         return { status: 503 };
       }
@@ -151,13 +152,40 @@ for (const failedType of ['set_session_name', 'prompt']) {
     });
     await assert.rejects(ensureOnboarding((prompt, remember) => createViaLocalWeb(prompt, loc, remember), loc));
     assert.deepEqual(remembered, ['confirmed-session'], 'confirmed session must be durable before follow-up requests');
+    assert.equal(commands[0].type, 'prompt');
+    assert.match(commands[0].message, /Paseo/);
+    assert.deepEqual(commands.map(command => command.type), ['prompt', 'set_session_name']);
     const record = onboardingStatus(loc);
     assert.equal(record.sessionId, 'confirmed-session');
     assert.equal(record.creation, 'created');
     assert.equal((await ensureOnboarding(() => assert.fail('duplicate'), loc)).sessionId, 'confirmed-session');
     assert.equal(creations, 1);
+});
+
+test('a rejected initial prompt leaves no session id and can retry after a model becomes available', async t => {
+  const { loc } = fixture(t);
+  let modelReady = false, creations = 0, followups = 0;
+  await webFixture(t, async (route, body) => {
+    if (route === '/api/agent/new') {
+      creations++;
+      assert.equal(body.type, 'prompt');
+      return modelReady
+        ? { body: { sessionId: 'persisted-session' } }
+        : { status: 500, body: { code: 'prompt_rejected', accepted: false } };
+    }
+    followups++;
+    return { body: {} };
   });
-}
+  const create = (prompt, remember) => createViaLocalWeb(prompt, loc, remember);
+  await assert.rejects(ensureOnboarding(create, loc));
+  assert.equal(onboardingStatus(loc).creation, 'retryable');
+  assert.equal(onboardingStatus(loc).sessionId, undefined);
+  assert.equal(followups, 0);
+  modelReady = true;
+  assert.equal((await ensureOnboarding(create, loc)).sessionId, 'persisted-session');
+  assert.equal(creations, 2);
+  assert.equal(followups, 1);
+});
 
 test('failed local login is retryable because no creation request was issued', async t => {
   const { loc } = fixture(t);

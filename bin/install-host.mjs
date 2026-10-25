@@ -362,6 +362,19 @@ export async function installHost(options = {}) {
   if (process.platform === 'win32') fail('POSIX_HOST_REQUIRED');
   const node = process.versions.node.split('.').map(Number);
   if (node[0] < 22 || (node[0] === 22 && (node[1] < 19 || (node[1] === 19 && node[2] < 0)))) fail('NODE_VERSION_UNSUPPORTED');
+  const paseoPackageRoot = path.resolve(options.packageRoot || ROOT);
+  const agentDir = env.PI_CODING_AGENT_DIR || env.PI_AGENT_DATA_DIR || path.join(home, '.pi/agent');
+  const omniPackageRoot = path.resolve(options.omnigentPackageRoot || env.PI_OMNIGENT_PLUGIN_ROOT || path.join(agentDir, 'git/github.com/WOOWTECH/pi-omnigent-plugin'));
+  const omniPackageFile = path.join(omniPackageRoot, 'package.json');
+  if (exists(omniPackageFile)) {
+    const omniPackage = readJson(omniPackageFile);
+    if (omniPackage.name !== '@woowtech/pi-omnigent-plugin') fail('OMNIGENT_COORDINATOR_INVALID');
+    const coordinatorFile = path.join(omniPackageRoot, 'bin/install-ui.mjs');
+    if (!exists(coordinatorFile)) fail('OMNIGENT_COORDINATOR_UNAVAILABLE');
+    const coordinator = await import(pathToFileURL(coordinatorFile).href);
+    if (typeof coordinator.installUi !== 'function') fail('OMNIGENT_COORDINATOR_UNAVAILABLE');
+    return coordinator.installUi({ ...options, home, env, packageRoot: omniPackageRoot, overlayPackageRoot: paseoPackageRoot });
+  }
   const root = path.join(home, '.local/share/pi-paseo');
   const releases = path.join(root, 'pi-web-releases');
   const destination = path.join(root, 'pi-web');

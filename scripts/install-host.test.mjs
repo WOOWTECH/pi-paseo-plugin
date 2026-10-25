@@ -73,6 +73,25 @@ test('metadata rejects wrong base, version, schema and patch hash before any com
   assert.equal(f.calls.length, 0);
 });
 
+test('Paseo delegates to the installed Omnigent coordinator when both plugins are present', async t => {
+  const f = fixture(t), omniRoot = path.join(f.root, 'omnigent');
+  write(path.join(omniRoot, 'package.json'), JSON.stringify({ name: '@woowtech/pi-omnigent-plugin', version: '0.3.1' }));
+  write(path.join(omniRoot, 'bin/install-ui.mjs'), 'export async function installUi(options) { return { delegated: true, home: options.home, packageRoot: options.packageRoot, overlayPackageRoot: options.overlayPackageRoot }; }\n');
+  const result = await installHost({ ...f.options, omnigentPackageRoot: omniRoot });
+  assert.equal(result.delegated, true);
+  assert.equal(result.home, f.home);
+  assert.equal(result.packageRoot, omniRoot);
+  assert.equal(result.overlayPackageRoot, f.pkg);
+  assert.equal(f.calls.length, 0);
+});
+
+test('Paseo refuses to delegate through a package with the wrong identity', async t => {
+  const f = fixture(t), omniRoot = path.join(f.root, 'other-plugin');
+  write(path.join(omniRoot, 'package.json'), JSON.stringify({ name: '@example/untrusted-plugin' }));
+  await assert.rejects(installHost({ ...f.options, omnigentPackageRoot: omniRoot }), { code: 'OMNIGENT_COORDINATOR_INVALID' });
+  assert.equal(f.calls.length, 0);
+});
+
 test('pinned fetch builds with dev dependencies; rerun reuses; wrapper preserves args, environment and fallback', async t => {
   const f = fixture(t), first = await installHost(f.options);
   assert.equal(first.restarted, false); assert.equal(first.restartRequired, true);
@@ -553,6 +572,7 @@ test('host repairs the SDK shrinkwrapped dependency after npm ci and before buil
       const target = path.join(options.cwd, 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion');
       assert.equal(JSON.parse(fs.readFileSync(path.join(target, 'package.json'))).version, '5.0.12');
       assert.equal(fs.readFileSync(path.join(target, 'index.cjs'), 'utf8'), 'module.exports=()=>["fixed"];\n');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(options.cwd, 'node_modules/@earendil-works/pi-coding-agent/node_modules/undici/package.json'))).version, '8.12.3');
       checkedBeforeBuild = true;
     }
     const result = await f.options.run(command, args, options);
@@ -564,6 +584,8 @@ test('host repairs the SDK shrinkwrapped dependency after npm ci and before buil
       write(path.join(sdk, 'node_modules/brace-expansion/package.json'), JSON.stringify({ name: 'brace-expansion', version: '5.0.9' }));
       write(path.join(modules, 'brace-expansion/package.json'), JSON.stringify({ name: 'brace-expansion', version: '5.0.12' }));
       write(path.join(modules, 'brace-expansion/index.cjs'), 'module.exports=()=>["fixed"];\n');
+      write(path.join(sdk, 'node_modules/undici/package.json'), JSON.stringify({ name: 'undici', version: '8.10.2' }));
+      write(path.join(modules, 'undici/package.json'), JSON.stringify({ name: 'undici', version: '8.12.3' }));
     }
     return result;
   };

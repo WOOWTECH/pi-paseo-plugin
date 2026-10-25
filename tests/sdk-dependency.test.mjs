@@ -9,20 +9,25 @@ function fixture(t,version='5.0.9') {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-sdk-patch-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const sdk=path.join(root,'node_modules/@earendil-works/pi-coding-agent');
  const target=path.join(sdk,'node_modules/brace-expansion');const source=path.join(root,'node_modules/brace-expansion');
+ const targetUndici=path.join(sdk,'node_modules/undici');const sourceUndici=path.join(root,'node_modules/undici');
  const minimatch=path.join(sdk,'node_modules/minimatch');
- for(const d of [target,source,minimatch])fs.mkdirSync(d,{recursive:true});
+ for(const d of [target,source,targetUndici,sourceUndici,minimatch])fs.mkdirSync(d,{recursive:true});
  fs.writeFileSync(path.join(root,'package.json'),'{}');fs.writeFileSync(path.join(sdk,'package.json'),'{"name":"@earendil-works/pi-coding-agent"}');
  fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:'brace-expansion',version,main:'index.cjs'}));fs.writeFileSync(path.join(target,'index.cjs'),'exports.expand=()=>["old"];');
  fs.writeFileSync(path.join(source,'package.json'),'{"name":"brace-expansion","version":"5.0.12","main":"index.cjs"}');fs.writeFileSync(path.join(source,'index.cjs'),'exports.expand=()=>["a","b"];');
+ fs.writeFileSync(path.join(targetUndici,'package.json'),'{"name":"undici","version":"8.10.2","main":"index.cjs"}');fs.writeFileSync(path.join(targetUndici,'index.cjs'),'exports.version="8.10.2";');
+ fs.writeFileSync(path.join(sourceUndici,'package.json'),'{"name":"undici","version":"8.12.3","main":"index.cjs"}');fs.writeFileSync(path.join(sourceUndici,'index.cjs'),'exports.version="8.12.3";');
  fs.writeFileSync(path.join(minimatch,'package.json'),'{"main":"index.cjs"}');fs.writeFileSync(path.join(minimatch,'index.cjs'),'exports.braceExpand=require("brace-expansion").expand;');
- return {root,target,source,sdk,minimatch};
+ return {root,target,source,targetUndici,sourceUndici,sdk,minimatch};
 }
 test('repairs the shrinkwrapped private SDK dependency before a fresh import and is idempotent',t=>{
  const f=fixture(t);assert.deepEqual(repairSdkDependency(f.root),{patched:true});
  const require=createRequire(path.join(f.sdk,'package.json'));assert.deepEqual(require('minimatch').braceExpand('{a,b}'),['a','b']);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(f.targetUndici,'package.json'))).version,'8.12.3');
+ assert.equal(require('undici').version,'8.12.3');
  assert.equal(JSON.parse(fs.readFileSync(path.join(f.target,'package.json'))).version,'5.0.12');
  assert.deepEqual(repairSdkDependency(f.root),{patched:true});
- assert.deepEqual(fs.readdirSync(path.dirname(f.target)).sort(),['brace-expansion','minimatch']);
+ assert.deepEqual(fs.readdirSync(path.dirname(f.target)).sort(),['brace-expansion','minimatch','undici']);
 });
 test('unknown dependency versions fail closed without replacing existing files',t=>{
  const f=fixture(t,'6.0.0');assert.throws(()=>repairSdkDependency(f.root),/SDK_DEPENDENCY_UNSUPPORTED/);

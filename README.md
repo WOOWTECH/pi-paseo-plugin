@@ -22,6 +22,8 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.4`。若同一 Pi Web 也安裝 Omnigent `v0.3.3`，兩個安裝器共用一份整合建置；重新啟動後，全域設定順序為 **MCP → Omnigent → Paseo**。
+
 或在 Pi Web 使用者的終端直接執行：
 
 ```bash
@@ -47,6 +49,8 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 若回報 `pathUpdateRequired: true`，將回報的 `launcherDirectory` 放到服務啟動環境的 PATH 最前方，再重新啟動。Kubernetes 容器需設定工作負載的 PATH，終端中的 `export PATH=...` 只作用於該次終端。
 
 第一次載入整合層後，在 **設定 → 插件** 選擇 Paseo，按 **設定 Paseo**。也可直接開啟 `/paseo/setup`。安裝、啟用及 Pi Web 重啟會啟動／恢復服務並建立或續接初始化對話；停用／移除只停止插件擁有的程序，保留對話、provider 登入及 Paseo 資料。
+
+`v0.1.4` 在建立會話的請求中提交初始化提示。若 Pi Web 明確拒絕提示（例如尚無可用模型），會保留可重試狀態，不記錄空會話 ID；模型就緒後由插件生命週期再嘗試。
 
 ## 設定與配對
 

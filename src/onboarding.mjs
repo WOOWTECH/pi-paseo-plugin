@@ -117,7 +117,15 @@ export async function ensureOnboarding(create, loc = locations()) {
 export async function localWebApi(route, body, {method='POST', cookie, port=process.env.PI_WEB_PORT||process.env.PORT||'30141'}={}) {
   if (!/^\d{1,5}$/.test(String(port))||Number(port)<1||Number(port)>65535) throw new Error('Invalid Pi Web port');
   const response=await fetch('http://127.0.0.1:'+port+route,{method,headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(30000)});
-  if (!response.ok) throw new Error('Pi Web request rejected (HTTP '+response.status+')');
+  if (!response.ok) {
+    // Pi Web guarantees that prompt_rejected was not accepted. A missing model
+    // can cause this before a session is persisted, so a later host hook may retry.
+    if (route === '/api/agent/new') {
+      const rejected = await response.json().catch(() => null);
+      if (rejected?.code === 'prompt_rejected' && rejected.accepted === false) throw new CreationNotStarted();
+    }
+    throw new Error('Pi Web request rejected (HTTP '+response.status+')');
+  }
   return response;
 }
 class CreationNotStarted extends Error {
@@ -132,12 +140,13 @@ export async function createViaLocalWeb(prompt, loc = locations(), remember = ()
       if (!cookie) throw new Error();
     }
   } catch { throw new CreationNotStarted(); }
-  const response = await localWebApi('/api/agent/new', { cwd: loc.home, type: 'ensure_session' }, { cookie });
+  // The first prompt must be part of creation. ensure_session may return an ID
+  // for a runtime that disappears without ever writing a session file.
+  const response = await localWebApi('/api/agent/new', { cwd: loc.home, type: 'prompt', message: prompt }, { cookie });
   const created = await response.json();
   if (typeof created.sessionId !== 'string' || !created.sessionId) throw new Error('Pi Web returned no session');
   remember(created.sessionId);
   const route = '/api/agent/' + encodeURIComponent(created.sessionId);
   await localWebApi(route, { type: 'set_session_name', name: 'Paseo 連線初始化' }, { cookie });
-  await localWebApi(route, { type: 'prompt', message: prompt }, { cookie });
   return created.sessionId;
 }
