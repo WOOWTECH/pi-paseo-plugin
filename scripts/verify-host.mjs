@@ -36,6 +36,11 @@ try {
  if(!count||!/^# fail 0$/m.test(output))throw new Error('Host tests failed');
  stage='build';await runCommand('npm',['run','build'],{cwd:host,env:{...env,NODE_ENV:'production'}});
  if(!fs.readFileSync(path.join(host,'.next/BUILD_ID'),'utf8').trim())throw new Error('Missing build');
+ if(process.env.PI_WEB_SCROLL_E2E==='1') {
+  stage='browser';
+  if(!process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)await runCommand(process.execPath,['node_modules/playwright/cli.js','install','--with-deps','chromium'],{cwd:host,env});
+  await runCommand(process.execPath,['e2e/paseo-mobile-scroll-runner.mjs'],{cwd:host,env:{...env,PI_WEB_SCROLL_SURFACE:'setup'}});
+ }
  console.log(JSON.stringify({passed:true,tests:count,build:'production',base:meta.baseCommit,patchSha256:meta.patchSha256}));
 } catch {
  console.error(JSON.stringify({passed:false,stage,code:'HOST_VERIFICATION_FAILED'}));process.exitCode=1;

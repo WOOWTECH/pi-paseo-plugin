@@ -22,7 +22,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.4`。若同一 Pi Web 也安裝 Omnigent `v0.3.8`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。此版本組合已在 Pi7 進行共用介面及遠端對話驗收。
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.5`。若同一 Pi Web 也安裝 Omnigent `v0.3.10`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。此版本組合已在 Pi7 進行共用介面及遠端對話驗收。
 
 或在 Pi Web 使用者的終端直接執行：
 
@@ -159,3 +159,7 @@ Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以
 - [Paseo 自架 Web UI](https://paseo.sh/docs/web-ui.md)
 - [Paseo provider 支援](https://paseo.sh/docs/supported-providers.md)
 - [Pi Web](https://github.com/agegr/pi-web)
+
+### 手機捲動修正（v0.1.5）
+
+Paseo 設定面板與獨立初始化頁各自提供有高度限制的垂直捲動區域，長模型名稱會換行。更新插件後請重建並重新啟動 Pi Web，再重新整理瀏覽器。主機驗證包含手機直向、橫向、桌面，以及展開 60 個模型後的實際觸控／滑鼠捲動回歸測試。
