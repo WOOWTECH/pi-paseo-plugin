@@ -426,8 +426,10 @@
         "piNativeOAuth": "passed_sdk_and_official_web_two_turns",
         "model": "openai-codex/gpt-6.1-sol",
         "claude": "upstream_billing_402",
-        "codex": "device_login_pending",
-        "evidence": "evidence/pi4-account-recovery-2026-10-25.json"
+        "codex": "official_web_401_device_login_pending",
+        "evidence": "evidence/pi4-account-recovery-2026-10-25.json",
+        "deployedPaseoPlugin": "0.1.8",
+        "postRestartPiWeb": "passed_two_turns_and_reload"
       }
     }
   ],

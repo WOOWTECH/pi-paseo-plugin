@@ -1,24 +1,44 @@
 {
   "target": "pi4",
-  "checkedAt": "2026-10-25T17:33:09.945Z",
+  "checkedAt": "2026-10-25T17:53:18.480050+00:00",
   "allProvidersPassed": false,
-  "testedDeploymentVersion": "0.1.7",
+  "testedDeploymentVersion": "0.1.8",
   "pi": {
     "model": "openai-codex/gpt-6.1-sol",
     "credentialSource": "existing Pi4 OAuth",
-    "sdk": { "firstReply": true, "followup": true, "archived": true },
+    "sdk": {
+      "firstReply": true,
+      "followup": true,
+      "archived": true,
+      "checkedAt": "2026-10-25T17:49:46.732Z"
+    },
     "officialWeb": {
       "modelSelected": true,
       "twoTurnReplyCount": 2,
-      "firstReplyMs": 8056,
-      "secondReplyMs": 2405,
+      "firstReplyMs": 8668,
+      "secondReplyMs": 2407,
       "reconnectedAfterReload": true,
       "pageErrors": [],
-      "archived": true
+      "archived": true,
+      "afterPodRestart": true
     }
   },
-  "claude": { "passed": false, "reason": "UPSTREAM_BILLING_HTTP_402" },
-  "codex": { "passed": false, "reason": "PROVIDER_TURN_FAILED", "newLogin": "pending_user_device_authorization" },
+  "claude": {
+    "passed": false,
+    "reason": "UPSTREAM_BILLING_HTTP_402"
+  },
+  "codex": {
+    "passed": false,
+    "reason": "PROVIDER_AUTH_REQUIRED",
+    "newLogin": "pending_user_device_authorization",
+    "loginStagedWithoutRemovingLiveAuth": true,
+    "officialWeb": {
+      "passed": false,
+      "reason": "WORKSPACE_ROUTING_DISCOVERY_HTTP_401",
+      "testAgentArchived": true
+    },
+    "nativeProviderConfigConfirmed": true
+  },
   "credentialCopiedFromAnotherEnvironment": false,
   "piDefaultModelChanged": false,
   "regressionFix": {
@@ -27,6 +47,68 @@
     "localTestsPassed": 119,
     "typecheck": true,
     "packageCheck": true,
-    "deployedToPi4": false
+    "deployedToPi4": true,
+    "liveClaude402Code": "PROVIDER_BILLING_REQUIRED",
+    "publicStatusHttp": 200,
+    "ci": [
+      {
+        "url": "https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/40217671368",
+        "result": "success"
+      },
+      {
+        "url": "https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/40218032677",
+        "result": "success"
+      }
+    ]
+  },
+  "firstNativeOAuthCheckAt": "2026-10-25T17:33:09.945Z",
+  "testedDeploymentCommit": "3d330e31623bc61e81e7b487cb87d78f2b94d5b6",
+  "deployment": {
+    "checkedAt": "2026-10-25T17:49:21.033Z",
+    "criticalFilesPreserved": true,
+    "criticalFileCount": 7,
+    "filesystem": {
+      "capacityBytes": 33636024320,
+      "availableBytes": 12314476544,
+      "fsyncReadbackPassed": true
+    },
+    "storage": {
+      "requested": "32Gi",
+      "pvcCapacity": "32Gi",
+      "pvcResizePending": false,
+      "engineSizeBytes": 34359738368,
+      "volumeState": "attached",
+      "volumeHealth": "healthy",
+      "replicaModes": [
+        "RW",
+        "RW"
+      ],
+      "expansionRequired": false,
+      "attachmentTicketTypes": [
+        "csi-attacher"
+      ],
+      "recoverySnapshotReady": true,
+      "helmRequested": "32Gi"
+    },
+    "deployment": {
+      "hostnamePinPresent": false,
+      "desiredReplicas": 1,
+      "readyReplicas": 1,
+      "podCount": 1,
+      "containersReady": true,
+      "containerRestartCounts": [
+        0,
+        0
+      ]
+    },
+    "speech": {
+      "enabled": true,
+      "models": [
+        "parakeet-tdt-0.6b-v2-int8",
+        "kokoro-en-v0_19"
+      ],
+      "missing": [],
+      "persistentBzip2Passed": true
+    }
   }
 }
