@@ -12,6 +12,8 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 - Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
 - 登入在執行 Pi Web 的同一使用者 HOME。插件沿用現有 provider CLI；缺少時下載固定版本到插件的獨立目錄。既有帳號資料用於官方 CLI 登入。
 
+啟用本機聽寫或語音模式時，服務的 PATH 還需要 `tar` 與 `bzip2`，並預留語音模型下載、解壓縮與執行所需空間。Paseo 會自動下載缺少的模型；精簡容器沒有 `bzip2` 時，可能已下載完整壓縮檔卻回報 `tar exited with code 2`。容器映像應安裝此相依套件，或使用服務啟動時可找到的持久化工具；只在暫時容器層安裝，重建後會消失。本插件 v0.1.7 不會替容器安裝 OS 套件。Pi4 的實測與恢復紀錄見 [儲存復原驗證](docs/pi4-storage-recovery-2026-10-25.md)。
+
 ## 完整安裝
 
 此 repo 已公開，下載不需要 GitHub 帳號或 token。

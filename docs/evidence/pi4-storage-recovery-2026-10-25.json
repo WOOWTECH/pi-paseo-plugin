@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "target": "pi4",
+  "checkedAt": "2026-10-25T17:19:49.117Z",
+  "versions": {
+    "paseoPlugin": "0.1.7",
+    "omnigentPlugin": "0.3.12",
+    "paseoRuntime": "0.11.2",
+    "longhorn": "1.10.2"
+  },
+  "infrastructureAcceptance": "passed",
+  "allProvidersChatAcceptance": "blocked",
+  "storage": {
+    "requested": "32Gi",
+    "pvcCapacity": "32Gi",
+    "pvcResizePending": false,
+    "engineSizeBytes": 34359738368,
+    "volumeState": "attached",
+    "volumeHealth": "healthy",
+    "replicaModes": [
+      "RW",
+      "RW"
+    ],
+    "expansionRequired": false,
+    "attachmentTicketTypes": [
+      "csi-attacher"
+    ],
+    "recoverySnapshotReady": true,
+    "helmRequested": "32Gi"
+  },
+  "filesystem": {
+    "capacityBytes": 33636024320,
+    "availableBytes": 12424728576,
+    "fsyncReadbackPassed": true
+  },
+  "deployment": {
+    "hostnamePinPresent": false,
+    "desiredReplicas": 1,
+    "readyReplicas": 1,
+    "podCount": 1,
+    "containersReady": true,
+    "containerRestartCounts": [
+      0,
+      0
+    ]
+  },
+  "controlledCrossNodeRelocationPassed": true,
+  "criticalFilesPreserved": true,
+  "criticalFileCount": 7,
+  "paseo": {
+    "phase": "running",
+    "daemonReachable": true,
+    "onboardingCompleted": true,
+    "providers": [
+      {
+        "provider": "claude",
+        "status": "ready",
+        "chatVerified": false
+      },
+      {
+        "provider": "codex",
+        "status": "ready",
+        "chatVerified": false
+      },
+      {
+        "provider": "pi",
+        "status": "ready",
+        "chatVerified": false
+      }
+    ]
+  },
+  "officialWebReconnect": {
+    "checkedAt": "2026-10-25T17:19:52.129Z",
+    "officialHost": "app.paseo.sh",
+    "reconnectedAfterPodRestart": true,
+    "reconnectedAfterPageReload": true,
+    "pageErrors": []
+  },
+  "speech": {
+    "enabled": true,
+    "models": [
+      "parakeet-tdt-0.6b-v2-int8",
+      "kokoro-en-v0_19"
+    ],
+    "missing": [],
+    "persistentBzip2Passed": true,
+    "bzip2Version": "1.0.8-5+b1",
+    "bzip2DebSha256": "438871b3f5c5c7a357a9840951dab9dab8db7eb1ff760a563226fafa111b99e5",
+    "syntheticAudioRoundTrip": {
+      "checkedAt": "2026-10-25T17:10:25.181Z",
+      "ttsAudioBytes": 99130,
+      "format": "pcm;rate=24000",
+      "sttRecognizedTestPhrase": true,
+      "transcript": "The blue bird is singing in the garden.",
+      "elapsedMs": 6151
+    }
+  },
+  "officialWebProviderChecks": [
+    {
+      "provider": "claude",
+      "models": [
+        "deepseek/deepseek-v4-flash-0731",
+        "deepseek/deepseek-v4.1-flash"
+      ],
+      "source": "official-paseo-web-browser",
+      "passed": false,
+      "firstReply": false,
+      "followup": false,
+      "httpStatus": 402,
+      "code": "PROVIDER_BILLING_REQUIRED",
+      "testAgentsArchived": true
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "source": "official-paseo-web-browser",
+      "passed": false,
+      "firstReply": false,
+      "followup": false,
+      "code": "PROVIDER_QUOTA_EXCEEDED",
+      "testAgentsArchived": true
+    },
+    {
+      "provider": "pi",
+      "model": "litellm/chatgpt/gpt-6.1-sol",
+      "source": "official-paseo-web-browser",
+      "passed": false,
+      "firstReply": false,
+      "followup": false,
+      "httpStatus": 429,
+      "code": "PROVIDER_QUOTA_EXCEEDED",
+      "testAgentsArchived": true
+    }
+  ],
+  "alternativePiCheck": {
+    "provider": "pi",
+    "model": "litellm/qwen3-4b-cluster1",
+    "passed": false,
+    "firstReply": false,
+    "followup": false,
+    "code": "PROVIDER_TURN_FAILED",
+    "cleanup": {
+      "archived": true
+    }
+  },
+  "limits": [
+    "Controlled workload relocation passed; abrupt node failure and long-term load were not tested.",
+    "Speech test used a local worker and synthetic English audio; physical microphone, browser audio permissions, voice agent orchestration and Chinese recognition were not tested.",
+    "The recovery snapshot is on the same storage system and is not an off-site backup.",
+    "Longhorn remains at 1.10.2. Target engine recreation resolved this stale namespace incident, not the upstream software defect.",
+    "Original provider credentials were preserved. Billing/usage limits require account administration or explicit reauthorization; no credits were purchased.",
+    "The bzip2 repair is persistent in this Pi4 HOME; the base container image was not rebuilt in this recovery."
+  ]
+}

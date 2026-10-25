@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-25T15:45:42.530Z",
+  "checkedAt": "2026-10-25T17:19:49.117Z",
   "paseoPlugin": {
     "version": "0.1.7",
     "commit": "9315fef802d37ccc310ac2cb25ab52557335b217",
@@ -263,10 +263,10 @@
     },
     {
       "target": "pi4",
-      "status": "passed",
+      "status": "blocked",
       "acceptanceScope": "Listed text-chat paths and UI checks only",
       "commercialDeploymentReady": false,
-      "checkedAt": "2026-10-25T15:45:42.530Z",
+      "checkedAt": "2026-10-25T17:19:49.117Z",
       "setup": {
         "target": "pi4",
         "noteSaved": true,
@@ -293,38 +293,38 @@
       "officialWeb": [
         {
           "provider": "claude",
-          "model": "deepseek/deepseek-v4-flash-0731",
-          "selectedMode": "Always ask",
-          "selectedModeVisible": true,
-          "twoTurnReplyCount": 2,
-          "firstReplyMs": 6566,
-          "secondReplyMs": 6520,
-          "reconnectedAfterReload": true,
-          "pageErrors": [],
-          "testAgentArchived": true
+          "models": [
+            "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4.1-flash"
+          ],
+          "source": "official-paseo-web-browser",
+          "passed": false,
+          "firstReply": false,
+          "followup": false,
+          "httpStatus": 402,
+          "code": "PROVIDER_BILLING_REQUIRED",
+          "testAgentsArchived": true
         },
         {
           "provider": "codex",
-          "model": "GPT-6.1-Sol",
-          "selectedMode": "Default permissions",
-          "selectedModeVisible": true,
-          "twoTurnReplyCount": 2,
-          "firstReplyMs": 5031,
-          "secondReplyMs": 3987,
-          "reconnectedAfterReload": true,
-          "pageErrors": [],
-          "testAgentArchived": true
+          "model": "gpt-6.1-sol",
+          "source": "official-paseo-web-browser",
+          "passed": false,
+          "firstReply": false,
+          "followup": false,
+          "code": "PROVIDER_QUOTA_EXCEEDED",
+          "testAgentsArchived": true
         },
         {
           "provider": "pi",
           "model": "litellm/chatgpt/gpt-6.1-sol",
-          "selectedModeVisible": true,
-          "twoTurnReplyCount": 2,
-          "firstReplyMs": 11684,
-          "secondReplyMs": 2391,
-          "reconnectedAfterReload": true,
-          "pageErrors": [],
-          "testAgentArchived": true
+          "source": "official-paseo-web-browser",
+          "passed": false,
+          "firstReply": false,
+          "followup": false,
+          "httpStatus": 429,
+          "code": "PROVIDER_QUOTA_EXCEEDED",
+          "testAgentsArchived": true
         }
       ],
       "scrollLayout": [
@@ -386,7 +386,7 @@
         "relayVerified": true
       },
       "restartReconnect": {
-        "checkedAt": "2026-10-25T15:43:23.242Z",
+        "checkedAt": "2026-10-25T17:19:52.129Z",
         "officialHost": "app.paseo.sh",
         "reconnectedAfterPodRestart": true,
         "reconnectedAfterPageReload": true,
@@ -402,15 +402,25 @@
         "approvedCleanupFreedBytes": 1868562432,
         "retainedFinalVideosVerified": 3,
         "additionalInstallationSpeechCacheFreedBytes": 771723264,
-        "localSpeechDisabled": true,
-        "localSpeechDownloadsAbsent": true,
-        "capacityBytes": 20957446144,
-        "availableBytes": 782684160,
-        "volumeExpansionResolved": false,
-        "crossNodeAttachResolved": false,
-        "temporaryWorkloadNodePin": true,
-        "failoverVerified": false
-      }
+        "localSpeechDisabled": false,
+        "capacityBytes": 33636024320,
+        "availableBytes": 12424728576,
+        "volumeExpansionResolved": true,
+        "crossNodeAttachResolved": true,
+        "temporaryWorkloadNodePin": false,
+        "failoverVerified": false,
+        "localSpeechModelsInstalled": true,
+        "controlledCrossNodeRelocationVerified": true,
+        "helmRequested": "32Gi"
+      },
+      "previousAcceptance": {
+        "checkedAt": "2026-10-25T15:45:42.530Z",
+        "status": "passed",
+        "commit": "d2c27fb625726c4b748543dde15fad799655f20a"
+      },
+      "reason": "PROVIDER_BILLING_AND_QUOTA",
+      "infrastructureAcceptance": "passed",
+      "latestEvidence": "evidence/pi4-storage-recovery-2026-10-25.json"
     }
   ],
   "limits": [
@@ -419,6 +429,6 @@
     "Suite counts can overlap and must not be added as a unique test total; reply timings are individual samples, not load benchmarks.",
     "Claude Code used the existing Omnigent DeepSeek gateway, not an Anthropic subscription.",
     "Relay proof is historical browser evidence; the daemon does not expose a confirmed current relay connection state.",
-    "Pi4 text-chat acceptance passed after approved cleanup; free disk remains below 1 GiB. Local dictation and voice mode are disabled. Volume expansion and cross-node attachment remain unresolved; the workload is temporarily pinned to the already attached node. This is not commercial capacity or failover acceptance."
+    "Pi4 storage and local speech recovered; latest official Web conversation checks are blocked by provider billing/usage limits. Earlier successful conversation evidence is historical. See the dedicated Pi4 storage recovery report."
   ]
 }
