@@ -1,0 +1,119 @@
+{
+  "target": "pi4",
+  "checkedAt": "2026-10-26T03:49:53.394Z",
+  "pluginVersion": "0.1.8",
+  "tests": {
+    "defaultRoutes": {
+      "checkedAt": "2026-10-26T03:47:43.483Z",
+      "passed": false,
+      "providers": [
+        {
+          "provider": "claude",
+          "passed": false,
+          "firstReply": false,
+          "followup": false,
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "modeId": "default",
+          "cleanup": {
+            "archived": true
+          },
+          "code": "PROVIDER_BILLING_REQUIRED"
+        },
+        {
+          "provider": "codex",
+          "passed": true,
+          "firstReply": true,
+          "followup": true,
+          "model": "gpt-6.1-sol",
+          "modeId": "auto",
+          "cleanup": {
+            "archived": true
+          }
+        },
+        {
+          "provider": "pi",
+          "passed": true,
+          "firstReply": true,
+          "followup": true,
+          "model": "openai-codex/gpt-6.1-sol",
+          "modeId": null,
+          "cleanup": {
+            "archived": true
+          }
+        }
+      ]
+    },
+    "configuredClaudeAlternate": {
+      "checkedAt": "2026-10-26T03:48:43.441Z",
+      "passed": false,
+      "providers": [
+        {
+          "provider": "codex",
+          "passed": true,
+          "firstReply": true,
+          "followup": true,
+          "model": "gpt-6.1-sol",
+          "modeId": "auto",
+          "cleanup": {
+            "archived": true
+          }
+        },
+        {
+          "provider": "pi",
+          "passed": true,
+          "firstReply": true,
+          "followup": true,
+          "model": "openai-codex/gpt-6.1-sol",
+          "modeId": null,
+          "cleanup": {
+            "archived": true
+          }
+        },
+        {
+          "provider": "claude",
+          "passed": false,
+          "firstReply": false,
+          "followup": false,
+          "model": "deepseek/deepseek-v4.1-flash",
+          "modeId": "default",
+          "cleanup": {
+            "archived": true
+          },
+          "code": "PROVIDER_BILLING_REQUIRED"
+        }
+      ]
+    }
+  },
+  "hostStatus": {
+    "checkedAt": "2026-10-26T03:49:53.394Z",
+    "http": 200,
+    "daemonHealthy": true,
+    "onboardingCompleted": true,
+    "allProvidersVerified": false,
+    "providers": [
+      {
+        "id": "claude",
+        "chatVerified": false,
+        "code": "PROVIDER_BILLING_REQUIRED"
+      },
+      {
+        "id": "codex",
+        "chatVerified": true,
+        "code": null
+      },
+      {
+        "id": "pi",
+        "chatVerified": true,
+        "code": null
+      }
+    ],
+    "unarchivedAgentCount": 0,
+    "freeBytes": 12266524672,
+    "filesystemBytes": 33636024320,
+    "pluginVersion": "0.1.8"
+  },
+  "credentialsChanged": false,
+  "webBrowserRepeatedToday": false,
+  "allProvidersPassed": false,
+  "remainingBlocker": "CLAUDE_GATEWAY_BILLING_REQUIRED"
+}

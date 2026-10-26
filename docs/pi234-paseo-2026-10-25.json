@@ -420,7 +420,7 @@
       },
       "reason": "CLAUDE_GATEWAY_BILLING_REQUIRED",
       "infrastructureAcceptance": "passed",
-      "latestEvidence": "evidence/pi4-account-recovery-2026-10-25.json",
+      "latestEvidence": "evidence/pi4-recheck-2026-10-26.json",
       "accountRecovery": {
         "checkedAt": "2026-10-25T18:48:23.508Z",
         "piNativeOAuth": "passed_sdk_after_codex_account_change",
@@ -429,7 +429,14 @@
         "codex": "passed_new_device_auth_sdk_and_official_web_two_turns",
         "evidence": "evidence/pi4-account-recovery-2026-10-25.json",
         "deployedPaseoPlugin": "0.1.8",
-        "postRestartPiWeb": "passed_two_turns_and_reload"
+        "postRestartPiWeb": "passed_two_turns_and_reload",
+        "latestRecheck": {
+          "checkedAt": "2026-10-26T03:49:53.394Z",
+          "codex": "passed_sdk_two_turns",
+          "pi": "passed_sdk_two_turns",
+          "claude": "both_configured_models_http_402",
+          "webBrowserRepeated": false
+        }
       }
     }
   ],

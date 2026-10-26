@@ -1,4 +1,4 @@
-> Pi4 最新進展：Codex 新帳號已通過 SDK 與官方 Web 的兩輪對話、選模及重新整理；Pi 原生 OAuth 也再次通過。僅 Claude gateway 仍有 HTTP 402 帳務阻塞。詳見[帳號與模型路由驗證](pi4-account-recovery-2026-10-25.md)。程式版本為公開 `v0.1.8`。
+> 2026-10-26 Pi4 複驗：Codex、Pi SDK 兩輪對話仍通過；Claude gateway 兩個已設定模型均回 HTTP 402。服務健康、版本維持公開 `v0.1.8`。詳見[最新回條](evidence/pi4-recheck-2026-10-26.json)及[帳號恢復紀錄](pi4-account-recovery-2026-10-25.md)；瀏覽器驗收日期仍為 10 月 25 日。
 
 # 官方登入完成後的三種 provider 驗收（2026-10-25）
 

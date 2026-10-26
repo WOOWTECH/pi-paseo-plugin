@@ -1,5 +1,7 @@
 # Pi4 帳號與模型路由驗證（2026-10-25）
 
+> 2026-10-26 複驗：Codex、Pi 的既有登入仍可完成 SDK 兩輪對話；Claude gateway 的兩個已設定模型均回 HTTP 402。Pi Web 狀態 API 回 200、服務健康、初始化已完成，所有此次測試 agent 已歸檔，未更換任何憑證。版本維持公開 `v0.1.8`，剩餘磁碟約 11.4 GiB。今日沒有重跑瀏覽器測試，下方網頁成功紀錄仍屬 10 月 25 日。[今日非機密回條](evidence/pi4-recheck-2026-10-26.json)
+
 ## 最新結果：Codex 新授權成功（18:48 UTC）
 
 Codex 已由使用者完成官方裝置授權，並在 Pi4 套用新的 ChatGPT 登入。`gpt-6.1-sol` 使用 Default Permissions 模式通過 SDK 兩輪記憶驗證；官方 `app.paseo.sh` 也完成模型與模式選擇、兩輪對話及重新整理驗證。單次首輪約 4.0 秒、續聊約 2.4 秒，沒有 JavaScript 錯誤，SDK 與網頁測試 agent 均已歸檔。
