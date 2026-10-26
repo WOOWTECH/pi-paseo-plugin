@@ -41,7 +41,7 @@ function fixture(t) {
       if (spec === './onboarding.mjs') return { readRecord, writeRecord, onboardingStatus: () => ({}) };
       if (spec === './state.mjs') return { locations: () => loc, RuntimeError, updateState: () => ({}) };
       if (spec === './provider-launchers.mjs') return { configureProviders: () => providers };
-      if (spec === './runtime-layout.mjs') return { runtimeDirectory: () => loc.runtimeDir, RUNTIME_REVISION: 'fixture' };
+      if (spec === './runtime-layout.mjs') return { runtimeDirectory: () => loc.runtimeDir, runtimeReady: () => true, RUNTIME_REVISION: 'fixture' };
       if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => {
         // Paseo 0.11.2's daemon schema is strict and has no name/displayName key.
         // Exercise the actual writeConfig path, not a mock that accepts any JSON.

@@ -1,3 +1,4 @@
+import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -201,7 +202,7 @@ test('runtime applies new private commands with the official reload API and repo
   const ui = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/server/dist/server/web-ui/index.html');
   fs.mkdirSync(cliRoot, { recursive: true }); fs.mkdirSync(path.dirname(ui), { recursive: true });
   fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: '0.11.2' })); fs.writeFileSync(ui, 'fixture UI');
-  runtimeLayout.markRuntimeReady(f.loc);
+  seedPidFiles(f.loc);runtimeLayout.markRuntimeReady(f.loc);
   let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running' };
   fs.writeFileSync(path.join(f.loc.paseoHome, '.pi-paseo-owner.json'), JSON.stringify({ installationId: state.installationId, home: f.loc.paseoHome }));
   const configFile = path.join(f.loc.paseoHome, 'config.json');
@@ -251,6 +252,9 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './chat-result.mjs') return {};
     if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
     if (spec === './runtime-layout.mjs') return runtimeLayout;
+    // This test models a non-Linux provider reload; Linux birth/transition
+    // behavior is exercised with the actual identity module in daemon-identity.
+    if (spec === './daemon-identity.mjs') return { observeOwnedInstance: async () => null, rememberOwnedInstance: async () => {}, recoverStaleInstance: () => assert.fail('no recovery on healthy provider reload') };
     if (spec === './web-client.mjs') return { ensureWebClient: async () => {} };
     if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
