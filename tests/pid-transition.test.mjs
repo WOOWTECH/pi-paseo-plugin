@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {withPidTransition} from '../src/pid-transition.mjs';
 import {patchPidLockSource,applyPidLockPatch,pidLockPatchReady,PID_LOCK_COPIES,ORIGINAL_PID_LOCK_SHA256,PATCHED_PID_LOCK_SHA256} from '../src/pid-lock-patch.mjs';
-import {runtimeDirectory,markRuntimeReady,runtimeReady} from '../src/runtime-layout.mjs';
+import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory} from '../src/runtime-layout.mjs';
 import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const original=fs.readFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),'utf8');
@@ -56,4 +56,15 @@ for(const [label,mutate]of [
 ])test(label+' rejects without executing callback',async t=>{const dir=home(t);mutate(dir);await assert.rejects(withPidTransition(dir,()=>assert.fail('unsafe guard entered')));});
 test('official release/refresh missing home semantics do not create a directory',async t=>{
  const dir=path.join(home(t),'missing');assert.equal(await withPidTransition(dir,()=>true),true);assert.equal(fs.existsSync(dir),false);
+});
+
+test('supported r2 fallback requires exact receipt, package versions, writer bytes and safe path',t=>{
+ const {loc,root}=runtime(t);markRuntimeReady(loc);seedPidFiles(loc);
+ const old=root.replace('-r3-','-r2-'),receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.pidLockPatchId;
+ fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify(receipt));fs.renameSync(root,old);
+ assert.equal(previousRuntimeDirectory(loc),old);
+ for(const relative of ['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.map(p=>'node_modules/@getpaseo/server/'+p+'/pid-lock.js')]){
+  const file=path.join(old,relative),bytes=fs.readFileSync(file);fs.writeFileSync(file,'{}');assert.equal(previousRuntimeDirectory(loc),null,relative);fs.writeFileSync(file,bytes);
+ }
+ fs.renameSync(old,old+'.target');fs.symlinkSync(old+'.target',old);assert.equal(previousRuntimeDirectory(loc),null);
 });
