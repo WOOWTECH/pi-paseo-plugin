@@ -4,6 +4,8 @@ Pi Agent / Pi Web 插件。在 Pi 容器中下載並管理 Paseo，沿用 Claude
 
 Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生配對連結，再在新分頁開啟完整 Paseo。官方 relay 不需要額外的 Paseo 帳號密碼。
 
+2026-10-26：Claude 回覆途中重新整理的重複顯示與內容截斷已公開來源修補，並通過 Pi4 隔離瀏覽器驗證；**官方 Paseo 網站尚未部署，安裝本插件不會自動套用該網頁修補**。進度與驗證範圍見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
+
 ## 相容版本
 
 - Linux、Node.js 22.19.0+、npm、git、util-linux `flock`。其他平台目前不納入此版本的部署驗收。

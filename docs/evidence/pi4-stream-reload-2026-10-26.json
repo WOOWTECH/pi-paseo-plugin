@@ -1,0 +1,79 @@
+{
+  "checkedAt": "2026-10-26T06:30:19.035Z",
+  "source": {
+    "repository": "https://github.com/WOOWTECH/paseo",
+    "branch": "fix/cached-assistant-identity",
+    "commit": "043aa8286b90418eb1f4e9982ca1a349c84f2a3d",
+    "upstreamPullRequest": "https://github.com/getpaseo/paseo/pull/7908"
+  },
+  "environment": {
+    "target": "Pi4",
+    "pluginVersion": "0.1.8",
+    "daemonVersion": "0.11.2",
+    "webVersion": "0.13.0",
+    "provider": "claude",
+    "authSource": "official-subscription"
+  },
+  "deployment": {
+    "officialWebsitePatched": false,
+    "productionRuntimeChanged": false,
+    "verificationMode": "isolated-browser-source-module-replacement",
+    "pluginReleaseChanged": false
+  },
+  "localVerification": {
+    "testSuites": 4,
+    "testsPassed": 202,
+    "newRegressionTests": 7,
+    "format": "passed",
+    "lint": "passed",
+    "diffCheck": "passed",
+    "fullAppTypecheck": "not-completed-missing-workspace-dependencies",
+    "storeImportStub": "throws-if-called; unused by focused pure reducer tests"
+  },
+  "browserVerification": {
+    "identicalShortReplies": "passed",
+    "longStreamRunsPassed": 2,
+    "reloadDuringOpenTurn": true,
+    "completionMarkerReceived": true,
+    "replyCount": 2,
+    "composerReadyAfterReload": true,
+    "javascriptErrors": 0,
+    "testAgentsArchived": true,
+    "isolatedProfilesRemoved": true,
+    "contentComparison": {
+      "checkedAt": "2026-10-26T06:30:19.035Z",
+      "provider": "claude",
+      "browserAssistantCount": 2,
+      "serverAssistantCount": 2,
+      "exactTextAndIdentityMatch": true,
+      "replyLengths": [
+        25,
+        4723
+      ],
+      "streamEndPresent": true,
+      "status": "idle"
+    }
+  },
+  "ci": {
+    "status": "success",
+    "url": "https://github.com/WOOWTECH/paseo/actions/runs/40280878427",
+    "branch": "ci/verify-stream-reload",
+    "commit": "178705b5333c701a4cc5084053ff707da3132f1c",
+    "packagesIdenticalToRepairCommit": true,
+    "completeWorkspaceDependencies": true,
+    "repositoryTestConfiguration": true,
+    "additionalStoreStub": false,
+    "testsPassed": 202,
+    "appTypecheck": "passed",
+    "appDependencyBuild": "passed",
+    "changedFileFormat": "passed",
+    "changedFileLint": "passed",
+    "fullUpstreamMatrixRun": false
+  },
+  "limitations": [
+    "Official app.paseo.sh deployment is pending upstream.",
+    "The browser test replaces two compiled source modules only inside its isolated browser.",
+    "No claim of complete upstream CI, mobile-device testing, or all-provider streaming-reload coverage."
+  ],
+  "privacy": "No credentials, pairing URLs, account identities, message IDs, or conversation text are included."
+}
