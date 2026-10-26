@@ -1,3 +1,4 @@
+import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +18,7 @@ function fixture(t) {
  const loc={home:dir,agentDir:dir,stateDir:dir,runtimeDir:path.join(dir,'runtime'),paseoHome:path.join(dir,'daemon'),port:6769};
  const pkg=path.join(runtimeLayout.runtimeDirectory(loc),'node_modules/@getpaseo/cli');fs.mkdirSync(pkg,{recursive:true});fs.mkdirSync(loc.paseoHome);
  fs.writeFileSync(path.join(pkg,'package.json'),'{"version":"0.11.2"}');
- runtimeLayout.markRuntimeReady(loc);
+ seedPidFiles(loc);runtimeLayout.markRuntimeReady(loc);
  fs.writeFileSync(path.join(loc.paseoHome,'.pi-paseo-owner.json'),JSON.stringify({installationId:'fixture',home:loc.paseoHome}));
  let state={installationId:'fixture',phase:'running',desiredEnabled:true};let instance={pid:5000,uid:1000,startedAt:'fixture'};
  const calls={connect:0,status:0,close:0};let fail=false;

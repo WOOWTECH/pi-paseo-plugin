@@ -14,6 +14,7 @@ import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,RUNTIME_REVISION} from './runtime-layout.mjs';
 import { ensureWebClient, managedPairUrl, webClientStatus } from './web-client.mjs';
+import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
 const PROVIDERS = ['claude', 'codex', 'pi'];
@@ -56,7 +57,7 @@ function instanceNeedsRuntimeRestart(instance) {
  if(process.platform!=='linux')return false;
  try{return !fs.readFileSync(`/proc/${instance.pid}/environ`,'utf8').split('\0').includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`);}catch{return true;}
 }
-async function verifyInstanceOwnership(instance) {
+function verifyInstanceOwnership(instance) {
   if (!ownsHome() || !instance || !processIdentity(instance.pid)) throw new RuntimeError('DAEMON_NOT_OWNED');
   if (instance.uid !== (process.getuid?.() ?? instance.uid)) throw new RuntimeError('DAEMON_NOT_OWNED');
   // Linux metadata additionally checks argv and the home actually inherited by this PID.
@@ -137,7 +138,17 @@ export async function activate(options = {}) {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
       await installRuntime();
       await ensureWebClient(locations());
-      const existing = await currentInstance(); const launchers = await detectLaunchers({ installMissing: true });
+      let existing = await currentInstance();
+      if (existing) {
+        try { verifyInstanceOwnership(existing); }
+        catch (error) {
+          if (error.code !== 'DAEMON_NOT_OWNED') throw error;
+          await recoverStaleInstance(locations(), existing);
+          existing = await currentInstance();
+          if (existing) verifyInstanceOwnership(existing);
+        }
+      }
+      const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
         await verifyInstanceOwnership(existing);
         if(instanceNeedsRuntimeRestart(existing)) {
@@ -161,8 +172,12 @@ export async function activate(options = {}) {
         const instance = await currentInstance(); await verifyInstanceOwnership(instance);
         updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt });
       }
+      const healthy = await currentInstance();
+      const observation = await observeOwnedInstance(locations(), healthy, verifyInstanceOwnership);
       const result = await status();
       if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
+      if (!healthy || healthy.pid !== result.daemon.pid) throw new RuntimeError('DAEMON_STATE_CHANGED');
+      await rememberOwnedInstance(locations(), healthy, verifyInstanceOwnership, observation);
       updateState({ lastDiagnostic: { checkedAt: new Date().toISOString(), daemonReachable: true, providers: result.providers.map(row => ({ provider: row.provider, status: row.status })) } });
       return status();
     } catch (error) { updateState({ phase: error.code === 'RESTART_REQUIRED' ? 'restart_required' : 'error', lastError: { code: safeCode(error), at: new Date().toISOString() } }); throw new RuntimeError(safeCode(error)); }

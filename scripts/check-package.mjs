@@ -10,7 +10,7 @@ try {
   if (pack.status !== 0) throw new Error('PACK_FAILED');
   const [record] = JSON.parse(pack.stdout);
   const files = new Set(record.files.map(file => file.path));
-  const required = ['package.json', 'LICENSE', 'README.md', 'bin/cli.mjs', 'bin/install-host.mjs', 'extensions/index.ts', 'src/runtime.mjs', 'src/host-api.mjs', 'src/web-client.mjs', 'runtime/web-client.json', 'host/adapter.patch', 'host/adapter-meta.json', 'scripts/install.sh'];
+  const required = ['package.json', 'LICENSE', 'README.md', 'bin/cli.mjs', 'bin/install-host.mjs', 'extensions/index.ts', 'src/runtime.mjs', 'src/daemon-identity.mjs', 'src/pid-transition.mjs', 'src/pid-lock-patch.mjs', 'src/runtime-layout.mjs', 'src/host-api.mjs', 'src/web-client.mjs', 'runtime/web-client.json', 'host/adapter.patch', 'host/adapter-meta.json', 'scripts/install.sh'];
   if (required.some(file => !files.has(file))) throw new Error('PACK_MISSING_REQUIRED_FILES');
   if ([...files].some(file => /(^|\/)(node_modules|\.git|\.next|artifacts|\.env(?:\..*)?)(\/|$)/.test(file) || file.startsWith('host/pi-web/') || /(^|\/)(auth|credentials|pairing\.private|config)\.json$/.test(file))) throw new Error('PACK_CONTAINS_LOCAL_DATA');
   console.log(JSON.stringify({ passed: true, fileCount: files.size, adapter: 'metadata-and-sha256-verified', requiredFiles: required }));

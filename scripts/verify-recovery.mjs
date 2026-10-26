@@ -12,7 +12,8 @@ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-recovery-'));
 const home=path.join(temp,'home'),agentDir=path.join(temp,'agent'),stateDir=path.join(temp,'state'),runtimeDir=path.join(temp,'runtime');
 for(const d of [home,agentDir,stateDir,runtimeDir])fs.mkdirSync(d,{mode:0o700});
 const release=runtimeDirectory({runtimeDir});fs.mkdirSync(release,{recursive:true,mode:0o700});
-fs.symlinkSync(path.join(path.resolve(sharedRuntime),'node_modules'),path.join(release,'node_modules'),'dir');
+// Patch only an owned copy: never mutate the baked/shared runtime through a symlink.
+fs.cpSync(path.join(path.resolve(sharedRuntime),'node_modules'),path.join(release,'node_modules'),{recursive:true,mode:fs.constants.COPYFILE_FICLONE});
 markRuntimeReady({runtimeDir});
 Object.assign(process.env,{HOME:home,PI_CODING_AGENT_DIR:agentDir,PI_AGENT_DATA_DIR:agentDir,PI_PASEO_STATE_DIR:stateDir,PI_PASEO_RUNTIME_DIR:runtimeDir,PI_PASEO_PORT:'33869'});
 delete process.env.CODEX_HOME;delete process.env.PI_WEB_PASSWORD;delete process.env.PASEO_HOME;
