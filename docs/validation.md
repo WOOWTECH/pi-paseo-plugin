@@ -1,4 +1,4 @@
-> 2026-10-26 Pi4 複驗：Codex、Pi SDK 兩輪對話仍通過；Claude gateway 兩個已設定模型均回 HTTP 402。服務健康、版本維持公開 `v0.1.8`。詳見[最新回條](evidence/pi4-recheck-2026-10-26.json)及[帳號恢復紀錄](pi4-account-recovery-2026-10-25.md)；瀏覽器驗收日期仍為 10 月 25 日。
+> 2026-10-26 04:48 UTC Pi4 最新結果：已改用 Claude 官方訂閱，Claude、Codex、Pi 均通過 SDK 兩輪對話，以及重啟後官方網頁的選模、兩輪完整回覆與重新整理測試。版本維持公開 `v0.1.8`。串流尚未完成時重新整理的重複顯示問題仍未修復；詳見[最新報告](pi4-official-subscription-2026-10-26.md)與[非機密回條](evidence/pi4-official-subscription-2026-10-26.json)。下方各節保留原驗證日期，不能視為所有部署的最新狀態。
 
 # 官方登入完成後的三種 provider 驗收（2026-10-25）
 

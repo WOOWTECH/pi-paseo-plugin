@@ -263,10 +263,10 @@
     },
     {
       "target": "pi4",
-      "status": "blocked",
-      "acceptanceScope": "Listed text-chat paths and UI checks only",
+      "status": "passed",
+      "acceptanceScope": "Listed SDK two-turn text conversations and official Web model/mode selection, two completed turns, reload and reconnect after controlled Pod restart",
       "commercialDeploymentReady": false,
-      "checkedAt": "2026-10-25T17:19:49.117Z",
+      "checkedAt": "2026-10-26T04:48:12.485Z",
       "setup": {
         "target": "pi4",
         "noteSaved": true,
@@ -288,43 +288,63 @@
             "modes": 0
           }
         ],
-        "pageErrors": []
+        "pageErrors": [],
+        "checkedAt": "2026-10-25T17:19:49.117Z",
+        "scopeNote": "Historical UI setup and catalog counts; current official Claude source and tested models are in latestEvidence."
       },
       "officialWeb": [
         {
           "provider": "claude",
-          "models": [
-            "deepseek/deepseek-v4-flash-0731",
-            "deepseek/deepseek-v4.1-flash"
-          ],
-          "source": "official-paseo-web-browser",
-          "passed": false,
-          "firstReply": false,
-          "followup": false,
-          "httpStatus": 402,
-          "code": "PROVIDER_BILLING_REQUIRED",
-          "testAgentsArchived": true
+          "model": "Opus 5.5",
+          "selectedMode": "Always ask",
+          "selectedModeVisible": true,
+          "host": "app.paseo.sh",
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 4478,
+          "secondReplyMs": 2909,
+          "reconnectedAfterReload": true,
+          "composerReadyAfterReload": true,
+          "completedTurnsBeforeReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true,
+          "afterPodRestart": true,
+          "checkedAt": "2026-10-26T04:46:26.527299+00:00",
+          "passed": true
         },
         {
           "provider": "codex",
-          "model": "gpt-6.1-sol",
-          "source": "official-paseo-web-browser",
-          "passed": false,
-          "firstReply": false,
-          "followup": false,
-          "code": "PROVIDER_QUOTA_EXCEEDED",
-          "testAgentsArchived": true
+          "model": "GPT-6.1-Sol",
+          "selectedMode": "Default permissions",
+          "selectedModeVisible": true,
+          "host": "app.paseo.sh",
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 5530,
+          "secondReplyMs": 2499,
+          "reconnectedAfterReload": true,
+          "composerReadyAfterReload": true,
+          "completedTurnsBeforeReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true,
+          "afterPodRestart": true,
+          "checkedAt": "2026-10-26T04:47:05.774267+00:00",
+          "passed": true
         },
         {
           "provider": "pi",
-          "model": "litellm/chatgpt/gpt-6.1-sol",
-          "source": "official-paseo-web-browser",
-          "passed": false,
-          "firstReply": false,
-          "followup": false,
-          "httpStatus": 429,
-          "code": "PROVIDER_QUOTA_EXCEEDED",
-          "testAgentsArchived": true
+          "model": "openai-codex/gpt-6.1-sol",
+          "selectedModeVisible": true,
+          "host": "app.paseo.sh",
+          "twoTurnReplyCount": 2,
+          "firstReplyMs": 9639,
+          "secondReplyMs": 2414,
+          "reconnectedAfterReload": true,
+          "composerReadyAfterReload": true,
+          "completedTurnsBeforeReload": true,
+          "pageErrors": [],
+          "testAgentArchived": true,
+          "afterPodRestart": true,
+          "checkedAt": "2026-10-26T04:47:50.780157+00:00",
+          "passed": true
         }
       ],
       "scrollLayout": [
@@ -383,13 +403,15 @@
         ],
         "daemonReachable": true,
         "onboardingCompleted": true,
-        "relayVerified": true
+        "relayVerified": true,
+        "preservationScope": "Existing recovery evidence; latest eight-file check compares after official Claude login/source switch to after controlled restart"
       },
       "restartReconnect": {
-        "checkedAt": "2026-10-25T17:19:52.129Z",
+        "checkedAt": "2026-10-26T04:47:50.780157+00:00",
         "officialHost": "app.paseo.sh",
         "reconnectedAfterPodRestart": true,
         "reconnectedAfterPageReload": true,
+        "completedTurnsBeforeReload": true,
         "pageErrors": []
       },
       "storage": {
@@ -404,39 +426,37 @@
         "additionalInstallationSpeechCacheFreedBytes": 771723264,
         "localSpeechDisabled": false,
         "capacityBytes": 33636024320,
-        "availableBytes": 12424728576,
+        "availableBytes": 12264951808,
         "volumeExpansionResolved": true,
         "crossNodeAttachResolved": true,
         "temporaryWorkloadNodePin": false,
         "failoverVerified": false,
         "localSpeechModelsInstalled": true,
         "controlledCrossNodeRelocationVerified": true,
-        "helmRequested": "32Gi"
+        "helmRequested": "32Gi",
+        "checkedAt": "2026-10-26T04:37:08.028Z",
+        "relocationEvidenceScope": "Earlier storage recovery; not repeated during official subscription switch"
       },
       "previousAcceptance": {
         "checkedAt": "2026-10-25T15:45:42.530Z",
         "status": "passed",
         "commit": "d2c27fb625726c4b748543dde15fad799655f20a"
       },
-      "reason": "CLAUDE_GATEWAY_BILLING_REQUIRED",
       "infrastructureAcceptance": "passed",
-      "latestEvidence": "evidence/pi4-recheck-2026-10-26.json",
+      "latestEvidence": "evidence/pi4-official-subscription-2026-10-26.json",
       "accountRecovery": {
-        "checkedAt": "2026-10-25T18:48:23.508Z",
-        "piNativeOAuth": "passed_sdk_after_codex_account_change",
+        "checkedAt": "2026-10-26T04:48:12.485Z",
+        "claude": "official_subscription_passed_sdk_and_web_after_restart",
+        "codex": "existing_official_login_passed_sdk_and_web_after_restart",
+        "piNativeOAuth": "passed_sdk_and_web_after_restart",
         "model": "openai-codex/gpt-6.1-sol",
-        "claude": "upstream_billing_402",
-        "codex": "passed_new_device_auth_sdk_and_official_web_two_turns",
-        "evidence": "evidence/pi4-account-recovery-2026-10-25.json",
+        "evidence": "evidence/pi4-official-subscription-2026-10-26.json",
         "deployedPaseoPlugin": "0.1.8",
-        "postRestartPiWeb": "passed_two_turns_and_reload",
-        "latestRecheck": {
-          "checkedAt": "2026-10-26T03:49:53.394Z",
-          "codex": "passed_sdk_two_turns",
-          "pi": "passed_sdk_two_turns",
-          "claude": "both_configured_models_http_402",
-          "webBrowserRepeated": false
-        }
+        "postRestartPiWeb": "passed_completed_two_turns_and_reload"
+      },
+      "paseoPlugin": {
+        "version": "0.1.8",
+        "commit": "3d330e31623bc61e81e7b487cb87d78f2b94d5b6"
       }
     }
   ],
@@ -444,8 +464,9 @@
     "Only the listed models and conversation paths were exercised; this is not exhaustive model or sustained-load validation.",
     "Mobile scrolling was verified with Chromium touch emulation, not physical phones; long model lists used synthetic data.",
     "Suite counts can overlap and must not be added as a unique test total; reply timings are individual samples, not load benchmarks.",
-    "Claude Code used the existing Omnigent DeepSeek gateway, not an Anthropic subscription.",
+    "Earlier Pi2/Pi3 and Pi4 runs used the existing Omnigent DeepSeek gateway. Pi4 switched to official Claude subscription on 2026-10-26; per-target evidence takes precedence.",
     "Relay proof is historical browser evidence; the daemon does not expose a confirmed current relay connection state.",
-    "Pi4 storage and local speech recovered; latest official Web conversation checks are blocked by provider billing/usage limits. Earlier successful conversation evidence is historical. See the dedicated Pi4 storage recovery report."
+    "Pi4 storage and listed three-provider text paths passed on 2026-10-26 with official Claude subscription. Reload during an unfinished turn showed a Web UI duplicate; only completed-turn reload passed. Commercial deployment readiness remains unproven; see latestEvidence.",
+    "Top-level version, suite counts and mobile layout checks describe the earlier fleet run; latest Pi4 version and conversation results are per-target. Pi2/Pi3 were not retested on 2026-10-26."
   ]
 }

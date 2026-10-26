@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-26T04:48:12.485Z",
+  "target": "pi4",
+  "status": "passed",
+  "acceptanceScope": "Listed SDK two-turn text conversations and official Web model/mode selection, two completed turns, reload and reconnect after controlled Pod restart",
+  "commercialDeploymentReady": false,
+  "paseoPlugin": {
+    "version": "0.1.8",
+    "commit": "3d330e31623bc61e81e7b487cb87d78f2b94d5b6"
+  },
+  "sourceCodeChanged": false,
+  "claudeAuthentication": {
+    "loggedIn": true,
+    "authMethod": "claude.ai",
+    "apiProvider": "firstParty",
+    "credentialFileMode": "0600",
+    "nativeLauncher": true,
+    "gatewayMarkerRemoved": true
+  },
+  "configuration": {
+    "anthropicDefault": "official_claude_subscription",
+    "openaiDefaultPreserved": true,
+    "piDefaultPreserved": true,
+    "previousGatewayEntryRetained": true,
+    "privateRollbackBackupCreated": true
+  },
+  "sdk": {
+    "checkedAt": "2026-10-26T04:35:39.581Z",
+    "passed": true,
+    "providers": [
+      {
+        "provider": "claude",
+        "passed": true,
+        "firstReply": true,
+        "followup": true,
+        "model": "claude-opus-5-5",
+        "modeId": "default",
+        "cleanup": {
+          "archived": true
+        }
+      },
+      {
+        "provider": "codex",
+        "passed": true,
+        "firstReply": true,
+        "followup": true,
+        "model": "gpt-6.1-sol",
+        "modeId": "auto",
+        "cleanup": {
+          "archived": true
+        }
+      },
+      {
+        "provider": "pi",
+        "passed": true,
+        "firstReply": true,
+        "followup": true,
+        "model": "openai-codex/gpt-6.1-sol",
+        "modeId": null,
+        "cleanup": {
+          "archived": true
+        }
+      }
+    ]
+  },
+  "officialWeb": [
+    {
+      "provider": "claude",
+      "model": "Opus 5.5",
+      "selectedMode": "Always ask",
+      "selectedModeVisible": true,
+      "host": "app.paseo.sh",
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 4478,
+      "secondReplyMs": 2909,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": true,
+      "pageErrors": [],
+      "testAgentArchived": true,
+      "afterPodRestart": true,
+      "checkedAt": "2026-10-26T04:46:26.527299+00:00",
+      "passed": true
+    },
+    {
+      "provider": "codex",
+      "model": "GPT-6.1-Sol",
+      "selectedMode": "Default permissions",
+      "selectedModeVisible": true,
+      "host": "app.paseo.sh",
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 5530,
+      "secondReplyMs": 2499,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": true,
+      "pageErrors": [],
+      "testAgentArchived": true,
+      "afterPodRestart": true,
+      "checkedAt": "2026-10-26T04:47:05.774267+00:00",
+      "passed": true
+    },
+    {
+      "provider": "pi",
+      "model": "openai-codex/gpt-6.1-sol",
+      "selectedModeVisible": true,
+      "host": "app.paseo.sh",
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 9639,
+      "secondReplyMs": 2414,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": true,
+      "pageErrors": [],
+      "testAgentArchived": true,
+      "afterPodRestart": true,
+      "checkedAt": "2026-10-26T04:47:50.780157+00:00",
+      "passed": true
+    }
+  ],
+  "afterRestart": {
+    "checkedAt": "2026-10-26T04:37:08.028Z",
+    "criticalFilesPreserved": true,
+    "criticalFileCount": 8,
+    "filesystem": {
+      "capacityBytes": 33636024320,
+      "availableBytes": 12264951808,
+      "fsyncReadbackPassed": true
+    },
+    "speech": {
+      "enabled": true,
+      "models": [
+        "parakeet-tdt-0.6b-v2-int8",
+        "kokoro-en-v0_19"
+      ],
+      "missing": [],
+      "persistentBzip2Passed": true
+    },
+    "storage": {
+      "requested": "32Gi",
+      "pvcCapacity": "32Gi",
+      "pvcResizePending": false,
+      "engineSizeBytes": 34359738368,
+      "volumeState": "attached",
+      "volumeHealth": "healthy",
+      "replicaModes": [
+        "RW",
+        "RW"
+      ],
+      "expansionRequired": false,
+      "attachmentTicketTypes": [
+        "csi-attacher"
+      ],
+      "recoverySnapshotReady": true,
+      "helmRequested": "32Gi"
+    },
+    "deployment": {
+      "hostnamePinPresent": false,
+      "desiredReplicas": 1,
+      "readyReplicas": 1,
+      "podCount": 1,
+      "containersReady": true,
+      "containerRestartCounts": [
+        0,
+        0
+      ]
+    },
+    "preservationBaseline": "After official Claude login and provider switch; before this controlled restart"
+  },
+  "finalPluginState": {
+    "checkedAt": "2026-10-26T04:48:12.485Z",
+    "http": 200,
+    "cacheControl": "private, no-store",
+    "daemonHealthy": true,
+    "onboardingCompleted": true,
+    "allProvidersVerified": true,
+    "relayVerified": true,
+    "providers": [
+      {
+        "id": "claude",
+        "chatVerified": true,
+        "code": null
+      },
+      {
+        "id": "codex",
+        "chatVerified": true,
+        "code": null
+      },
+      {
+        "id": "pi",
+        "chatVerified": true,
+        "code": null
+      }
+    ],
+    "unarchivedAgents": 0,
+    "nativeClaudeLauncher": true,
+    "gatewayMarkerRemoved": true,
+    "credentialFileMode": "600"
+  },
+  "limits": [
+    "Only listed models and two-turn text paths were exercised; timings are individual samples, not SLA or load measurements.",
+    "Reload passed after both turns finished. Earlier reload during an unfinished turn showed a duplicate Claude reply in the Web UI; the server timeline contained exactly two assistant replies. Fresh browser reopening showed two replies. The streaming/reconnect UI issue is not fixed by this configuration change.",
+    "Relay verification is historical browser evidence, not proof of a continuously connected client.",
+    "Cross-node relocation evidence belongs to the earlier storage-recovery run; this run repeated a controlled restart, not another relocation or disaster recovery.",
+    "Local speech configuration, model presence and bzip2 were checked; this run did not test microphone, speech recognition or voice output.",
+    "No Pi2/Pi3/Pi7 deployment, HA Store synchronization or PaaS release was repeated by this account switch."
+  ]
+}

@@ -75,6 +75,8 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 在 Omnigent 切回官方 Claude provider 後，按 Paseo 的「啟動／繼續初始化」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
 
+從 gateway 改用 Claude 官方訂閱時，先在 Pi Web 相同 HOME 執行 `claude auth login --claudeai`，完成[官方瀏覽器授權](https://code.claude.com/docs/en/authentication)，再將 Omnigent 的 **Anthropic 預設來源**選為 Claude 訂閱並啟動／繼續 Paseo 初始化。只完成 CLI 登入，不會覆蓋仍被選用的 gateway。切換時保留 OpenAI 與 Pi 的預設來源；官方登入資料由 Claude CLI 管理，不應貼入 Paseo 或 Omnigent 的設定檔。Pi4 的切換、重啟及實測範圍見[官方訂閱驗證](docs/pi4-official-subscription-2026-10-26.md)。
+
 ### 選用 Omnigent gateway 作為 Codex 模型來源
 
 有 OpenAI Responses 相容 Omnigent 路由的部署，可參考[通用封裝範例](examples/omnigent-codex-gateway.py)，用 Paseo [自訂 provider](https://paseo.sh/docs/custom-providers) 的 `extends: "codex"`、`command`、`env` 和 `models` 建立獨立選項。範例需要 Python YAML 套件，以及 `PI_PASEO_OMNIGENT_CONFIG`、`PI_PASEO_OMNIGENT_PROVIDER`、`PI_PASEO_CODEX_BINARY`；可用 `PI_PASEO_CODEX_HOME` 指定私有 Codex home。範例每次啟動從受保護的 Omnigent 設定執行既有 `pi auth print-api-key` 命令，把憑證放在 Codex 子程序環境，專用 `config.toml` 只寫入路由和模型。部署者須保護設定檔與工作目錄，並在變更後執行 `paseo --home /path/to/paseo-home daemon reload`，指定這個插件管理的 daemon home。
