@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-26T08:22:46.135Z",
+  "target": "pi4",
+  "status": "passed",
+  "scope": "Unmodified published static client, normal authenticated Pi Web HTTPS setup/pair button, Claude live-stream reload and Codex/Pi completed-turn reload",
+  "commercialDeploymentReady": false,
+  "entry": {
+    "checkedAt": "2026-10-26T08:18:28.591Z",
+    "origin": "https://paas-cs-504a2b17-a7055f2f.woowtech.io",
+    "build": {
+      "version": "0.13.0-woow.1",
+      "basePath": "/paseo-web",
+      "sourceCommit": "68388f19198f1f696efe18906df42049e208d135",
+      "repairCommit": "043aa8286b90418eb1f4e9982ca1a349c84f2a3d"
+    },
+    "setupReady": true,
+    "normalEntry": true,
+    "htmlNoStore": true,
+    "hashedAssetImmutable": true,
+    "deepLinkRefresh": true,
+    "unauthenticatedStatuses": [
+      401,
+      401,
+      401
+    ],
+    "tabOrder": [
+      "MCP",
+      "Omnigent",
+      "Paseo"
+    ],
+    "mobileWidth": 390,
+    "mobileOverflow": false,
+    "pageErrors": []
+  },
+  "browser": [
+    {
+      "target": "pi4",
+      "provider": "claude",
+      "model": "Opus 5.5",
+      "selectedMode": "Always ask",
+      "selectedModeVisible": true,
+      "host": "paas-cs-504a2b17-a7055f2f.woowtech.io",
+      "connectCount": 1,
+      "workspaceVisible": true,
+      "workspaceCount": 2,
+      "agentButtonCount": 1,
+      "selectModelCount": 1,
+      "piProviderCount": 1,
+      "modelSearchCount": 1,
+      "fixedModelCount": 1,
+      "composerCount": 1,
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 10031,
+      "secondReplyMs": 8005,
+      "newAgentVisible": false,
+      "addProjectVisible": false,
+      "browserOnlyPatch": false,
+      "actualStaticClient": true,
+      "reloadDuringOpenTurn": true,
+      "longStreamCompletedAfterReload": true,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": false,
+      "pageErrors": [],
+      "openedFromSetupPairButton": true,
+      "testAgentArchived": true
+    },
+    {
+      "target": "pi4",
+      "provider": "codex",
+      "model": "GPT-6.1-Sol",
+      "selectedMode": "Default permissions",
+      "selectedModeVisible": true,
+      "host": "paas-cs-504a2b17-a7055f2f.woowtech.io",
+      "connectCount": 1,
+      "workspaceVisible": true,
+      "workspaceCount": 2,
+      "agentButtonCount": 1,
+      "selectModelCount": 1,
+      "piProviderCount": 1,
+      "modelSearchCount": 1,
+      "fixedModelCount": 1,
+      "composerCount": 1,
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 9033,
+      "secondReplyMs": 4412,
+      "newAgentVisible": false,
+      "addProjectVisible": false,
+      "browserOnlyPatch": false,
+      "actualStaticClient": true,
+      "reloadDuringOpenTurn": false,
+      "longStreamCompletedAfterReload": false,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": true,
+      "pageErrors": [],
+      "openedFromSetupPairButton": true,
+      "testAgentArchived": true
+    },
+    {
+      "target": "pi4",
+      "provider": "pi",
+      "model": "openai-codex/gpt-6.1-sol",
+      "selectedModeVisible": true,
+      "host": "paas-cs-504a2b17-a7055f2f.woowtech.io",
+      "connectCount": 1,
+      "workspaceVisible": true,
+      "workspaceCount": 2,
+      "agentButtonCount": 1,
+      "selectModelCount": 1,
+      "piProviderCount": 1,
+      "modelSearchCount": 1,
+      "fixedModelCount": 1,
+      "composerCount": 1,
+      "twoTurnReplyCount": 2,
+      "firstReplyMs": 13226,
+      "secondReplyMs": 3476,
+      "newAgentVisible": false,
+      "addProjectVisible": false,
+      "browserOnlyPatch": false,
+      "actualStaticClient": true,
+      "reloadDuringOpenTurn": false,
+      "longStreamCompletedAfterReload": false,
+      "reconnectedAfterReload": true,
+      "composerReadyAfterReload": true,
+      "completedTurnsBeforeReload": true,
+      "pageErrors": [],
+      "openedFromSetupPairButton": true,
+      "testAgentArchived": true
+    }
+  ],
+  "backendComparisons": [
+    {
+      "checkedAt": "2026-10-26T08:18:56.730Z",
+      "provider": "claude",
+      "browserAssistantCount": 2,
+      "serverAssistantCount": 2,
+      "exactTextAndIdentityMatch": true,
+      "replyLengths": [
+        25,
+        4723
+      ],
+      "streamEndPresent": true,
+      "status": "idle"
+    },
+    {
+      "checkedAt": "2026-10-26T08:20:32.087Z",
+      "provider": "codex",
+      "browserAssistantCount": 2,
+      "serverAssistantCount": 2,
+      "exactTextAndIdentityMatch": true,
+      "replyLengths": [
+        25,
+        25
+      ],
+      "streamEndPresent": false,
+      "status": "idle"
+    },
+    {
+      "checkedAt": "2026-10-26T08:22:34.053Z",
+      "provider": "pi",
+      "browserAssistantCount": 2,
+      "serverAssistantCount": 2,
+      "exactTextAndIdentityMatch": true,
+      "replyLengths": [
+        25,
+        25
+      ],
+      "streamEndPresent": false,
+      "status": "idle"
+    }
+  ],
+  "deployment": {
+    "checkedAt": "2026-10-26T08:22:46.135Z",
+    "plugins": [
+      {
+        "name": "pi-paseo-plugin",
+        "version": "0.1.9",
+        "commit": "eed990fe06899e42bf446cf2d584ed2c26ae6bed"
+      },
+      {
+        "name": "pi-omnigent-plugin",
+        "version": "0.3.15",
+        "commit": "95a40837262e5a8768921edc260866c8d7332dd3"
+      }
+    ],
+    "phase": "running",
+    "daemonReachable": true,
+    "webClient": {
+      "ready": true,
+      "version": "0.13.0-woow.1",
+      "sourceCommit": "68388f19198f1f696efe18906df42049e208d135",
+      "basePath": "/paseo-web"
+    },
+    "onboardingCompleted": true,
+    "providers": [
+      {
+        "provider": "claude",
+        "status": "ready",
+        "chatVerified": true
+      },
+      {
+        "provider": "codex",
+        "status": "ready",
+        "chatVerified": true
+      },
+      {
+        "provider": "pi",
+        "status": "ready",
+        "chatVerified": true
+      }
+    ],
+    "officialClaudeLoggedIn": true,
+    "unarchivedAgents": 0,
+    "composition": "omnigent+paseo",
+    "buildPrebuilt": true,
+    "buildCacheAbsent": true,
+    "failedBuildStageAbsent": true,
+    "diskAvailableBytes": 10688667648,
+    "pod": {
+      "count": 1,
+      "allContainersReady": true,
+      "restartCounts": [
+        0,
+        0
+      ]
+    }
+  },
+  "artifactTransfer": {
+    "sha256": "fe776216e1b91ab5c75a0fa787eaf8e69cd75f752865146eb554ec29b9c07985",
+    "files": 64113,
+    "bytes": 984235484
+  },
+  "ci": {
+    "plugin": "https://github.com/WOOWTECH/pi-paseo-plugin/actions/runs/40288116924",
+    "combined": "https://github.com/WOOWTECH/pi-omnigent-plugin/actions/runs/40289491944",
+    "staticClient": "https://github.com/WOOWTECH/paseo/actions/runs/40284174819"
+  },
+  "deploymentRecovery": {
+    "localBuildOOM": true,
+    "recoveredWithVerifiedPrebuilt": true,
+    "staleInstanceBackedUpAfterOwnerAndProcessChecks": true,
+    "unrelatedPidSignaled": false,
+    "controlledRestartUsedGracefulDaemonStop": true
+  },
+  "limits": [
+    "The upstream official website was not changed; PR #7908 remains open.",
+    "Codex and Pi reloads were after completed turns; only Claude was reloaded during an open turn.",
+    "Browser timings are individual samples, not load or SLA measurements.",
+    "Mobile checks used Chromium emulation; physical phones and voice were not tested.",
+    "Automatic recovery from stale PID metadata after abrupt container failure was not changed; this incident used verified operator recovery.",
+    "This phase did not release HA/PaaS images or retest HA Store/local-build synchronization."
+  ]
+}

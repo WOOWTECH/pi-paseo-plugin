@@ -193,3 +193,5 @@ pi install git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.7
 ```
 
 Paseo 安裝器會交給 Omnigent 建立共用介面；完成後重啟 Pi Web，再到 `/paseo/setup` 配對。收到 `RESTART_REQUIRED` 時，完成重啟後重新整理並驗證三種引擎對話。首次編譯建議預留至少 3 GiB 可用磁碟空間；實測不足 1 GiB 時套件安裝可能因 `ENOSPC` 失敗。官方 Paseo 的主機顯示名稱請在 Paseo App 內修改；插件的「容器備註」僅存於設定頁。
+
+2026-10-26：Pi4 已部署修正版 `/paseo-web`，完成 Claude 串流中重新整理及三引擎續聊驗收，詳見[正式部署報告](docs/pi4-managed-web-2026-10-26.md)。
