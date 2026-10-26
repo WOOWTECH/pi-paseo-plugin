@@ -1,3 +1,19 @@
+# 0.1.10：PID 出生證明、共同 writer 鎖與 r2 升級控制（2026-10-26）
+
+在公開 root 0.3.7 映像的隔離 UID1000 Pod，疊加精確插件來源 `3585b36d9242931d87769e513e12eca27d4e1cc4`，使用真實 Paseo 0.11.2 daemon 與既有 CLI，完成以下驗證。這是開發來源與實際 daemon 的驗收；新發行映像、combined adapter 與各部署通路仍需各自驗證。
+
+- 健康啟動記錄與核心 boot/start identity 一致的私有 proof；配對走受保護的 `/paseo-web`，配對 URL 沒有輸出。
+- 正常停止自己的 daemon 後，以受控 fixture 將 QA PID receipt 綁定到另一個存活 sentinel，保留舊 birth。`status()` 拒絕控制且不改檔；`activate()` 只隔離舊 receipt，重新啟動成功，sentinel 仍存活。
+- installation、初始化對話、配對及 server-id 保留；再次啟用沿用同一 PID。兩個獨立插件程序同時冷啟動，最終只有一個 supervisor。
+- 健康 r2 回報 `RESTART_REQUIRED`，正常停止／重啟後轉到 r3。即使 r3 尚不存在，新插件仍能顯示並真正停止已驗證的 r2，沒有下載 runtime。
+- Claude、Codex、Pi 的真實 CLI 被偵測；模型呼叫為零。本次沒有宣稱強制產生核心 PID 重用、OOM 或三引擎付費對話。
+
+插件 163 項測試、installer/bootstrap 44 項、host 94 項及 TypeScript 通過。兩份官方 PID module 的四種 writer 均以真實子程序測試共同 transition 鎖；另包含舊 proof 缺失、未知 runtime、UID／symlink／權限與重複 supervisor 等拒絕案例。原始錯誤、quarantine 競態、pair 與 r2-only stop 缺口都有修補前失敗的重現。
+
+雲端 host 曾因偏好設定 VM fixture 沒有真實 PID module，卻呼叫嚴格 readiness 寫入而失敗。已將此非 Linux fixture 的 readiness 與其他假 daemon 介面保持一致；正式 UI 與 runtime 檢查未放寬，host 行為斷言全數保留。雲端完整 build/browser 的最終結果以對應 PR checks 為準。
+
+[非機密實際 daemon 驗收回條](evidence/paseo-pid-recovery-2026-10-26.json) 明確記錄測試範圍；它不解除舊 PaaS 候選 20261026.1200 的 HOLD。
+
 > 2026-10-26 06:30 UTC Pi4 最新結果：Claude 串流中重新整理的重複列及長回覆截斷，已完成來源修補與隔離瀏覽器驗證，兩則回覆文字及 ID 與後端完全一致；**官方網站尚未部署修補**。詳見[修補報告](pi4-stream-reload-2026-10-26.md)與[驗證回條](evidence/pi4-stream-reload-2026-10-26.json)。Pi4 維持公開 `v0.1.8`；三引擎的既有驗收見[官方訂閱報告](pi4-official-subscription-2026-10-26.md)。下方各節保留原驗證日期，不能視為所有部署的最新狀態。
 
 # 官方登入完成後的三種 provider 驗收（2026-10-25）

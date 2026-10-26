@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-26T14:09:56.408809+00:00",
+  "passed": true,
+  "sourceCommit": "3585b36d9242931d87769e513e12eca27d4e1cc4",
+  "scope": "Final plugin source development overlay on public root0.3.7, actual Linux daemon, uid1000; not new distribution image acceptance",
+  "imageID": "ghcr.io/woowtech/woow-k3s-pi-agent@sha256:a25710c194bf0d2ec34bc7448cd31ea301f10c78fe27a89dc39767ed994e93ee",
+  "sourceFilesVerified": 90,
+  "uid": 1000,
+  "runtimeRevision": "0.11.2-r3-6d8dbe515479",
+  "checks": {
+    "actualHealthyBirthProof": true,
+    "privatePairing": true,
+    "controlledReceiptRecovery": true,
+    "foreignSentinelSurvives": true,
+    "singleSupervisor": true,
+    "repeatActivateSamePid": true,
+    "twoProcessColdStartSingleSupervisor": true,
+    "r2ExplicitStopStart": true,
+    "r2VisibleAndStoppedWithoutR3OrDownload": true,
+    "installationOnboardingPairingServerIdPreserved": true
+  },
+  "modelCalls": 0,
+  "realProviderConversations": false,
+  "actualKernelPidReuseOrOOMInduced": false,
+  "pairingUrlOrCredentialsExported": false,
+  "finalPublishedImageQaStillRequired": true
+}

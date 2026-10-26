@@ -6,13 +6,15 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 
 `v0.1.9` 由插件下載並管理已修補的 Paseo Web 0.13.0，透過 Pi Web 同一網址的 `/paseo-web` 開啟。固定發布包須通過 SHA-256 與來源版本驗證，完成後才切換；登入保護、provider 登入及官方加密 relay 沿用現有設定。修補包含回覆途中重新整理的重複顯示與長回覆截斷；官方 `app.paseo.sh` 的部署進度另見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 
-## 0.1.10 PID 復原修補（待實際 daemon 驗收，尚未發布）
+## 0.1.10 PID 復原修補
 
 新 managed runtime revision 為 `0.11.2-r3-6d8dbe515479`，沿用 0.11.2 的固定依賴，額外驗證並修補兩份官方 PID writer。Linux 下，健康啟動或採用後會記錄私有程序出生證明；若同一核心重用了 PID，只在原 installation、home、PID lock 與 boot/start identity 都能證明舊程序已消失時，才隔離自己的過期 PID record 並重新啟動。外來程序不會被終止；設定、登入、資料庫、配對及初始化對話保留。
 
 這項自動復原需要此前成功啟動時建立的 proof。舊版沒有可信 proof 的陌生 PID 仍回報 `DAEMON_NOT_OWNED`，不會自動清檔。仍健康運作的 r2 daemon 會回報 `RESTART_REQUIRED`；正常停止後再啟用即可建立 r3 proof，無須移除私人資料。
 
 `linux-flock-v1` 共同鎖涵蓋這份 r3 runtime 兩個官方模組的 acquire、refresh、update、release，包括直接使用該 runtime 的 CLI。獨立安裝的舊版 CLI 或任意同 UID 程式不受此協定保護，不能與本插件共用其私有 `PASEO_HOME`。未知或不完整的 runtime patch、缺少協定標記、不安全檔案與另一個存活 supervisor 都會停止復原。不要刪除持久的 `.pi-paseo-pid-transition.guard`；它是所有 writer 共用的鎖 inode。
+
+已完成 UID1000 隔離環境的實際 daemon 啟動、配對、受控 receipt 復原、r2 遷移及並行冷啟動驗證，沒有模型呼叫或 live fleet 變動。這不是強制核心 PID 重用／OOM 或最終發行映像的驗收；範圍見[驗證紀錄](docs/validation.md)。
 
 ## 相容版本
 
