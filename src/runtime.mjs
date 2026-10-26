@@ -13,6 +13,7 @@ import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,RUNTIME_REVISION} from './runtime-layout.mjs';
+import { ensureWebClient, managedPairUrl, webClientStatus } from './web-client.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
 const PROVIDERS = ['claude', 'codex', 'pi'];
@@ -135,6 +136,7 @@ export async function activate(options = {}) {
     try {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
       await installRuntime();
+      await ensureWebClient(locations());
       const existing = await currentInstance(); const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
         await verifyInstanceOwnership(existing);
@@ -236,11 +238,12 @@ async function readModels(provider) {
   }, 150000);
 }
 export async function pair() {
+  if (!webClientStatus(locations()).ready) throw new RuntimeError('WEB_CLIENT_NOT_READY');
   const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
   const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
   if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');
   const url = new URL(offer.url); if (url.protocol !== 'https:' || url.hostname !== 'app.paseo.sh') throw new RuntimeError('PAIRING_ORIGIN_INVALID');
-  const pairing = { url: offer.url, createdAt: new Date().toISOString() };
+  const pairing = { url: managedPairUrl(offer.url), createdAt: new Date().toISOString() };
   atomicJson(path.join(locations().stateDir, 'pairing.private.json'), pairing);
   updateState({ pairingCreatedAt: pairing.createdAt });
   return pairing;

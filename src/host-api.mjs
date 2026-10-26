@@ -4,14 +4,16 @@ import {fileURLToPath} from 'node:url';
 import * as runtime from './runtime.mjs';
 import { ensureOnboarding, onboardingStatus, readRecord, writeRecord, withLock } from './onboarding.mjs';
 import { startSupervisor, stopSupervisor, packageEnabled } from './supervisor.mjs';
+import { serveWebClient, webClientStatus, WEB_BASE_PATH } from './web-client.mjs';
 
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
 export async function status() {
   const result=await runtime.status();
   const onboarding=onboardingStatus();
   return {...result,onboardingSessionId:onboarding.sessionId||null,onboardingCompleted:!!onboarding.completed,
-    openUrl:'https://app.paseo.sh',setupUrl:'/paseo/setup',settings:readRecord(path.join(runtime.locations().stateDir,'preferences.json'))};
+    openUrl:WEB_BASE_PATH,webClient:webClientStatus(runtime.locations()),setupUrl:'/paseo/setup',settings:readRecord(path.join(runtime.locations().stateDir,'preferences.json'))};
 }
+export function web(request) { return serveWebClient(request, runtime.locations()); }
 export async function lifecycle(input={}, hooks={}) {
   const loc=runtime.locations();
   return withLock(path.join(loc.stateDir,'host-lifecycle.lock'),async()=>{

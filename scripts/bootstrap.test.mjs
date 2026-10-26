@@ -32,6 +32,7 @@ function fixture(t) {
   write(path.join(source, 'bin/install-host.mjs'), `import fs from 'node:fs';export async function installHost(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'host-install\\n');return {restartRequired:true}};if(process.argv[1]?.endsWith('install-host.mjs'))await installHost();\n`);
   write(path.join(source, 'src/runtime.mjs'), `import fs from 'node:fs';export const locations=()=>({home:process.env.HOME,stateDir:process.env.BOOTSTRAP_STATE});export async function activate(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'activate\\n')}export async function deactivate(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'deactivate\\n')}export async function status(){return {daemon:{running:false}}}\n`);
   write(path.join(source, 'src/health.mjs'), 'export async function healthReport(){return {healthy:true}}\n');
+  write(path.join(source, 'src/web-client.mjs'), 'export const WEB_BASE_PATH="/paseo-web";export function webClientStatus(){return {ready:false}}export function serveWebClient(){throw Error("Unexpected static request")}\n');
   write(path.join(source, 'src/supervisor.mjs'), `import fs from 'node:fs';export async function startSupervisor(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'supervisor-start\\n');return {running:true}}export async function stopSupervisor(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'supervisor-stop\\n')}export function packageEnabled(){return true}export async function supervise(){}\n`);
   const git = (...args) => {
     const result = spawnSync('git', args, { cwd: source, env, encoding: 'utf8' });

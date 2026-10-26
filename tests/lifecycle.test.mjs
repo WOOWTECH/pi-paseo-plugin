@@ -84,7 +84,7 @@ function fixture(t) {
       if (spec.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(absolute), spec)));
       return require(spec);
     };
-    vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { process: fakeProcess, setTimeout: (fn, ms) => setTimeout(fn, ms >= 15000 ? 1 : ms), clearTimeout, console }, { filename: absolute })(localRequire, module, module.exports);
+    vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { process: fakeProcess, URL, setTimeout: (fn, ms) => setTimeout(fn, ms >= 15000 ? 1 : ms), clearTimeout, console }, { filename: absolute })(localRequire, module, module.exports);
     return module.exports;
   }
   function write(name, value) { fs.writeFileSync(path.join(loc.stateDir, name + '.json'), JSON.stringify(value)); }

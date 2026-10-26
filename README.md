@@ -2,9 +2,9 @@
 
 Pi Agent / Pi Web 插件。在 Pi 容器中下載並管理 Paseo，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。Pi Web 安裝／啟用後建立一次「Paseo 連線初始化」對話；未完成時續用同一對話。
 
-Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生配對連結，再在新分頁開啟完整 Paseo。官方 relay 不需要額外的 Paseo 帳號密碼。
+Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生配對連結，再在新分頁開啟完整 Paseo。官方 relay 不需要額外的 Paseo 帳號密碼。修正版網頁由 Pi Web 既有登入保護；分享入口網址不會自動分享配對權限。
 
-2026-10-26：Claude 回覆途中重新整理的重複顯示與內容截斷已公開來源修補，並通過 Pi4 隔離瀏覽器驗證；**官方 Paseo 網站尚未部署，安裝本插件不會自動套用該網頁修補**。進度與驗證範圍見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
+`v0.1.9` 由插件下載並管理已修補的 Paseo Web 0.13.0，透過 Pi Web 同一網址的 `/paseo-web` 開啟。固定發布包須通過 SHA-256 與來源版本驗證，完成後才切換；登入保護、provider 登入及官方加密 relay 沿用現有設定。修補包含回覆途中重新整理的重複顯示與長回覆截斷；官方 `app.paseo.sh` 的部署進度另見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 
 ## 相容版本
 
@@ -12,6 +12,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
 - Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
+- 受管理的網頁包另需 `tar`；下載約 11 MB，固定版本與校驗值記錄於 `runtime/web-client.json`。
 - 登入在執行 Pi Web 的同一使用者 HOME。插件沿用現有 provider CLI；缺少時下載固定版本到插件的獨立目錄。既有帳號資料用於官方 CLI 登入。
 
 啟用本機聽寫或語音模式時，服務的 PATH 還需要 `tar` 與 `bzip2`，並預留語音模型下載、解壓縮與執行所需空間。Paseo 會自動下載缺少的模型；精簡容器沒有 `bzip2` 時，可能已下載完整壓縮檔卻回報 `tar exited with code 2`。容器映像應安裝此相依套件，或使用服務啟動時可找到的持久化工具；只在暫時容器層安裝，重建後會消失。本插件不會替容器安裝 OS 套件。Pi4 的實測與恢復紀錄見 [儲存復原驗證](docs/pi4-storage-recovery-2026-10-25.md)。
@@ -26,7 +27,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.8`。若同一 Pi Web 也安裝 Omnigent `v0.3.12`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。各版本的實測範圍請參考驗證紀錄。
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.9`。若同一 Pi Web 也安裝 Omnigent `v0.3.14`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。各版本的實測範圍請參考驗證紀錄。
 
 或在 Pi Web 使用者的終端直接執行：
 
@@ -60,7 +61,7 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 1. 開啟初始化對話及 `/paseo/setup`，查看服務與三種 provider 的診斷。
 2. 缺少或過期的登入，使用 `claude auth login`、`codex login` 或 Pi 的 `/login`。密碼、API Key 與 OAuth 資訊只在官方登入介面或 Pi Web 模型設定輸入。
-3. 在設定頁按 **產生配對連結** → **使用配對連結開啟 Paseo**。
+3. 等待「修正版 Paseo 網頁已就緒」，再按 **產生配對連結** → **使用配對連結開啟 Paseo**。入口位於同一 Pi Web 網址的 `/paseo-web/`；從官方網站改到此入口時需要在新入口配對一次，Claude／Codex／Pi 不必重新登入。
 4. 在 Paseo 選擇這個容器、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
