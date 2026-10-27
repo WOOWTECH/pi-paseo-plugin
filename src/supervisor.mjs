@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {DefaultPackageManager, SettingsManager} from '@earendil-works/pi-coding-agent';
 import * as runtime from './runtime.mjs';
 import {processIdentity, assertSafePath} from './state.mjs';
-import { readRecord, writeRecord, withLock, ensureOnboarding, createViaLocalWeb } from './onboarding.mjs';
+import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function alive(pid) {try{process.kill(pid,0);return true;}catch{return false;}}
@@ -43,8 +43,8 @@ export function packageEnabled(loc=runtime.locations(),{cwd}={}) {
   return typeof entry==='string'||!!entry&&(!Array.isArray(entry.extensions)||entry.extensions.length>0);
  });
 }
-/** @param {{fallbackOnboarding?: boolean, cwd?: string}} [options] */
-export async function startSupervisor({fallbackOnboarding=false,cwd}={}) {
+/** @param {{cwd?: string}} [options] */
+export async function startSupervisor({cwd}={}) {
  const loc=runtime.locations(),file=path.join(loc.stateDir,'supervisor.json');
  return withLock(path.join(loc.stateDir,'supervisor-start.lock'),async()=>{
   if(!packageEnabled(loc,{cwd}))return {running:false};
@@ -59,7 +59,7 @@ export async function startSupervisor({fallbackOnboarding=false,cwd}={}) {
   let child;
   try {
    fs.fchmodSync(log,0o600);
-   child=spawn(process.execPath,[path.join(root,'bin/cli.mjs'),'supervise',...(fallbackOnboarding?['--fallback-onboarding']:[])],{cwd:cwd||readRecord(path.join(loc.stateDir,'host-registration.json')).cwd||process.cwd(),detached:true,stdio:['ignore',log,log],env:process.env});
+   child=spawn(process.execPath,[path.join(root,'bin/cli.mjs'),'supervise'],{cwd:cwd||readRecord(path.join(loc.stateDir,'host-registration.json')).cwd||process.cwd(),detached:true,stdio:['ignore',log,log],env:process.env});
   } finally {fs.closeSync(log);}
   await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
   writeRecord(file,{pid:child.pid,identity:processIdentity(child.pid),packageRoot:root,startedAt:new Date().toISOString()});child.unref();
@@ -73,7 +73,7 @@ export async function stopSupervisor({timeoutMs=5000}={}) {
   return {stopped:true};
  });
 }
-export async function supervise({fallbackOnboarding=false}={}) {
+export async function supervise() {
  const loc=runtime.locations();
  let stop=false,initialized=false,retries=0,wake;
  const shutdown=()=>{stop=true;wake?.();};
@@ -94,10 +94,6 @@ export async function supervise({fallbackOnboarding=false}={}) {
     if(!initialized||!result.daemon?.running) {await runtime.activate();initialized=true;}
     if(stop)break;
     if(!packageEnabled(loc)){await runtime.deactivate();break;}
-    if(fallbackOnboarding) {
-     const api=await import('./onboarding.mjs');
-     if(!stop&&!api.onboardingStatus(loc).sessionId) await ensureOnboarding((p,remember)=>createViaLocalWeb(p,loc,remember),loc);
-    }
     retries=0;
    } catch(e) {
     // Keep only an error class; providers and pairing output can carry credentials.

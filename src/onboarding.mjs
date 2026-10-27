@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { locations, atomicJson, privateDirectory, assertSafePath, processIdentity, RuntimeError, withLockTransition, checkLockSignal, pauseForLock } from './state.mjs';
+import { atomicJson, privateDirectory, assertSafePath, processIdentity, RuntimeError, withLockTransition, checkLockSignal, pauseForLock } from './state.mjs';
 
 export function readRecord(file, fallback = {}) {
   try {
@@ -76,77 +76,4 @@ export async function withLock(file, fn, { timeoutMs = 15000, signal } = {}) {
       if (current?.ino === acquired.ino && current?.dev === acquired.dev && readRecord(path.join(file, 'owner.json')).token === token) fs.rmSync(file, { recursive: true, force: true });
     } catch {}
   }
-}
-export function onboardingStatus(loc = locations()) {
-  return readRecord(path.join(loc.stateDir,'onboarding.json'));
-}
-export const onboardingPrompt = '這是使用者已授權的 Paseo 連線初始化對話。插件會在目前容器安裝並管理 Paseo，沿用 Claude Code、Codex、Pi 現有登入。' +
- '請用繁體中文呼叫 paseo_status，說明安裝、模型與登入狀態；引導使用者由插件設定頁完成官方 relay 配對。' +
- '官方 relay 通常不需要 Paseo 帳號密碼。密碼、API Key、配對連結只輸入受保護的設定畫面，不能貼到聊天或工具。' +
- '未完成設定時續用本對話，不建立重複對話，不自行更改權限、重裝全域工具、重啟 Pi Web 或操作其他服務。';
-export async function ensureOnboarding(create, loc = locations()) {
-  return withLock(path.join(loc.stateDir,'onboarding.lock'), async()=>{
-    const file=path.join(loc.stateDir,'onboarding.json');
-    let record=readRecord(file);
-    if (record.sessionId) return record;
-    if (record.creation === 'pending') throw new Error('Onboarding creation needs reconciliation; automatic duplicate creation is stopped');
-    record={...record,creation:'pending',requestedAt:new Date().toISOString()};
-    writeRecord(file,record);
-    // Creators can checkpoint the ID as soon as it is known, before naming,
-    // prompting or shutdown. Those later operations must never hide creation.
-    const remember = sessionId => {
-      if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 200) throw new Error('Host did not return an onboarding session id');
-      if (record.sessionId && record.sessionId !== sessionId) throw new Error('Onboarding session id changed');
-      record = { ...record, sessionId, creation: 'created', completed: false };
-      writeRecord(file, record);
-    };
-    try {
-      const created = await create(onboardingPrompt, remember);
-      const sessionId = typeof created === 'string' ? created : created?.sessionId;
-      remember(sessionId);
-      return record;
-    } catch (e) {
-      // Only a proven pre-creation failure permits retry. Unknown host results
-      // stay pending; a confirmed ID always resumes the same conversation.
-      record = { ...record, ...(e instanceof CreationNotStarted && !record.sessionId ? { creation: 'retryable' } : {}), error: 'Host could not confirm onboarding initialization' };
-      writeRecord(file, record);
-      throw e;
-    }
-  });
-}
-export async function localWebApi(route, body, {method='POST', cookie, port=process.env.PI_WEB_PORT||process.env.PORT||'30141'}={}) {
-  if (!/^\d{1,5}$/.test(String(port))||Number(port)<1||Number(port)>65535) throw new Error('Invalid Pi Web port');
-  const response=await fetch('http://127.0.0.1:'+port+route,{method,headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(30000)});
-  if (!response.ok) {
-    // Pi Web guarantees that prompt_rejected was not accepted. A missing model
-    // can cause this before a session is persisted, so a later host hook may retry.
-    if (route === '/api/agent/new') {
-      const rejected = await response.json().catch(() => null);
-      if (rejected?.code === 'prompt_rejected' && rejected.accepted === false) throw new CreationNotStarted();
-    }
-    throw new Error('Pi Web request rejected (HTTP '+response.status+')');
-  }
-  return response;
-}
-class CreationNotStarted extends Error {
-  constructor() { super('Pi Web login is unavailable'); this.name = 'OnboardingLoginError'; }
-}
-export async function createViaLocalWeb(prompt, loc = locations(), remember = () => {}) {
-  let cookie;
-  try {
-    if (process.env.PI_WEB_PASSWORD) {
-      const login = await localWebApi('/api/web-auth', { password: process.env.PI_WEB_PASSWORD });
-      cookie = login.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
-      if (!cookie) throw new Error();
-    }
-  } catch { throw new CreationNotStarted(); }
-  // The first prompt must be part of creation. ensure_session may return an ID
-  // for a runtime that disappears without ever writing a session file.
-  const response = await localWebApi('/api/agent/new', { cwd: loc.home, type: 'prompt', message: prompt }, { cookie });
-  const created = await response.json();
-  if (typeof created.sessionId !== 'string' || !created.sessionId) throw new Error('Pi Web returned no session');
-  remember(created.sessionId);
-  const route = '/api/agent/' + encodeURIComponent(created.sessionId);
-  await localWebApi(route, { type: 'set_session_name', name: 'Paseo 連線初始化' }, { cookie });
-  return created.sessionId;
 }

@@ -1,6 +1,6 @@
 # Pi Paseo plugin
 
-Pi Agent / Pi Web 插件。在 Pi 容器中下載並管理 Paseo，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。Pi Web 安裝／啟用後建立一次「Paseo 連線初始化」對話；未完成時續用同一對話。
+Pi Agent / Pi Web 插件。在 Pi 容器中下載並管理 Paseo，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。安裝、啟用與重啟只管理背景服務；配對由使用者在 **Pi Web 設定 → 插件 → Paseo** 手動開始。
 
 Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生配對連結，再在新分頁開啟完整 Paseo。官方 relay 不需要額外的 Paseo 帳號密碼。修正版網頁由 Pi Web 既有登入保護；分享入口網址不會自動分享配對權限。
 
@@ -37,7 +37,7 @@ Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.10`。若同一 Pi Web 也安裝 Omnigent `v0.3.20`，請在兩個套件都安裝後執行 `pi-omnigent install-ui`，建立經兩份補丁驗證的共用介面，再重新啟動 Pi Web；全域設定順序為 **MCP → Omnigent → Paseo**。各版本的實測範圍請參考驗證紀錄。
+正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.12`。若同一 Pi Web 也安裝 Omnigent，兩個套件的共用介面必須使用同時驗證過的 adapter 版本與 SHA-256，再重新啟動 Pi Web。配對只在 **設定 → 插件 → Paseo** 執行。各版本的實測範圍請參考驗證紀錄。
 
 或在 Pi Web 使用者的終端直接執行：
 
@@ -45,7 +45,7 @@ https://github.com/WOOWTECH/pi-paseo-plugin
 pi install https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-Git 安裝會下載依賴並執行 postinstall。首次安裝準備完成後，依下面的啟動入口說明重新啟動 Pi Web，即可開啟 Paseo 插件設定及初始化對話。
+Git 安裝會下載依賴並執行 postinstall。首次安裝準備完成後，依下面的啟動入口說明重新啟動 Pi Web，即可在插件設定中連接 Paseo。
 
 在 Pi Web 使用者的持久化 HOME 執行：
 
@@ -55,21 +55,19 @@ cd pi-paseo-plugin
 bash scripts/install.sh --source "$PWD"
 ```
 
-安裝器從目前 checkout 的完整 commit SHA 建立持久化副本，以 lockfile 安裝依賴，註冊 Pi package，套用經 SHA-256 校驗的 Pi Web 補丁並建置正式整合層，再啟動 Paseo。建置使用兩個 Next.js worker。已安裝相同版本時沿用既有建置與初始化對話；更新保留使用者手動停止的狀態。建置失敗保留舊版本及原有入口。
+安裝器從目前 checkout 的完整 commit SHA 建立持久化副本，以 lockfile 安裝依賴，註冊 Pi package，套用經 SHA-256 校驗的 Pi Web 補丁並建置正式整合層，再啟動 Paseo。建置使用兩個 Next.js worker。已安裝相同版本時沿用既有建置；更新保留使用者手動停止的狀態。建置失敗保留舊版本及原有入口。
 
 Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只準備下一次啟動的入口並回報 `restartRequired`；請透過原服務管理方式重新啟動。原容器以 PATH 呼叫 `pi-web` 時可使用持久化 launcher；已有 shared-runtime 或 Omnigent 啟動器時沿用其原始呼叫鏈。若回報 `manual-routing-required`，請將現有 launcher 的 Pi Web 終端入口接到回報的 `pendingRestart` 路徑。
 
-從 Pi Web 插件頁安裝 npm 發行包時，postinstall 同樣下載 Paseo、準備 Pi Web 整合層並啟動服務。插件頁在首次加入整合層後，需要重新啟動 Pi Web 才能顯示 Paseo 專用入口。
+從 Pi Web 插件頁安裝 npm 發行包時，postinstall 同樣下載 Paseo、準備 Pi Web 整合層並啟動服務。插件頁在首次加入整合層後，需要重新啟動 Pi Web 才能顯示設定頁內的 Paseo 控制項。
 
 若回報 `pathUpdateRequired: true`，將回報的 `launcherDirectory` 放到服務啟動環境的 PATH 最前方，再重新啟動。Kubernetes 容器需設定工作負載的 PATH，終端中的 `export PATH=...` 只作用於該次終端。
 
-第一次載入整合層後，在 **設定 → 插件** 選擇 Paseo，按 **設定 Paseo**。也可直接開啟 `/paseo/setup`。安裝、啟用及 Pi Web 重啟會啟動／恢復服務並建立或續接初始化對話；停用／移除只停止插件擁有的程序，保留對話、provider 登入及 Paseo 資料。
-
-`v0.1.4` 在建立會話的請求中提交初始化提示。若 Pi Web 明確拒絕提示（例如尚無可用模型），會保留可重試狀態，不記錄空會話 ID；模型就緒後由插件生命週期再嘗試。
+第一次載入整合層後，在 **設定 → 插件** 選擇 Paseo。安裝、啟用及 Pi Web 重啟會啟動／恢復服務，不會建立對話或在首頁顯示 Paseo 專用按鈕。舊的 `/paseo/setup` 連結會導向插件設定；停用／移除只停止插件擁有的程序，保留既有對話、provider 登入及 Paseo 資料。
 
 ## 設定與配對
 
-1. 開啟初始化對話及 `/paseo/setup`，查看服務與三種 provider 的診斷。
+1. 到 **設定 → 插件 → Paseo**，查看服務與三種 provider 的診斷。
 2. 缺少或過期的登入，使用 `claude auth login`、`codex login` 或 Pi 的 `/login`。密碼、API Key 與 OAuth 資訊只在官方登入介面或 Pi Web 模型設定輸入。
 3. 等待「修正版 Paseo 網頁已就緒」，再按 **產生配對連結** → **使用配對連結開啟 Paseo**。入口位於同一 Pi Web 網址的 `/paseo-web/`；從官方網站改到此入口時需要在新入口配對一次，Claude／Codex／Pi 不必重新登入。
 4. 在 Paseo 選擇這個容器、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。
@@ -82,13 +80,13 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 ### 沿用 Omnigent 選定的 Claude gateway
 
-若同一使用者的 `~/.omnigent/config.yaml`（或 `OMNIGENT_CONFIG_HOME/config.yaml`）已將 Anthropic 預設 provider 設為 `kind: gateway`，插件啟動／繼續初始化時會沿用該選擇。這項整合需要 PATH 中可用的 Omnigent 與其 Python 環境，以及 `anthropic.auth_command`、`anthropic.models.default`；模型清單只列出該設定宣告的實際模型，會展開 tier 別名並合併重複項目。它沿用既有 gateway 授權，不表示 Claude 官方訂閱已登入。
+若同一使用者的 `~/.omnigent/config.yaml`（或 `OMNIGENT_CONFIG_HOME/config.yaml`）已將 Anthropic 預設 provider 設為 `kind: gateway`，插件啟動／恢復服務時會沿用該選擇。這項整合需要 PATH 中可用的 Omnigent 與其 Python 環境，以及 `anthropic.auth_command`、`anthropic.models.default`；模型清單只列出該設定宣告的實際模型，會展開 tier 別名並合併重複項目。它沿用既有 gateway 授權，不表示 Claude 官方訂閱已登入。
 
 驗證命令由 Claude 的 invocation-local `apiKeyHelper` 按需執行，最長快取 15 分鐘；插件不把命令或產生的憑證寫入 Paseo 設定、啟動檔或日誌，也不修改 Omnigent 設定與官方登入檔。插件私有目錄內的 `0700` 啟動檔只存路徑與設定指紋，讓 Paseo 的 Claude SDK 能用單一執行檔啟動。驗證命令的輸出上限為 4 KB、逾時為 20 秒，失敗只回報固定錯誤碼。
 
-在 Omnigent 切回官方 Claude provider 後，按 Paseo 的「啟動／繼續初始化」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
+在 Omnigent 切回官方 Claude provider 後，於 Paseo 設定按「啟動服務」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
 
-從 gateway 改用 Claude 官方訂閱時，先在 Pi Web 相同 HOME 執行 `claude auth login --claudeai`，完成[官方瀏覽器授權](https://code.claude.com/docs/en/authentication)，再將 Omnigent 的 **Anthropic 預設來源**選為 Claude 訂閱並啟動／繼續 Paseo 初始化。只完成 CLI 登入，不會覆蓋仍被選用的 gateway。切換時保留 OpenAI 與 Pi 的預設來源；官方登入資料由 Claude CLI 管理，不應貼入 Paseo 或 Omnigent 的設定檔。Pi4 的切換、重啟及實測範圍見[官方訂閱驗證](docs/pi4-official-subscription-2026-10-26.md)。
+從 gateway 改用 Claude 官方訂閱時，先在 Pi Web 相同 HOME 執行 `claude auth login --claudeai`，完成[官方瀏覽器授權](https://code.claude.com/docs/en/authentication)，再將 Omnigent 的 **Anthropic 預設來源**選為 Claude 訂閱並於 Paseo 設定啟動服務。只完成 CLI 登入，不會覆蓋仍被選用的 gateway。切換時保留 OpenAI 與 Pi 的預設來源；官方登入資料由 Claude CLI 管理，不應貼入 Paseo 或 Omnigent 的設定檔。Pi4 的切換、重啟及實測範圍見[官方訂閱驗證](docs/pi4-official-subscription-2026-10-26.md)。
 
 ### 選用 Omnigent gateway 作為 Codex 模型來源
 
@@ -118,9 +116,7 @@ Codex 的 gateway 仍須另外設定；標準安裝不會更改內建 `codex` pr
 
 ## Pi 操作
 
-- `/paseo`：狀態及設定入口。
-- `/paseo-open`：開啟完整 Paseo。
-- `/paseo-setup`：初始化與配對入口。
+- **Pi Web 設定 → 插件 → Paseo**：唯一的配對與整合設定入口。
 - `paseo_status`、`paseo_diagnose`、`paseo_models`：無秘密的狀態及模型探測。
 - `paseo_chat`、`paseo_continue`：建立與續接 Paseo 對話。
 
@@ -143,7 +139,7 @@ node bin/cli.mjs stop
 
 daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用埠。relay 配對不需要對外開啟容器埠。背景 supervisor 檢查程序 metadata，故障時恢復插件服務；這不會週期性呼叫模型。Pi Web 整合層在重啟後恢復 supervisor。
 
-`state.json` 僅保存白名單狀態；配對資訊放在 mode 0600 的專用檔案，設定頁回應使用 `no-store`。舊版、其他使用者或未標記的 Paseo home 不接管。未知初始化建立結果停止自動重建，避免產生重複對話。
+`state.json` 僅保存白名單狀態；配對資訊放在 mode 0600 的專用檔案，設定頁回應使用 `no-store`。舊版、其他使用者或未標記的 Paseo home 不接管。既有初始化對話資料會保留，但插件不再建立或開啟它。
 
 ## 開發及驗收
 
@@ -191,7 +187,7 @@ Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以
 
 ### 手機捲動修正（v0.1.5）
 
-Paseo 設定面板與獨立初始化頁各自提供有高度限制的垂直捲動區域，長模型名稱會換行。更新插件後請重建並重新啟動 Pi Web，再重新整理瀏覽器。主機驗證包含手機直向、橫向、桌面，以及展開 60 個模型後的實際觸控／滑鼠捲動回歸測試。
+Paseo 設定面板現在位於 Pi Web 的插件設定內容區，沿用該區的垂直捲動；長模型名稱會換行。更新插件後請重建並重新啟動 Pi Web，再重新整理瀏覽器。主機驗證包含手機直向、橫向、桌面，以及展開 60 個模型後的實際觸控／滑鼠捲動回歸測試。
 
 ### 同時升級兩個插件
 
@@ -202,6 +198,6 @@ pi install git:github.com/WOOWTECH/pi-omnigent-plugin@v0.3.12
 pi install git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.7
 ```
 
-Paseo 安裝器會交給 Omnigent 建立共用介面；完成後重啟 Pi Web，再到 `/paseo/setup` 配對。收到 `RESTART_REQUIRED` 時，完成重啟後重新整理並驗證三種引擎對話。首次編譯建議預留至少 3 GiB 可用磁碟空間；實測不足 1 GiB 時套件安裝可能因 `ENOSPC` 失敗。官方 Paseo 的主機顯示名稱請在 Paseo App 內修改；插件的「容器備註」僅存於設定頁。
+Paseo 安裝器會交給 Omnigent 建立共用介面；完成後重啟 Pi Web，再到 **設定 → 插件 → Paseo** 配對。收到 `RESTART_REQUIRED` 時，完成重啟後重新整理並驗證三種引擎對話。首次編譯建議預留至少 3 GiB 可用磁碟空間；實測不足 1 GiB 時套件安裝可能因 `ENOSPC` 失敗。官方 Paseo 的主機顯示名稱請在 Paseo App 內修改；插件的「容器備註」僅存於設定頁。
 
 2026-10-26：Pi4 已部署修正版 `/paseo-web`，完成 Claude 串流中重新整理及三引擎續聊驗收，詳見[正式部署報告](docs/pi4-managed-web-2026-10-26.md)。

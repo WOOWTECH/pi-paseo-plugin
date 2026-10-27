@@ -3,11 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import http from 'node:http';
-import { once } from 'node:events';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { ensureOnboarding, createViaLocalWeb, onboardingStatus, withLock, writeRecord, readRecord } from '../src/onboarding.mjs';
+import { withLock, writeRecord, readRecord } from '../src/onboarding.mjs';
 import { withRuntimeLock, updateState, readState, processIdentity } from '../src/state.mjs';
 
 function fixture(t) {
@@ -31,20 +27,6 @@ function stale(file) {
   const time = new Date(Date.now() - 60000);
   fs.utimesSync(file, time, time);
 }
-async function webFixture(t, handler) {
-  const server = http.createServer(async (req, res) => {
-    let text = '';
-    for await (const chunk of req) text += chunk;
-    const result = await handler(req.url, text ? JSON.parse(text) : null);
-    res.writeHead(result.status || 200, { 'Content-Type': 'application/json', ...(result.headers || {}) });
-    res.end(JSON.stringify(result.body || {}));
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  process.env.PI_WEB_PORT = String(server.address().port);
-  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-}
-
 test('recycled PID cannot keep an abandoned onboarding lock alive', async t => {
   const { loc } = fixture(t);
   const lock = path.join(loc.stateDir, 'onboarding.lock');
@@ -107,14 +89,14 @@ test('onboarding record operations refuse symlinked files', t => {
   assert.deepEqual(JSON.parse(fs.readFileSync(target)), { external: true });
 });
 
-test('state and onboarding writes refuse a symlink ancestor and leave its target untouched', async t => {
+test('state and record locks refuse a symlink ancestor and leave its target untouched', async t => {
   const { dir, loc } = fixture(t);
   const link = path.join(dir, 'link');
   fs.symlinkSync(loc.home, link, 'dir');
   const stateDir = path.join(link, 'state');
   process.env.PI_PASEO_STATE_DIR = stateDir;
   assert.throws(() => updateState({ phase: 'ready' }), error => error.code === 'UNSAFE_SYMLINK');
-  await assert.rejects(ensureOnboarding(() => 'session', { ...loc, stateDir }), error => error.code === 'UNSAFE_SYMLINK');
+  await assert.rejects(withLock(path.join(stateDir, 'operation.lock'), () => 42), error => error.code === 'UNSAFE_SYMLINK');
   assert.equal(fs.existsSync(path.join(loc.home, 'state')), false);
 });
 
@@ -134,110 +116,4 @@ test('runtime acquisition refuses a symlinked lock without touching its target',
   await assert.rejects(withRuntimeLock(() => assert.fail('unsafe acquisition'), { timeoutMs: 2000 }), error => error.code === 'UNSAFE_SYMLINK');
   assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
   assert.equal(JSON.parse(fs.readFileSync(target)).token, 'external');
-});
-
-test('local onboarding sends the first prompt in the creation request and checkpoints before naming', async t => {
-    const { loc } = fixture(t);
-    let creations = 0;
-    const remembered = [];
-    const commands = [];
-    await webFixture(t, async (route, body) => {
-      commands.push({ route, type: body.type, message: body.message });
-      if (route === '/api/agent/new') { creations++; return { body: { sessionId: 'confirmed-session' } }; }
-      if (body.type === 'set_session_name') {
-        remembered.push(onboardingStatus(loc).sessionId);
-        return { status: 503 };
-      }
-      return { body: {} };
-    });
-    await assert.rejects(ensureOnboarding((prompt, remember) => createViaLocalWeb(prompt, loc, remember), loc));
-    assert.deepEqual(remembered, ['confirmed-session'], 'confirmed session must be durable before follow-up requests');
-    assert.equal(commands[0].type, 'prompt');
-    assert.match(commands[0].message, /Paseo/);
-    assert.deepEqual(commands.map(command => command.type), ['prompt', 'set_session_name']);
-    const record = onboardingStatus(loc);
-    assert.equal(record.sessionId, 'confirmed-session');
-    assert.equal(record.creation, 'created');
-    assert.equal((await ensureOnboarding(() => assert.fail('duplicate'), loc)).sessionId, 'confirmed-session');
-    assert.equal(creations, 1);
-});
-
-test('a rejected initial prompt leaves no session id and can retry after a model becomes available', async t => {
-  const { loc } = fixture(t);
-  let modelReady = false, creations = 0, followups = 0;
-  await webFixture(t, async (route, body) => {
-    if (route === '/api/agent/new') {
-      creations++;
-      assert.equal(body.type, 'prompt');
-      return modelReady
-        ? { body: { sessionId: 'persisted-session' } }
-        : { status: 500, body: { code: 'prompt_rejected', accepted: false } };
-    }
-    followups++;
-    return { body: {} };
-  });
-  const create = (prompt, remember) => createViaLocalWeb(prompt, loc, remember);
-  await assert.rejects(ensureOnboarding(create, loc));
-  assert.equal(onboardingStatus(loc).creation, 'retryable');
-  assert.equal(onboardingStatus(loc).sessionId, undefined);
-  assert.equal(followups, 0);
-  modelReady = true;
-  assert.equal((await ensureOnboarding(create, loc)).sessionId, 'persisted-session');
-  assert.equal(creations, 2);
-  assert.equal(followups, 1);
-});
-
-test('failed local login is retryable because no creation request was issued', async t => {
-  const { loc } = fixture(t);
-  let loginReady = false, creations = 0;
-  process.env.PI_WEB_PASSWORD = 'fixture-only-password';
-  await webFixture(t, async route => {
-    if (route === '/api/web-auth') return loginReady ? { headers: { 'Set-Cookie': 'fixture=authenticated; HttpOnly' } } : { status: 503 };
-    if (route === '/api/agent/new') { creations++; return { body: { sessionId: 'after-login' } }; }
-    return {};
-  });
-  const create = (prompt, remember) => createViaLocalWeb(prompt, loc, remember);
-  await assert.rejects(ensureOnboarding(create, loc));
-  assert.equal(creations, 0);
-  assert.equal(onboardingStatus(loc).creation, 'retryable');
-  loginReady = true;
-  assert.equal((await ensureOnboarding(create, loc)).sessionId, 'after-login');
-  assert.equal(creations, 1);
-});
-
-test('an uncertain local creation response remains pending and is never retried blindly', async t => {
-  const { loc } = fixture(t);
-  let calls = 0;
-  await webFixture(t, async route => {
-    if (route === '/api/agent/new') { calls++; return { body: {} }; }
-    return {};
-  });
-  const create = (prompt, remember) => createViaLocalWeb(prompt, loc, remember);
-  await assert.rejects(ensureOnboarding(create, loc));
-  await assert.rejects(ensureOnboarding(create, loc), /reconciliation/);
-  assert.equal(onboardingStatus(loc).creation, 'pending');
-  assert.equal(calls, 1);
-});
-
-
-test('SIGKILL after onboarding checkpoint recovers the same session through the real creation path', { timeout: 10000 }, async t => {
-  const { loc } = fixture(t);
-  const moduleFile = fileURLToPath(new URL('../src/onboarding.mjs', import.meta.url));
-  const source = [
-    "import fs from 'node:fs';",
-    "import { ensureOnboarding } from " + JSON.stringify(moduleFile) + ";",
-    "setInterval(() => {}, 1000);",
-    "await ensureOnboarding(async (_prompt, remember) => { remember('checkpointed-session'); fs.writeSync(1, 'ready'); await new Promise(() => {}); });",
-  ].join('\n');
-  const child = spawn(process.execPath, ['--input-type=module', '-e', source], { cwd: loc.home, env: { ...process.env }, stdio: ['ignore', 'pipe', 'ignore'] });
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
-  const output = await once(child.stdout, 'data');
-  assert.equal(String(output[0]), 'ready');
-  const exited = once(child, 'exit');
-  child.kill('SIGKILL');
-  await exited;
-  const record = await ensureOnboarding(() => assert.fail('duplicate creation after crash'), loc);
-  assert.equal(record.sessionId, 'checkpointed-session');
-  assert.equal(record.creation, 'created');
-  assert.equal(fs.existsSync(path.join(loc.stateDir, 'onboarding.lock')), false);
 });
