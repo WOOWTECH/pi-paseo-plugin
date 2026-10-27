@@ -356,6 +356,33 @@ function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHo
 }
 
 /** Prepare a persistent host adapter and next-start routing; never restart Pi Web. */
+export function resolveOmnigentPackageRoot({ agentDir, env = {}, explicitRoot } = {}) {
+  if (explicitRoot) return path.resolve(explicitRoot);
+  const installed = path.join(agentDir, 'git/github.com/WOOWTECH/pi-omnigent-plugin');
+  const settingsFile = path.join(agentDir, 'settings.json');
+  if (exists(settingsFile)) {
+    if (fs.lstatSync(settingsFile).isSymbolicLink()) fail('OMNIGENT_COORDINATOR_INVALID');
+    const settings = readJson(settingsFile);
+    if (!settings || typeof settings !== 'object' ||
+        (settings.packages !== undefined && !Array.isArray(settings.packages))) fail('OMNIGENT_COORDINATOR_INVALID');
+    const configured = (settings.packages || []).some(item => {
+      const source = typeof item === 'string' ? item : item?.source;
+      const disabled = typeof item === 'object' && Array.isArray(item.extensions) && item.extensions.length === 0;
+      return !disabled && typeof source === 'string' &&
+        /^git:github\.com\/WOOWTECH\/pi-omnigent-plugin(?:\.git)?(?:@[^/]+)?$/i.test(source);
+    });
+    if (configured) {
+      const manifest = path.join(installed, 'package.json');
+      if (!exists(installed) || !fs.lstatSync(installed).isDirectory() ||
+          !fs.realpathSync(installed).startsWith(fs.realpathSync(agentDir) + path.sep) ||
+          !exists(manifest) || !fs.lstatSync(manifest).isFile()) fail('OMNIGENT_COORDINATOR_UNAVAILABLE');
+      if (readJson(manifest).name !== '@woowtech/pi-omnigent-plugin') fail('OMNIGENT_COORDINATOR_INVALID');
+      return installed;
+    }
+  }
+  return path.resolve(env.PI_OMNIGENT_PLUGIN_ROOT || installed);
+}
+
 export async function installHost(options = {}) {
   const env = { ...process.env, ...options.env };
   const home = fs.realpathSync(path.resolve(options.home || env.HOME || os.homedir()));
@@ -364,7 +391,7 @@ export async function installHost(options = {}) {
   if (node[0] < 22 || (node[0] === 22 && (node[1] < 19 || (node[1] === 19 && node[2] < 0)))) fail('NODE_VERSION_UNSUPPORTED');
   const paseoPackageRoot = path.resolve(options.packageRoot || ROOT);
   const agentDir = env.PI_CODING_AGENT_DIR || env.PI_AGENT_DATA_DIR || path.join(home, '.pi/agent');
-  const omniPackageRoot = path.resolve(options.omnigentPackageRoot || env.PI_OMNIGENT_PLUGIN_ROOT || path.join(agentDir, 'git/github.com/WOOWTECH/pi-omnigent-plugin'));
+  const omniPackageRoot = resolveOmnigentPackageRoot({ agentDir, env, explicitRoot: options.omnigentPackageRoot });
   const omniPackageFile = path.join(omniPackageRoot, 'package.json');
   if (exists(omniPackageFile)) {
     const omniPackage = readJson(omniPackageFile);

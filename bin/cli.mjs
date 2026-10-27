@@ -31,7 +31,7 @@ try {
  process.stdout.write(JSON.stringify(result,null,2)+'\n');
 } catch(error) {
  // Never forward provider stderr, config bodies, passwords or pairing links.
- const codes=new Set(['INSTALL_DISK_FULL','INSTALL_PERMISSION_DENIED','INSTALL_MEMORY_EXHAUSTED','COMMAND_FAILED','COMMAND_UNAVAILABLE','COMMAND_TIMEOUT','COMMAND_INTERRUPTED','COMMAND_OUTPUT_LIMIT','HOST_INSTALL_BUSY','COMBINED_ADAPTER_MISMATCH','EXISTING_UI_OVERLAY_MISMATCH','PREBUILT_SOURCE_MISMATCH','DAEMON_UNREACHABLE','PROVIDER_AUTH_REQUIRED','PROVIDER_TIMEOUT','RESTART_REQUIRED']);
+ const codes=new Set(['INSTALL_DISK_FULL','INSTALL_PERMISSION_DENIED','INSTALL_MEMORY_EXHAUSTED','COMMAND_FAILED','COMMAND_UNAVAILABLE','COMMAND_TIMEOUT','COMMAND_INTERRUPTED','COMMAND_OUTPUT_LIMIT','HOST_INSTALL_BUSY','COMBINED_ADAPTER_MISMATCH','EXISTING_UI_OVERLAY_MISMATCH','PREBUILT_SOURCE_MISMATCH','OMNIGENT_COORDINATOR_UNAVAILABLE','OMNIGENT_COORDINATOR_INVALID','DAEMON_UNREACHABLE','PROVIDER_AUTH_REQUIRED','PROVIDER_TIMEOUT','RESTART_REQUIRED']);
  const stages=new Set(['source','patch','dependencies','audit','build','prebuilt','promote']);
  const code=codes.has(error?.code)?error.code:'OPERATION_FAILED';
  const hints={INSTALL_DISK_FULL:'Not enough disk space. Free build caches or expand storage, then retry installation.',INSTALL_PERMISSION_DENIED:'The installation directory is not writable.',INSTALL_MEMORY_EXHAUSTED:'The build exhausted memory. Increase available memory or use a verified prebuilt UI.'};
