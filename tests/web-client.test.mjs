@@ -84,6 +84,8 @@ test('rejects traversal, private files, missing assets, and symlink escapes', as
 });
 
 test('pairing keeps the private fragment on the fixed same-origin client path', () => {
-  assert.equal(managedPairUrl('https://app.paseo.sh/#opaque-secret'), '/paseo-web/#opaque-secret');
+  // The web app redirects /paseo-web/ to /welcome and discards its fragment.
+  // Put the offer on /welcome so the pairing confirmation receives it.
+  assert.equal(managedPairUrl('https://app.paseo.sh/#opaque-secret'), '/paseo-web/welcome#opaque-secret');
   for (const value of ['https://app.paseo.sh.evil/pair#secret', 'http://app.paseo.sh/pair#secret', 'https://user:password@app.paseo.sh/pair#secret', 'https://app.paseo.sh/?redirect=evil#secret', 'https://app.paseo.sh/other#secret', 'https://app.paseo.sh/']) assert.throws(() => managedPairUrl(value), { code: 'PAIRING_ORIGIN_INVALID' });
 });

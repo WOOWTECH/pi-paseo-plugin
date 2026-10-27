@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { locations, readState, updateState, withRuntimeLock, processIdentity } from '../src/state.mjs';
 import { runProcess } from '../src/process.mjs';
-import { activate, deactivate, status, listModels } from '../src/runtime.mjs';
+import { activate, deactivate, status, diagnose, listModels } from '../src/runtime.mjs';
 
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-runtime-'));
@@ -83,4 +83,26 @@ test('missing runtime reports clean state and invalid provider never opens conne
     const s=await status();assert.equal(s.installed,false);assert.equal(s.daemon.running,false);assert.equal(s.chatVerified,false);
     await assert.rejects(listModels('unrecognized'),e=>e.code==='INVALID_PROVIDER');
   }finally{f.close()}
+});
+
+test('an empty Pi auth file does not claim a configured provider credential', async () => {
+  const f=fixture();
+  const originalPath=process.env.PATH;
+  try {
+    const bin=path.join(f.dir,'bin');
+    fs.mkdirSync(bin);
+    for(const provider of ['claude','codex','pi']) {
+      const executable=path.join(bin,provider);
+      fs.writeFileSync(executable,'#!/bin/sh\nprintf "1.0.0\\n"\n',{mode:0o700});
+    }
+    process.env.PATH=bin+path.delimiter+originalPath;
+    const file=path.join(locations().agentDir,'auth.json');
+    fs.mkdirSync(path.dirname(file),{recursive:true});
+    fs.writeFileSync(file,'{}');
+    const empty=await diagnose();
+    assert.equal(empty.providers.find(row=>row.provider==='pi').credentialPresent,false);
+    fs.writeFileSync(file,JSON.stringify({'openai-codex':{type:'oauth',access:'fixture-only'}}));
+    const configured=await diagnose();
+    assert.equal(configured.providers.find(row=>row.provider==='pi').credentialPresent,true);
+  } finally { process.env.PATH=originalPath; f.close(); }
 });

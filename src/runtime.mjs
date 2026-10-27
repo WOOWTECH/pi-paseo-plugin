@@ -19,6 +19,14 @@ export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
 const PROVIDERS = ['claude', 'codex', 'pi'];
 const safeCode = error => /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code || '') ? error.code : 'RUNTIME_FAILED';
+function credentialPresent(provider, file) {
+  if (!fs.existsSync(file)) return false;
+  if (provider !== 'pi') return true;
+  try {
+    const credentials = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return !!credentials && typeof credentials === 'object' && !Array.isArray(credentials) && Object.keys(credentials).length > 0;
+  } catch { return false; }
+}
 function packageRoot(pkg = 'cli') { return path.join(runtimeDirectory(locations()), 'node_modules/@getpaseo', pkg); }
 function cliPath(root=runtimeDirectory(locations())) { return path.join(root, 'node_modules/@getpaseo/cli/bin/paseo'); }
 function runtimeVersion() { try { return JSON.parse(fs.readFileSync(path.join(packageRoot(), 'package.json'), 'utf8')).version; } catch { return null; } }
@@ -239,7 +247,7 @@ export async function diagnose() {
   const credentialPaths = { claude: [path.join(loc.home, '.claude/.credentials.json')], codex: [path.join(process.env.CODEX_HOME || path.join(loc.home, '.codex'), 'auth.json')], pi: [path.join(loc.agentDir, 'auth.json')] };
   providers = PROVIDERS.map(provider => {
     const check = snapshot.state.acceptance?.providers?.find(row => row.provider === provider);
-    return { ...(providers.find(row => row.provider === provider) || { provider, status: 'unknown', modes: [] }), launcher: launchers[provider], credentialPresent: credentialPaths[provider].some(file => fs.existsSync(file)), authentication: check?.passed ? 'chat_verified' : check?.code === 'PROVIDER_AUTH_REQUIRED' ? 'login_required' : 'needs_chat_verification', chatErrorCode: check?.code || null, loginHint: provider === 'claude' ? 'claude auth login' : provider === 'codex' ? 'codex login' : 'pi /login' };
+    return { ...(providers.find(row => row.provider === provider) || { provider, status: 'unknown', modes: [] }), launcher: launchers[provider], credentialPresent: credentialPaths[provider].some(file => credentialPresent(provider, file)), authentication: check?.passed ? 'chat_verified' : check?.code === 'PROVIDER_AUTH_REQUIRED' ? 'login_required' : 'needs_chat_verification', chatErrorCode: check?.code || null, loginHint: provider === 'claude' ? 'claude auth login' : provider === 'codex' ? 'codex login' : 'pi /login' };
   });
   const result = { ...snapshot, providers, checkedAt: new Date().toISOString() };
   updateState({ lastDiagnostic: { checkedAt: result.checkedAt, daemonReachable: result.daemon.reachable, providers: providers.map(row => ({ provider: row.provider, status: row.status, startup: row.launcher.startup, authentication: row.authentication })) } });
