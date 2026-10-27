@@ -51,7 +51,7 @@ function fixture(t) {
   if(spec==='./daemon-identity.mjs')return identity;
   if(spec==='./runtime-layout.mjs')return layout;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
-  if(spec==='./web-client.mjs')return {ensureWebClient:async()=>({ready:true}),webClientStatus:()=>({ready:true}),managedPairUrl:()=>'/paseo-web/#fixture'};
+  if(spec==='./web-client.mjs')return {ensureWebClient:async()=>({ready:true}),webClientStatus:()=>({ready:true}),managedPairUrl:()=>'/paseo-web/welcome#fixture'};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
   if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args)=>{if(args.length===2&&args[1]==='--version')return '0.11.2';if(args.includes('pair'))return JSON.stringify({url:'https://app.paseo.sh/#fixture',relayEnabled:true});assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>loadInstance(),stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
@@ -164,7 +164,7 @@ test('status cannot recover or enable a disabled installation',async t=>{
 
 test('pair uses reachable daemon and preserves proof without entering lifecycle recovery',async t=>{
  const f=fixture(t);await f.runtime.activate();const proof=fs.readFileSync(f.proofFile);
- const result=await f.runtime.pair();assert.equal(result.url,'/paseo-web/#fixture');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
+ const result=await f.runtime.pair();assert.equal(result.url,'/paseo-web/welcome#fixture');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
 });
 
 for(const copy of ['dist/server/server','dist/src/server'])test('unpatched runtime '+copy+' refuses reclaim even with old valid proof',async t=>{

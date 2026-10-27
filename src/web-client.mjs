@@ -81,7 +81,7 @@ export function managedPairUrl(official) {
   let url;
   try { url = new URL(official); } catch { throw new RuntimeError('PAIRING_ORIGIN_INVALID'); }
   if (url.origin !== 'https://app.paseo.sh' || url.username || url.password || url.pathname !== '/' || url.search || !url.hash) throw new RuntimeError('PAIRING_ORIGIN_INVALID');
-  return `${WEB_BASE_PATH}/${url.hash}`;
+  return `${WEB_BASE_PATH}/welcome${url.hash}`;
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.wasm': 'application/wasm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' };
