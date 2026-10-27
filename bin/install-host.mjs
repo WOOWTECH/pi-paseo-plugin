@@ -355,23 +355,48 @@ function installRouting({ home, root, nativeBin, env, sharedHostPath, omnigentHo
   return { status: 'user-wrapper', launcher: shim, previousNative: fallback };
 }
 
-/** Prepare a persistent host adapter and next-start routing; never restart Pi Web. */
+const OMNIGENT_REPOSITORY = 'woowtech/pi-omnigent-plugin';
+
+/**
+ * `<owner>/<repo>` exactly as Pi stores it under `<agentDir>/git/github.com/` when `source`
+ * installs the Omnigent plugin from GitHub, whichever URL form or ref was typed
+ * (`git:`, `https://`, `ssh://`, `git@host:`; `.git`; `@ref` or `#ref`). Otherwise null.
+ * Pi reads a bare `host/path` without `git:` or a scheme as a local path, so this does too.
+ */
+function omnigentGitPath(source) {
+  const scheme = /^(?:https?|ssh|git):\/\//i;
+  let rest = source.trim();
+  if (!scheme.test(rest)) {
+    if (!/^git:/i.test(rest)) return null;
+    rest = rest.slice(4).trim();
+  }
+  rest = rest.replace(scheme, '').replace(/^[^/@]+@(?=[^/@]+[/:])/, '');
+  const match = /^github\.com[/:]([^/@#]+)\/([^/@#]+?)(?:\.git)?\/?(?:[@#].+)?$/i.exec(rest);
+  return match && `${match[1]}/${match[2]}`.toLowerCase() === OMNIGENT_REPOSITORY ? `${match[1]}/${match[2]}` : null;
+}
+
+/**
+ * Package root of the Omnigent plugin the combined UI must be built with. An enabled GitHub
+ * install registered in Pi's global settings wins over `PI_OMNIGENT_PLUGIN_ROOT`, which an
+ * image keeps pointing at its older bundled copy after the plugin was upgraded in place.
+ */
 export function resolveOmnigentPackageRoot({ agentDir, env = {}, explicitRoot } = {}) {
   if (explicitRoot) return path.resolve(explicitRoot);
-  const installed = path.join(agentDir, 'git/github.com/WOOWTECH/pi-omnigent-plugin');
+  const fallback = path.join(agentDir, 'git/github.com/WOOWTECH/pi-omnigent-plugin');
   const settingsFile = path.join(agentDir, 'settings.json');
   if (exists(settingsFile)) {
     if (fs.lstatSync(settingsFile).isSymbolicLink()) fail('OMNIGENT_COORDINATOR_INVALID');
     const settings = readJson(settingsFile);
     if (!settings || typeof settings !== 'object' ||
         (settings.packages !== undefined && !Array.isArray(settings.packages))) fail('OMNIGENT_COORDINATOR_INVALID');
-    const configured = (settings.packages || []).some(item => {
+    // Like the plugin's own lifecycle check, the most recently registered entry wins.
+    const registered = (settings.packages || []).map(item => {
       const source = typeof item === 'string' ? item : item?.source;
       const disabled = typeof item === 'object' && Array.isArray(item.extensions) && item.extensions.length === 0;
-      return !disabled && typeof source === 'string' &&
-        /^git:github\.com\/WOOWTECH\/pi-omnigent-plugin(?:\.git)?(?:@[^/]+)?$/i.test(source);
-    });
-    if (configured) {
+      return !disabled && typeof source === 'string' ? omnigentGitPath(source) : null;
+    }).filter(Boolean).at(-1);
+    if (registered) {
+      const installed = path.join(agentDir, 'git/github.com', registered);
       const manifest = path.join(installed, 'package.json');
       if (!exists(installed) || !fs.lstatSync(installed).isDirectory() ||
           !fs.realpathSync(installed).startsWith(fs.realpathSync(agentDir) + path.sep) ||
@@ -380,9 +405,10 @@ export function resolveOmnigentPackageRoot({ agentDir, env = {}, explicitRoot } 
       return installed;
     }
   }
-  return path.resolve(env.PI_OMNIGENT_PLUGIN_ROOT || installed);
+  return path.resolve(env.PI_OMNIGENT_PLUGIN_ROOT || fallback);
 }
 
+/** Prepare a persistent host adapter and next-start routing; never restart Pi Web. */
 export async function installHost(options = {}) {
   const env = { ...process.env, ...options.env };
   const home = fs.realpathSync(path.resolve(options.home || env.HOME || os.homedir()));

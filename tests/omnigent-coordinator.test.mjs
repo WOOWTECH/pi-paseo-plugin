@@ -18,9 +18,9 @@ function fixture(t) {
   return {
     root, agentDir, installed, bundled,
     settings(packages) { fs.writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify({ packages })); },
-    manifest(name = '@woowtech/pi-omnigent-plugin') {
-      fs.mkdirSync(installed, { recursive: true });
-      fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ name }));
+    manifest(name = '@woowtech/pi-omnigent-plugin', at = installed) {
+      fs.mkdirSync(at, { recursive: true });
+      fs.writeFileSync(path.join(at, 'package.json'), JSON.stringify({ name }));
     },
   };
 }
@@ -31,6 +31,59 @@ test('registered GitHub Omnigent coordinator wins over the old image root', t =>
   f.manifest();
   assert.equal(resolveOmnigentPackageRoot({ agentDir: f.agentDir, env: { PI_OMNIGENT_PLUGIN_ROOT: f.bundled } }), f.installed);
 });
+
+test('registered coordinator wins when the image bundle path is also registered', t => {
+  const f = fixture(t);
+  // A Plugins-page install appends the git source next to the image-seeded path entry.
+  f.settings([f.bundled, source]);
+  f.manifest();
+  assert.equal(resolveOmnigentPackageRoot({ agentDir: f.agentDir, env: { PI_OMNIGENT_PLUGIN_ROOT: f.bundled } }), f.installed);
+});
+
+for (const form of [
+  'git:github.com/WOOWTECH/pi-omnigent-plugin',
+  'git:github.com/WOOWTECH/pi-omnigent-plugin.git@v0.3.27',
+  'git:github.com/WOOWTECH/pi-omnigent-plugin@fix/branch-with-slash',
+  'https://github.com/WOOWTECH/pi-omnigent-plugin',
+  'https://github.com/WOOWTECH/pi-omnigent-plugin.git',
+  'https://github.com/WOOWTECH/pi-omnigent-plugin@v0.3.27',
+  'https://github.com/WOOWTECH/pi-omnigent-plugin#v0.3.27',
+  'https://github.com/WOOWTECH/pi-omnigent-plugin/',
+  'git:https://github.com/WOOWTECH/pi-omnigent-plugin@v0.3.27',
+  'git:git@github.com:WOOWTECH/pi-omnigent-plugin.git@v0.3.27',
+  'ssh://git@github.com/WOOWTECH/pi-omnigent-plugin.git',
+]) {
+  test(`every Pi source form that installs the GitHub plugin is recognised: ${form}`, t => {
+    const f = fixture(t);
+    f.settings([form]);
+    f.manifest();
+    assert.equal(resolveOmnigentPackageRoot({ agentDir: f.agentDir, env: { PI_OMNIGENT_PLUGIN_ROOT: f.bundled } }), f.installed);
+  });
+}
+
+test('an object entry that is enabled counts, and the newest registration wins', t => {
+  const f = fixture(t);
+  const other = path.join(f.agentDir, 'git/github.com/woowtech/Pi-Omnigent-Plugin');
+  f.settings([source, { source: 'git:github.com/woowtech/Pi-Omnigent-Plugin@v0.3.28', autoload: true }]);
+  f.manifest('@woowtech/pi-omnigent-plugin', other);
+  // Pi installs under the owner/repo spelling that was typed.
+  assert.equal(resolveOmnigentPackageRoot({ agentDir: f.agentDir, env: { PI_OMNIGENT_PLUGIN_ROOT: f.bundled } }), other);
+});
+
+for (const form of [
+  'git:github.com/WOOWTECH/pi-omnigent-plugin-fork',
+  'git:github.com/someone/pi-omnigent-plugin',
+  'git:gitlab.com/WOOWTECH/pi-omnigent-plugin',
+  'github.com/WOOWTECH/pi-omnigent-plugin',
+  'npm:@woowtech/pi-omnigent-plugin',
+]) {
+  test(`sources that are not the GitHub plugin leave the image root available: ${form}`, t => {
+    const f = fixture(t);
+    f.settings([form]);
+    f.manifest();
+    assert.equal(resolveOmnigentPackageRoot({ agentDir: f.agentDir, env: { PI_OMNIGENT_PLUGIN_ROOT: f.bundled } }), f.bundled);
+  });
+}
 
 test('registered coordinator fails closed when its installation is missing or has a wrong manifest', t => {
   const f = fixture(t);
