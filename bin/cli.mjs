@@ -21,11 +21,11 @@ try {
  else if(action==='diagnose') result=await runtime.diagnose();
  else if(action==='models') result=await runtime.listModels(args[0]);
  else if(action==='pair') {
-  if(!args.includes('--reveal'))throw new Error('Use the protected Pi Web setup page, or pair --reveal in a private terminal');
+  if(!args.includes('--reveal'))throw new Error('Use Pi Web Settings > Plugins, or pair --reveal in a private terminal');
   result=await runtime.pair();
  } else if(action==='acceptance') {result=await runtime.acceptance();if(result?.passed!==true)process.exitCode=1;}
- else if(action==='supervise') {await supervise({fallbackOnboarding:args.includes('--fallback-onboarding')});process.exit(0);}
- else if(action==='supervisor') result=await startSupervisor({fallbackOnboarding:true});
+ else if(action==='supervise') {await supervise();process.exit(0);}
+ else if(action==='supervisor') result=await startSupervisor();
  else if(action==='install-host') {const {installHost}=await import('./install-host.mjs');result=await installHost();}
  else throw new Error('Use install, status, health, diagnose, models PROVIDER, pair --reveal, acceptance, stop, or install-host');
  process.stdout.write(JSON.stringify(result,null,2)+'\n');
@@ -35,6 +35,6 @@ try {
  const stages=new Set(['source','patch','dependencies','audit','build','prebuilt','promote']);
  const code=codes.has(error?.code)?error.code:'OPERATION_FAILED';
  const hints={INSTALL_DISK_FULL:'Not enough disk space. Free build caches or expand storage, then retry installation.',INSTALL_PERMISSION_DENIED:'The installation directory is not writable.',INSTALL_MEMORY_EXHAUSTED:'The build exhausted memory. Increase available memory or use a verified prebuilt UI.'};
- process.stderr.write(JSON.stringify({error:['HostInstallError','UiInstallError','RuntimeError'].includes(error?.name)?error.name:'Error',code,...(stages.has(error?.stage)?{stage:error.stage}:{}),message:hints[code]||(action==='pair'?'Pairing requires a ready managed daemon and protected setup entry':'Pi Paseo operation failed; see redacted status and diagnostics')})+'\n');
+ process.stderr.write(JSON.stringify({error:['HostInstallError','UiInstallError','RuntimeError'].includes(error?.name)?error.name:'Error',code,...(stages.has(error?.stage)?{stage:error.stage}:{}),message:hints[code]||(action==='pair'?'Pairing requires a ready managed daemon and Pi Web plugin settings':'Pi Paseo operation failed; see redacted status and diagnostics')})+'\n');
  process.exitCode=1;
 }

@@ -39,7 +39,7 @@ try {
  if(process.env.PI_WEB_SCROLL_E2E==='1') {
   stage='browser';
   if(!process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)await runCommand(process.execPath,['node_modules/playwright/cli.js','install','--with-deps','chromium'],{cwd:host,env});
-  await runCommand(process.execPath,['e2e/paseo-mobile-scroll-runner.mjs'],{cwd:host,env:{...env,PI_WEB_SCROLL_SURFACE:'setup'}});
+  await runCommand(process.execPath,['e2e/paseo-mobile-scroll-runner.mjs'],{cwd:host,env});
  }
  console.log(JSON.stringify({passed:true,tests:count,build:'production',base:meta.baseCommit,patchSha256:meta.patchSha256}));
 } catch {

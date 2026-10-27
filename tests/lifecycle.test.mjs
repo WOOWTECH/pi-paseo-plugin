@@ -138,7 +138,7 @@ test('actual first-install CLI prepares the daemon before Pi registers the packa
   assert.equal(JSON.parse(result.output).hostInstallation.restartRequired, true);
 });
 
-test('explicit stop overrides still-enabled Pi bindings and activate resumes the same onboarding', async t => {
+test('explicit stop overrides still-enabled Pi bindings and activate restarts only the service', async t => {
   const f = fixture(t);
   f.packages([root]);
   f.write('onboarding', { sessionId: 'existing-session', completed: false });
@@ -151,9 +151,9 @@ test('explicit stop overrides still-enabled Pi bindings and activate resumes the
   assert.equal((await f.load('src/supervisor.mjs').startSupervisor()).running, false);
   assert.equal((await host.restore()).phase, 'disabled');
   assert.equal(f.calls.some(c => c[0] === 'spawn'), false);
-  const resumed = await host.lifecycle({ action: 'activate', packages: enabledPackages }, { createOnboarding: () => assert.fail('existing onboarding must be resumed') });
+  const resumed = await host.lifecycle({ action: 'activate', packages: enabledPackages }, { createOnboarding: () => assert.fail('startup must not create a conversation') });
   assert.equal(resumed.phase, 'starting');
-  assert.equal(resumed.onboardingSessionId, 'existing-session');
+  assert.equal('onboardingSessionId' in resumed, false);
   assert.equal(f.calls.filter(c => c[0] === 'spawn').length, 1);
 });
 
@@ -278,9 +278,9 @@ test('ordinary host restart recovers an enabled unpaused package', async t => {
   f.packages([root]);
   f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
   f.write('onboarding', { sessionId: 'existing-session', completed: true });
-  const restored = await f.load('src/host-api.mjs').restore({ createOnboarding: () => assert.fail('restart must reuse onboarding') });
+  const restored = await f.load('src/host-api.mjs').restore({ createOnboarding: () => assert.fail('restart must not create a conversation') });
   assert.equal(restored.phase, 'starting');
-  assert.equal(restored.onboardingSessionId, 'existing-session');
+  assert.equal('onboardingSessionId' in restored, false);
   assert.equal(f.calls.filter(c => c[0] === 'spawn').length, 1);
 });
 
