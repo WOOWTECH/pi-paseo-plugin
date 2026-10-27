@@ -200,4 +200,8 @@ pi install git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.7
 
 Paseo 安裝器會交給 Omnigent 建立共用介面；完成後重啟 Pi Web，再到 **設定 → 插件 → Paseo** 配對。收到 `RESTART_REQUIRED` 時，完成重啟後重新整理並驗證三種引擎對話。首次編譯建議預留至少 3 GiB 可用磁碟空間；實測不足 1 GiB 時套件安裝可能因 `ENOSPC` 失敗。官方 Paseo 的主機顯示名稱請在 Paseo App 內修改；插件的「容器備註」僅存於設定頁。
 
+Paseo 安裝器會優先使用已登記在全域設定的 GitHub 版 Omnigent（`git:`、`https://`、`ssh://` 寫法與 `@ref`／`#ref` 皆可），不會再被映像用 `PI_OMNIGENT_PLUGIN_ROOT` 指向的內建舊版拖住而在安裝時失敗；已登記卻找不到或不是 Omnigent 套件時會停止並回報 `OMNIGENT_COORDINATOR_UNAVAILABLE`／`OMNIGENT_COORDINATOR_INVALID`。專案層級（`.pi/settings.json`）的安裝尚未納入此判斷。
+
+**升級映像內建的副本：** Pi Agent 映像把 Omnigent、Paseo 以 `/opt/woow/...` 路徑登記在設定裡。從設定頁或 `pi install` 裝上新版只會「另外多一筆」，不會取代內建項目；重啟時映像啟動腳本挑第一筆同名套件，仍載入內建舊版，Omnigent 設定頁會一直顯示舊版本號。兩個新版都裝好後，請到 **設定 → 插件** 移除 `/opt/woow/pi-omnigent-plugin` 與 `/opt/woow/pi-paseo-plugin` 這兩筆，再重啟 Pi Web。這個流程已在 `pi-agent:20261026.2019`（內建 Omnigent 0.3.21、Paseo 0.1.10）的隔離 Pod 驗證：移除並重啟後，設定頁顯示 Omnigent 0.3.27，Paseo 服務正常，兩者各只剩一筆。
+
 2026-10-26：Pi4 已部署修正版 `/paseo-web`，完成 Claude 串流中重新整理及三引擎續聊驗收，詳見[正式部署報告](docs/pi4-managed-web-2026-10-26.md)。
