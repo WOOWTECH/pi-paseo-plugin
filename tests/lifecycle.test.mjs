@@ -439,3 +439,21 @@ test('state path safety preserves only macOS fixed root-owned temporary aliases'
   f.fakeFs.lstatSync = file => String(file) === '/var' ? { isSymbolicLink: () => true, uid: 1000 } : originalStat(file);
   assert.throws(() => state.assertSafePath('/var/pi-paseo-test-does-not-exist'), error => error.code === 'UNSAFE_SYMLINK');
 });
+
+test('SWAP: a stop sent by a replacing supervisor under another package root never persists a user disable', async t => {
+  const f = fixture(t);
+  const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-newroot-'));
+  t.after(() => fs.rmSync(newRoot, { recursive: true, force: true }));
+  f.packages([root]);                                   // the old supervisor starts while Pi still configures it
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const entered = deferred(), release = deferred();
+  f.runtime.activate = async () => { entered.resolve(); await release.promise; f.calls.push(['activate-finished']); };
+  const supervising = f.load('src/supervisor.mjs').supervise();
+  await entered.promise;
+  f.packages([newRoot]);                                // plugin source swapped: Pi configures only the replacement
+  f.write('host-registration', { enabled: true, packageRoot: newRoot, cwd: f.loc.home });
+  f.signals.emit('SIGTERM');
+  release.resolve();
+  await supervising;
+  assert.equal(f.calls.some(c => c[0] === 'deactivate'), false, 'old supervisor deactivated Paseo during a source swap');
+});
