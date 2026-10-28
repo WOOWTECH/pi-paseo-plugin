@@ -261,9 +261,10 @@ async function readModels(provider) {
   return withClient(async client => {
     let result = await client.listProviderModels(provider);
     // The daemon answers from a cached provider snapshot that is only rebuilt on request or restart, so a catalog cached
-    // before the provider was logged in stays empty afterwards. Ask for one refresh of just this provider and read again;
-    // if the refresh itself fails, keep the first answer (what this call returned before).
-    if (!result.error && !(result.models || []).length) {
+    // before the provider was ready stays empty (not logged in yet) or failed (it could not start, e.g. a missing home
+    // directory) afterwards. Ask for one refresh of just this provider and read again; if the refresh itself fails, keep
+    // the first answer (what this call returned before).
+    if (result.error || !(result.models || []).length) {
       try { await client.refreshProvidersSnapshot({ providers: [provider] }); result = await client.listProviderModels(provider); }
       catch { /* keep the first answer */ }
     }

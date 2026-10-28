@@ -14,7 +14,7 @@ import * as runtimeLayout from '../src/runtime-layout.mjs';
 
 // The Paseo daemon answers list_provider_models from a cached provider snapshot that is only rebuilt on an explicit
 // refresh_providers_snapshot request or a daemon restart. This fake keeps the same cache semantics.
-function fixture(t,{truth,errors={}}) {
+function fixture(t,{truth,errors={},healsOnRefresh=false}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-models-'));
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const loc={home:dir,agentDir:dir,stateDir:dir,runtimeDir:path.join(dir,'runtime'),paseoHome:path.join(dir,'daemon'),port:6769};
@@ -28,7 +28,7 @@ function fixture(t,{truth,errors={}}) {
  const client={
   listProviderModels:async provider=>{calls.list++;return errors[provider]?{provider,error:errors[provider]}:{provider,models:cache[provider],error:null};},
   getProvidersSnapshot:async()=>({entries:Object.keys(truth).map(provider=>({provider,status:'ready',enabled:true}))}),
-  refreshProvidersSnapshot:async options=>{calls.refresh.push(options);for(const provider of options.providers)cache[provider]=truth[provider];return {acknowledged:true};},
+  refreshProvidersSnapshot:async options=>{calls.refresh.push(options);for(const provider of options.providers){cache[provider]=truth[provider];if(healsOnRefresh)delete errors[provider];}return {acknowledged:true};},
   close:async()=>{},
  };
  const source=new URL('../src/runtime.mjs',import.meta.url);const code=ts.transpileModule(fs.readFileSync(source,'utf8'),{fileName:source.pathname+'.ts',compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
@@ -83,8 +83,16 @@ test('a failing refresh keeps the first answer instead of failing the models req
  assert.equal(typeof original,'function');
 });
 
-test('a provider error is reported as unavailable and does not trigger a refresh',async t=>{
+test('a provider error is refreshed once and still reported as unavailable when it persists',async t=>{
  const f=fixture(t,{truth:{pi:PI_MODELS},errors:{pi:'Provider pi is not available'}});
  await assert.rejects(f.runtime.listModels('pi'),e=>e.code==='PROVIDER_MODELS_UNAVAILABLE');
- assert.deepEqual(f.calls.refresh,[]);
+ assert.equal(JSON.stringify(f.calls.refresh),'[{"providers":["pi"]}]');
+});
+
+test('an error cached before the provider could start clears after one refresh',async t=>{
+ // e.g. Codex answered 503 at daemon start because its home directory was missing; once the directory exists a refresh is enough
+ const f=fixture(t,{truth:{codex:[{id:'gpt-6.1-sol',label:'gpt-6.1-sol'}]},errors:{codex:'Codex app-server exited with code 1'},healsOnRefresh:true});
+ const catalog=await f.runtime.listModels('codex');
+ assert.deepEqual(catalog.models.map(m=>m.id),['gpt-6.1-sol']);
+ assert.equal(f.calls.refresh.length,1);assert.equal(f.calls.list,2);
 });
