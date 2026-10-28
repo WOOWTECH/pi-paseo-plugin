@@ -43,6 +43,24 @@ export function packageEnabled(loc=runtime.locations(),{cwd}={}) {
   return typeof entry==='string'||!!entry&&(!Array.isArray(entry.extensions)||entry.extensions.length>0);
  });
 }
+// Does this stop mean "the user wants Paseo off"? Only the host knows, and it records
+// its intent in host-registration.json before it signals:
+//   * enabled === false  -> a real disable; finish it even if the host's waiter died.
+//   * packageRoot is some OTHER root -> this supervisor is being REPLACED by one under
+//     that root (a plugin-source swap, e.g. repinning a git tag to the image bundle).
+//     packageEnabled() would say false here only because Pi no longer configures *our*
+//     root, which is not a user disable.
+//   * otherwise -> Pi itself no longer has the package enabled, so disable.
+// Reading Pi's settings or the record can throw; a shutdown path must not mask the real
+// error, and "cannot tell" has to mean "leave the user's choice alone".
+function shouldDeactivateOnStop(loc) {
+ try {
+  const registration=readRecord(path.join(loc.stateDir,'host-registration.json'));
+  if(registration.enabled===false)return true;
+  if(typeof registration.packageRoot==='string'&&!sameRoot(registration.packageRoot))return false;
+  return !packageEnabled(loc);
+ } catch {return false;}
+}
 /** @param {{cwd?: string}} [options] */
 export async function startSupervisor({cwd}={}) {
  const loc=runtime.locations(),file=path.join(loc.stateDir,'supervisor.json');
@@ -103,7 +121,9 @@ export async function supervise() {
   }
  } finally {
   process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);
-  // If the host's bounded wait expires, finish stopping after any in-flight work.
-  if(stop)await runtime.deactivate();
+  // A signal only means this process must end; whether Paseo should be left disabled
+  // is a separate question (see shouldDeactivateOnStop). Deactivating on every stop
+  // persisted "the user wants Paseo off" for a container shutdown or a source swap.
+  if(stop&&shouldDeactivateOnStop(loc))await runtime.deactivate();
  }
 }
