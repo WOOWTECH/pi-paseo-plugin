@@ -1,9 +1,9 @@
 diff --git a/app/api/plugin-paseo/route.test.mjs b/app/api/plugin-paseo/route.test.mjs
 new file mode 100644
-index 0000000..70b9e3c
+index 0000000..28df14c
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.test.mjs
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,400 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import os from "node:os";
@@ -28,6 +28,11 @@ index 0000000..70b9e3c
 +  fs.mkdirSync(cwd);
 +  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 +  const calls = [];
++  const discoveries = [];
++  // A real home directory that is NOT inside the served roots, for fresh-install cases.
++  const home = path.join(root, "home");
++  if (!options.homeMissing) fs.mkdirSync(home);
++  const extraEnv = typeof options.env === "function" ? options.env({ root, cwd, home }) : options.env;
 +  const snapshot = { phase: "running", enabled: true, daemon: { running: true, reachable: true }, ...options.status };
 +  const api = {
 +    async status() { calls.push("status"); return snapshot; },
@@ -40,7 +45,7 @@ index 0000000..70b9e3c
 +  };
 +  const pkg = { source: path.join(root, "package"), scope: "global", packageName: "@woowtech/pi-paseo", disabled: options.disabled === true };
 +  const sandbox = vm.createContext({
-+    process: { env: { HOME: root, PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_PASEO_STATE_DIR: path.join(root, "state"), PI_WEB_PASSWORD: "fixture-password" }, platform: process.platform },
++    process: { env: { HOME: root, PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_PASEO_STATE_DIR: path.join(root, "state"), PI_WEB_PASSWORD: "fixture-password", ...extraEnv }, platform: process.platform },
 +    Buffer, TextDecoder, URL, Response, console,
 +  });
 +  const modules = new Map();
@@ -54,14 +59,14 @@ index 0000000..70b9e3c
 +    "@/lib/plugin-updates": { isPluginSourceCheckable: () => false, checkPluginUpdates: async () => { calls.push("updates"); return []; } },
 +    "@/lib/plugin-lifecycle": { notifyPluginPackageChange() { calls.push("lifecycle"); }, preparePluginPackageRemoval() { calls.push("removal"); } },
 +    "@/lib/paseo-plugin": {
-+      configuredPaseoPackages(directory) { calls.push(`discover:${directory}`); return options.missing ? [] : [pkg]; },
++      configuredPaseoPackages(directory, globalOnly = false) { calls.push(`discover:${directory}`); discoveries.push({ directory, globalOnly }); return options.missing ? [] : [pkg]; },
 +      loadPaseoHostApi: async () => api,
 +    },
 +    "@/lib/file-access": {
-+      getAllowedFileRoots: async () => new Set([cwd]),
++      getAllowedFileRoots: async () => options.fresh ? new Set() : new Set([cwd]),
 +      isExistingFilePathAllowed: (directory, roots) => load(path.join(host, "lib/path-security.ts")).isExistingPathWithinRoots(directory, roots),
 +    },
-+    "node:os": { homedir: () => cwd },
++    "node:os": { homedir: () => options.fresh ? home : cwd },
 +  };
 +  function load(file) {
 +    if (modules.has(file)) return modules.get(file).exports;
@@ -93,7 +98,7 @@ index 0000000..70b9e3c
 +    const guarded = proxy(req);
 +    return guarded.headers.get("x-middleware-next") === "1" ? route[req.method](req) : guarded;
 +  }
-+  return { api, snapshot, cwd, root, calls, request, dispatch, route, serialize: load(path.join(host, "lib/plugin-package-lock.ts")).serializePluginPackageOperation };
++  return { api, snapshot, cwd, root, home, calls, discoveries, request, dispatch, route, serialize: load(path.join(host, "lib/plugin-package-lock.ts")).serializePluginPackageOperation };
 +}
 +
 +test("Paseo proxy authenticates requests and rejects CSRF before loading the installed API", async (t) => {
@@ -181,6 +186,52 @@ index 0000000..70b9e3c
 +    assert.equal((await f.dispatch(f.request({ action: "activate", cwd }))).status, 404);
 +  }
 +  assert.deepEqual(f.calls, []);
++});
++
++test("Paseo opens on a fresh install that has no conversation and no served project", async (t) => {
++  // No session cwd and no project picked: the allowed roots are empty and home is not inside them. The panel sends no
++  // cwd, so the server's own fallback must be usable, and it reads the global package only.
++  const f = fixture(t, { fresh: true });
++  const opened = await f.dispatch(f.request(undefined));
++  assert.equal(opened.status, 200);
++  assert.deepEqual(f.discoveries, [{ directory: f.home, globalOnly: true }]);
++  assert.equal((await f.dispatch(f.request({ action: "status", cwd: undefined }))).status, 200);
++  const pair = await f.dispatch(f.request({ action: "pair", cwd: undefined }));
++  assert.equal(pair.status, 200);
++  assert.match((await pair.json()).url, /app\.paseo\.sh/);
++  assert.equal((await f.dispatch(f.request({ action: "diagnose", cwd: undefined }))).status, 200);
++  // A directory the client names is still refused unless Pi Web serves it, even when it is the same home directory.
++  for (const target of [f.home, f.root, f.cwd]) {
++    assert.equal((await f.dispatch(f.request(undefined, { search: "?cwd=" + encodeURIComponent(target) }))).status, 404);
++    assert.equal((await f.dispatch(f.request({ action: "status", cwd: target }))).status, 404);
++  }
++});
++
++test("Paseo treats PI_PASEO_CWD as the operator's choice and refuses an unusable fallback", async (t) => {
++  const project = fixture(t, { fresh: true, env: ({ cwd }) => ({ PI_PASEO_CWD: cwd }) });
++  assert.equal((await project.dispatch(project.request(undefined))).status, 200);
++  assert.deepEqual(project.discoveries, [{ directory: project.cwd, globalOnly: false }], "an explicit project keeps project-aware discovery");
++  for (const [name, env, prepare] of [
++    ["missing", ({ root }) => ({ PI_PASEO_CWD: path.join(root, "missing") })],
++    ["a file", ({ root }) => ({ PI_PASEO_CWD: path.join(root, "file.txt") }), (f) => fs.writeFileSync(path.join(f.root, "file.txt"), "x")],
++    ["relative", () => ({ PI_PASEO_CWD: "relative/path" })],
++  ]) {
++    const f = fixture(t, { fresh: true, env });
++    prepare?.(f);
++    assert.equal((await f.dispatch(f.request(undefined))).status, 404, `a ${name} fallback is a 404, not a 503`);
++    assert.equal((await f.dispatch(f.request({ action: "status", cwd: undefined }))).status, 404);
++    assert.deepEqual(f.discoveries, [], `a ${name} fallback is never discovered`);
++  }
++});
++
++test("Paseo keeps full project discovery for served directories and answers 404 for a missing home", async (t) => {
++  const f = fixture(t);
++  assert.equal((await f.dispatch(f.request(undefined, { search: "?cwd=" + encodeURIComponent(f.cwd) }))).status, 200);
++  assert.equal((await f.dispatch(f.request(undefined))).status, 200, "home inside the served roots behaves as before");
++  assert.deepEqual(f.discoveries, [{ directory: f.cwd, globalOnly: false }, { directory: f.cwd, globalOnly: false }]);
++  const missing = fixture(t, { fresh: true, homeMissing: true });
++  assert.equal((await missing.dispatch(missing.request(undefined))).status, 404);
++  assert.deepEqual(missing.discoveries, []);
 +});
 +
 +test("Paseo masks runtime errors and projects status, diagnostics, models and pairing", async (t) => {
@@ -355,10 +406,10 @@ index 0000000..70b9e3c
 +});
 diff --git a/app/api/plugin-paseo/route.ts b/app/api/plugin-paseo/route.ts
 new file mode 100644
-index 0000000..9505447
+index 0000000..c829881
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.ts
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,107 @@
 +import { NextResponse } from "next/server";
 +import { readJsonObject, RequestBodyError } from "@/lib/json-request";
 +import { homedir } from "node:os";
@@ -384,13 +435,24 @@ index 0000000..9505447
 +  return NextResponse.json(value, { status, headers });
 +}
 +
++function directoryExists(directory: string): boolean {
++  try { return statSync(directory).isDirectory(); } catch { return false; }
++}
++
 +async function context(cwd: unknown) {
-+  const directory = typeof cwd === "string" && cwd ? cwd : process.env.PI_PASEO_CWD || homedir();
-+  if (!validCwd(directory)) return null;
-+  const roots = await getAllowedFileRoots();
-+  if (!isExistingFilePathAllowed(directory, roots)) return null;
-+  if (!statSync(directory).isDirectory()) return null;
-+  const packages = configuredPaseoPackages(directory);
++  // A directory named by the client must be one Pi Web already serves. The server's own fallback (PI_PASEO_CWD, else
++  // the user's home) is trusted: the managed Web client route and startup recovery already read it without that
++  // check, and requiring it made this panel unreachable on a fresh install that has no conversation and no
++  // selected project (the project picker only registers a child directory of home).
++  const requested = typeof cwd === "string" && cwd ? cwd : undefined;
++  const configured = process.env.PI_PASEO_CWD;
++  const directory = requested ?? (configured || homedir());
++  if (!validCwd(directory) || !directoryExists(directory)) return null;
++  const served = isExistingFilePathAllowed(directory, await getAllowedFileRoots());
++  if (!served && requested) return null;
++  // Outside the served roots only the global package is read, like the managed Web client route, unless the
++  // operator named a project explicitly with PI_PASEO_CWD.
++  const packages = configuredPaseoPackages(directory, !served && !configured);
 +  const target = packages.find((pkg) => !pkg.disabled) ?? packages[0];
 +  if (!target) return null;
 +  return { cwd: directory, packages, target, api: target.disabled ? null : await loadPaseoHostApi(target) };
