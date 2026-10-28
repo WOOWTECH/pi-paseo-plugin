@@ -350,11 +350,42 @@ test('supervisor stop finishes deactivation even without the original host waite
   f.runtime.activate = async () => { entered.resolve(); await release.promise; f.calls.push(['activate-finished']); };
   const supervising = f.load('src/supervisor.mjs').supervise();
   await entered.promise;
+  // lifecycle() persists the disabled registration before it signals, so the
+  // supervisor can still tell a disable apart from a plain stop when that host dies.
+  f.write('host-registration', { enabled: false, packageRoot: root, cwd: f.loc.home });
   f.signals.emit('SIGTERM');
   assert.equal(f.calls.some(c => c[0] === 'deactivate'), false);
   release.resolve();
   await supervising;
   assert.deepEqual(f.calls.map(c => c[0]), ['activate-finished', 'deactivate']);
+});
+
+test('a stop while the package is still enabled never persists a user disable', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  // No disabled registration: this is container shutdown, or startSupervisor()
+  // replacing a supervisor that lives under another package root (a plugin-source
+  // swap). Deactivating here wrote desiredEnabled=false to the tenant volume and
+  // left Paseo off across restarts.
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const entered = deferred(), release = deferred();
+  f.runtime.activate = async () => { entered.resolve(); await release.promise; f.calls.push(['activate-finished']); };
+  const supervising = f.load('src/supervisor.mjs').supervise();
+  await entered.promise;
+  f.signals.emit('SIGTERM');
+  release.resolve();
+  await supervising;
+  assert.deepEqual(f.calls.map(c => c[0]), ['activate-finished']);
+  assert.equal(f.calls.some(c => c[0] === 'deactivate'), false);
+});
+
+test('a stop still disables when Pi itself no longer has the package enabled', async t => {
+  const f = fixture(t);
+  f.packages([]);
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const supervising = f.load('src/supervisor.mjs').supervise();
+  await supervising;
+  assert.deepEqual(f.calls.map(c => c[0]), ['deactivate']);
 });
 
 test('a PID reused while stopping is never signaled again or waited on as the original supervisor', async t => {

@@ -43,6 +43,9 @@ export function packageEnabled(loc=runtime.locations(),{cwd}={}) {
   return typeof entry==='string'||!!entry&&(!Array.isArray(entry.extensions)||entry.extensions.length>0);
  });
 }
+// Reading Pi's settings can throw; a shutdown path must not mask the real error, and
+// "cannot tell" has to mean "leave the user's choice alone" rather than disable Paseo.
+function stillEnabled(loc) {try{return packageEnabled(loc);}catch{return true;}}
 /** @param {{cwd?: string}} [options] */
 export async function startSupervisor({cwd}={}) {
  const loc=runtime.locations(),file=path.join(loc.stateDir,'supervisor.json');
@@ -103,7 +106,12 @@ export async function supervise() {
   }
  } finally {
   process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);
-  // If the host's bounded wait expires, finish stopping after any in-flight work.
-  if(stop)await runtime.deactivate();
+  // A signal only means this process must end. The host writes its disabled
+  // registration before it signals, so finish that disable after any in-flight work
+  // even if the host's bounded wait expires. Never let a plain stop persist
+  // "the user wants Paseo off": container shutdown, and startSupervisor() replacing
+  // a supervisor that lives under another package root, both arrive as SIGTERM while
+  // the package is still enabled, and deactivating there disables Paseo across restarts.
+  if(stop&&!stillEnabled(loc))await runtime.deactivate();
  }
 }
