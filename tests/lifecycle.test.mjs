@@ -457,3 +457,35 @@ test('SWAP: a stop sent by a replacing supervisor under another package root nev
   await supervising;
   assert.equal(f.calls.some(c => c[0] === 'deactivate'), false, 'old supervisor deactivated Paseo during a source swap');
 });
+
+// The SWAP case above drives the swap through a signal, so it only ever exercises the
+// finally path. The loop reaches the same situation on its own -- Pi repins the plugin
+// source while this supervisor is mid-activate -- and that path had no guard at all (#13).
+test('LOOP-SWAP: a source swap the poll loop notices itself never persists a user disable', async t => {
+  const f = fixture(t);
+  const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-newroot-loop-'));
+  t.after(() => fs.rmSync(newRoot, { recursive: true, force: true }));
+  f.packages([root]);                                   // the old supervisor starts while Pi still configures it
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const entered = deferred(), release = deferred();
+  f.runtime.activate = async () => { entered.resolve(); await release.promise; f.calls.push(['activate-finished']); };
+  const supervising = f.load('src/supervisor.mjs').supervise();
+  await entered.promise;
+  f.packages([newRoot]);                                // plugin source swapped: Pi configures only the replacement
+  f.write('host-registration', { enabled: true, packageRoot: newRoot, cwd: f.loc.home });
+  release.resolve();                                    // no signal: the loop itself has to notice
+  await supervising;
+  assert.equal(f.calls.some(c => c[0] === 'deactivate'), false, 'the poll loop deactivated Paseo during a source swap');
+  assert.equal(f.calls.some(c => c[0] === 'activate-finished'), true, 'the in-flight activation was abandoned');
+});
+
+// The companion to LOOP-SWAP: leaving a superseded supervisor alone must not stop the loop
+// from finishing a disable the host really did record.
+test('LOOP-DISABLE: the poll loop still deactivates when the host recorded a real disable', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  f.write('host-registration', { enabled: false, packageRoot: root, cwd: f.loc.home });
+  await f.load('src/supervisor.mjs').supervise();
+  assert.equal(f.calls.filter(c => c[0] === 'deactivate').length, 1, 'a recorded disable was not finished');
+  assert.equal(f.calls.some(c => c[0] === 'activate'), false);
+});
