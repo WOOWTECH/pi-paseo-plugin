@@ -172,7 +172,7 @@ npm pack --ignore-scripts
 
 反向代理若會清空 `Origin` 或改寫 `Host`，必須在改寫前驗證來源；也需保留並拒絕瀏覽器的 `Sec-Fetch-Site: cross-site`。Pi 5 的入口代理已對 `/api/plugin-paseo` 加入限定正式網址的檢查。部署範例與驗收方式見 [代理來源防護](docs/proxy-origin.md)。
 
-Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以固定官方 `brace-expansion` 5.0.12 替換其私有受影響依賴，並由回歸測試驗證 API 相容性。請使用發行 lockfile 和安裝流程，避免在使用中的套件目錄執行 `npm install` 或 `npm ci`。
+Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以固定官方 `brace-expansion` 5.0.12、`undici` 8.12.3 替換其私有受影響依賴，並由回歸測試驗證 API 相容性。插件自身的 SDK 另將私有 `minimatch` 10.2.6 換成固定的 11.0.1（GHSA-g3hv-75wg-m249）；11.0.1 新增的 `@isaacs/nonrecursive-glob-match` 由發行 lockfile 安裝在上層 `node_modules`，若 SDK 位置載入不到同一版本，修補會在替換前中止並保留原檔。Pi SDK 1.5 起自帶已修補的 `minimatch`，安裝時不更動。Pi Web 主機 adapter 尚未固定 `minimatch`，主機建置內的 SDK 副本不在此替換範圍。請使用發行 lockfile 和安裝流程，避免在使用中的套件目錄執行 `npm install` 或 `npm ci`。
 
 完整驗收紀錄與已知限制見 [驗證紀錄](docs/validation.md)。
 
