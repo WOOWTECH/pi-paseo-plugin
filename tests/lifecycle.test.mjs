@@ -55,6 +55,8 @@ function fixture(t) {
   const runtime = {
     locations: () => loc,
     status: async () => ({ daemon: { running: true } }),
+    daemonRunning: async () => true,
+    refreshPiCatalogIfChanged: async () => false,
     activate: async () => { calls.push(['activate']); return {}; },
     deactivate: async () => { calls.push(['deactivate']); return {}; },
   };
@@ -256,15 +258,15 @@ test('shutdown never signals unrelated argv or reused process identities', async
   }
 });
 
-test('supervisor rechecks shutdown after status and does not activate or create onboarding', async t => {
+test('supervisor rechecks shutdown after the daemon check and does not activate or create onboarding', async t => {
   const f = fixture(t);
   f.packages([root]);
   const entered = deferred(), release = deferred();
-  f.runtime.status = async () => { entered.resolve(); return release.promise; };
+  f.runtime.daemonRunning = async () => { entered.resolve(); return release.promise; };
   const supervising = f.load('src/supervisor.mjs').supervise({ fallbackOnboarding: true });
   await entered.promise;
   f.signals.emit('SIGTERM');
-  release.resolve({ daemon: { running: false } });
+  release.resolve(false);
   await supervising;
   assert.equal(f.calls.some(c => c[0] === 'activate'), false);
   assert.equal(fs.existsSync(path.join(f.loc.stateDir, 'onboarding.json')), false);
@@ -272,6 +274,24 @@ test('supervisor rechecks shutdown after status and does not activate or create 
   assert.equal(f.signals.listenerCount('SIGINT'), 0);
 });
 
+
+test('the supervisor poll never asks the daemon for its status and does not wait for a Pi catalog refresh', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  // Paseo answers every daemon status request by running each provider's --version.
+  f.runtime.status = async () => { throw new Error('the supervisor asked the daemon for its status'); };
+  let polls = 0, refreshes = 0;
+  f.runtime.daemonRunning = async () => { polls++; return true; };
+  f.runtime.refreshPiCatalogIfChanged = () => { refreshes++; return new Promise(() => {}); };
+  const supervising = f.load('src/supervisor.mjs').supervise();
+  const deadline = Date.now() + 5000;
+  while (polls < 4 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  f.signals.emit('SIGTERM');
+  await supervising;
+  assert.equal(refreshes, 1, 'one refresh at a time, while the loop kept polling and still stopped');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'activate'), [['activate']]);
+  assert.equal(fs.existsSync(path.join(f.loc.stateDir, 'supervisor-error.json')), false);
+});
 
 test('ordinary host restart recovers an enabled unpaused package', async t => {
   const f = fixture(t);

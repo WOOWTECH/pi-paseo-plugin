@@ -214,6 +214,41 @@ export async function deactivate() {
 export async function status() {
   return singleFlight(`status:${locations().paseoHome}`,readStatus);
 }
+/** The supervisor's poll: status().daemon.running from the PID lock and /proc alone. It never asks the daemon, because
+ * Paseo answers each status request by running `--version` of every enabled provider, uncached; at the supervisor's
+ * 15 s poll that was about 60% of the idle CPU of a 4-core H618 board. */
+export async function daemonRunning() {
+  try { const instance = await currentInstance(); if (!instance) return false; verifyInstanceOwnership(instance); return true; }
+  catch { return false; }
+}
+// Pi builds its model list from these files in the agent directory the Pi provider is given. The daemon caches that
+// list until a refresh or a restart, so a provider configured after the daemon started (LiteLLM written to
+// models.json, for example) stayed out of Paseo's Pi models.
+const PI_CATALOG_FILES = ['models.json', 'settings.json'];
+function piCatalogFiles() {
+  return PI_CATALOG_FILES.map(name => {
+    try { const s = fs.statSync(path.join(locations().agentDir, name)); return { id: `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`, mtimeMs: s.mtimeMs }; }
+    catch { return { id: null, mtimeMs: 0 }; }
+  });
+}
+/** Asks the running daemon to rebuild its Pi model list once after models.json or settings.json changed. Best effort:
+ * it never throws, so a models read cannot fail because of it. */
+export async function refreshPiCatalogIfChanged() {
+  try {
+    const instance = await currentInstance(); if (!instance) return false; verifyInstanceOwnership(instance);
+    const files = piCatalogFiles(), fingerprint = files.map(file => file.id).join('|');
+    const seen = readState().piCatalog;
+    const sameDaemon = seen?.pid === instance.pid && seen?.startedAt === instance.startedAt;
+    // A daemon builds its list after it starts, so for a daemon not seen before only a later change leaves it stale.
+    const stale = sameDaemon ? seen.fingerprint !== fingerprint : files.some(file => file.mtimeMs > Date.parse(instance.startedAt));
+    if (sameDaemon && !stale) return false;
+    // Recorded before asking: one attempt per change. A refresh starts Pi, so a failing one must not repeat every poll.
+    updateState({ piCatalog: { pid: instance.pid, startedAt: instance.startedAt, fingerprint } });
+    if (!stale) return false;
+    await withClient(client => client.refreshProvidersSnapshot({ providers: ['pi'] }), 150000);
+    return true;
+  } catch { return false; }
+}
 async function readStatus() {
   const state = readState(); const installed = !!controlRuntimeDirectory(); const owned = ownsHome();
   const daemon = { running: false, reachable: false, owned, pid: null, listen: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
@@ -255,7 +290,11 @@ export async function diagnose() {
 }
 export async function listModels(provider) {
   if (!PROVIDERS.includes(provider)) throw new RuntimeError('INVALID_PROVIDER');
-  return singleFlight(`models:${locations().paseoHome}:${provider}`,()=>readModels(provider));
+  return singleFlight(`models:${locations().paseoHome}:${provider}`,async()=>{
+    // The supervisor makes this refresh within a poll; a read right after the change makes it first.
+    if (provider === 'pi') await refreshPiCatalogIfChanged();
+    return readModels(provider);
+  });
 }
 async function readModels(provider) {
   return withClient(async client => {
