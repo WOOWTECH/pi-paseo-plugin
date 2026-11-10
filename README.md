@@ -137,7 +137,7 @@ node bin/cli.mjs stop
 
 預設狀態放在 `$PI_CODING_AGENT_DIR/pi-paseo/`，未設定時使用 `~/.pi/agent/pi-paseo/`；Paseo 自有 home 位於該狀態目錄的 `daemon/`。runtime 使用 lockfile 雜湊識別獨立版本，不覆寫正在使用的舊依賴；更新後若 daemon 尚在使用舊版本，需停止後啟動或透過既有容器服務重啟。套件與整合層放在 `~/.local/share/pi-paseo/`。provider 的 HOME 和 Pi data directory 沿用原環境。
 
-daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用埠。relay 配對不需要對外開啟容器埠。背景 supervisor 檢查程序 metadata，故障時恢復插件服務；這不會週期性呼叫模型。Pi Web 整合層在重啟後恢復 supervisor。
+daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用埠。relay 配對不需要對外開啟容器埠。背景 supervisor 每 15 秒只讀 PID 鎖與 `/proc` 的程序 metadata，故障時恢復插件服務；它不向 daemon 查狀態，因為 Paseo 每回答一次狀態查詢，就對每個啟用的 provider 執行一次 `--version`（4 核 H618 上，原本的 15 秒輪詢約佔閒置 CPU 的六成）。這不會週期性呼叫模型。Pi 的 `models.json` 或 `settings.json` 在 daemon 建好 Pi 模型清單之後有變動時，supervisor 會請 daemon 重建一次 Pi 清單（每次變動只試一次，失敗也不重試）；`models pi` 讀取前也做同樣的檢查。Pi Web 整合層在重啟後恢復 supervisor。
 
 `state.json` 僅保存白名單狀態；配對資訊放在 mode 0600 的專用檔案，設定頁回應使用 `no-store`。舊版、其他使用者或未標記的 Paseo home 不接管。既有初始化對話資料會保留，但插件不再建立或開啟它。
 
@@ -164,7 +164,7 @@ npm pack --ignore-scripts
 
 `health` 輸出不含秘密；只有已安裝、啟用、程序屬於本插件、服務可達且三種 provider 可啟動時才回傳 exit 0。真正對話及 relay 配對另外顯示驗證時間，不能以歷史成功取代目前連線健康。
 
-狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
+狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。Settings → Paseo 開著（分頁可見）時每 5 秒查一次狀態，每次都會讓 Paseo 執行各 provider 的 `--version`。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
 
 安裝器使用程序群組時限與 Linux 核心鎖，建置或發布失敗回滾自身變更。更新期間請避免外部同時編輯 launcher；安裝器保留偵測到的外部改動，檔案系統不提供跨外部寫入者的原子 compare-and-swap。程序群組無法涵蓋刻意逃離 session 的程序，部署隔離依賴容器及其資源限制。
 

@@ -97,7 +97,7 @@ export async function stopSupervisor({timeoutMs=5000}={}) {
 }
 export async function supervise() {
  const loc=runtime.locations();
- let stop=false,initialized=false,retries=0,wake;
+ let stop=false,initialized=false,retries=0,wake,refreshing;
  const shutdown=()=>{stop=true;wake?.();};
  const wait=ms=>new Promise(resolve=>{
   if(stop){resolve();return;}
@@ -117,10 +117,13 @@ export async function supervise() {
   while(!stop) {
    if(await unconfigured())break;
    try {
-    const result=await runtime.status();
+    // The PID lock and /proc only: answering a daemon status request makes Paseo run every provider's --version.
+    const running=await runtime.daemonRunning();
     if(stop)break;
     if(await unconfigured())break;
-    if(!initialized||!result.daemon?.running) {await runtime.activate();initialized=true;}
+    if(!initialized||!running) {await runtime.activate();initialized=true;}
+    // Not awaited: the daemon finishes a Pi catalog refresh on its own, so it must not hold up this loop or a stop.
+    else refreshing??=runtime.refreshPiCatalogIfChanged().catch(()=>false).finally(()=>{refreshing=undefined;});
     if(stop)break;
     if(await unconfigured())break;
     retries=0;

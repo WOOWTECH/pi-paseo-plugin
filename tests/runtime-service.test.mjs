@@ -47,6 +47,15 @@ test('twenty simultaneous real status calls use one daemon request and close it 
  f.stop();const stopped=await f.runtime.status();assert.equal(stopped.daemon.running,false);assert.equal(stopped.phase,'stopped');
 });
 
+test('the supervisor poll reads the PID lock and process metadata, never the daemon',async t=>{
+ const f=fixture(t);
+ // A daemon status request makes Paseo run every enabled provider's --version.
+ assert.equal(await f.runtime.daemonRunning(),true);
+ assert.deepEqual(f.calls,{connect:0,status:0,close:0});
+ f.stop();assert.equal(await f.runtime.daemonRunning(),false);
+ assert.deepEqual(f.calls,{connect:0,status:0,close:0});
+});
+
 test('the probe window expires, scopes process generations and never retains failures',async()=>{
  let clock=0,reads=0;const window=createReadWindow({ttlMs:3000,maxEntries:2,now:()=>clock});
  const read=async()=>++reads;
