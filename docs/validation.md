@@ -4,7 +4,7 @@ Pi SDK 1.0.0 的 npm-shrinkwrap.json 固定私有 `minimatch` 10.2.6，落在 GH
 
 - SDK 只使用具名匯出 `minimatch`（`core/package-manager.js`、`core/model-resolver.js`）；11.0 移除的 `makeRe`、`AST` 沒有被使用。`dist/bundle` 內嵌的 minimatch 程式碼不經由 `node_modules` 載入，不在替換範圍。
 - 11.0.1 新增依賴 `@isaacs/nonrecursive-glob-match`，lockfile 為 1.1.0，位於上層 `node_modules`。替換前先在暫存副本核對每個依賴：從 SDK 位置載入的版本必須與來源副本相同，否則中止並保留原檔。
-- Pi SDK 1.5.0 起不再附 shrinkwrap，並自帶 `minimatch` 11.0.3。不用 lockfile 的正式安裝目前解析到 SDK 1.5.1，修補保留其副本；未知版本仍以 `SDK_DEPENDENCY_UNSUPPORTED` 停止。
+- 只有 Pi SDK 1.0.0 附 shrinkwrap；1.5.0 起自帶 `minimatch` 11.0.3。不用 lockfile 的正式安裝目前解析到 SDK 1.5.1，修補保留其副本；未知版本仍以 `SDK_DEPENDENCY_UNSUPPORTED` 停止。
 - Pi Web 主機 adapter 沒有固定 `minimatch`（其上層 10.2.4 是 dev 依賴），主機建置內的 SDK 副本維持 10.2.6。更新 adapter 需同步 Omnigent combined adapter 記錄的 SHA-256。
 - 1,382 組 SDK 形態的呼叫（模型 ID 加 `nocase`、套件過濾的相對路徑、絕對路徑、檔名及 SKILL.md 父目錄）在 10.2.6 與 11.0.1 結果完全相同；實際 SDK 的 `DefaultPackageManager` 套件過濾與模型範圍解析結果也相同。
 - 乾淨環境 `npm ci` 後，插件與 runtime 的 `npm audit --omit=dev` 均為 0 項；插件測試 196/196、installer 37/37、bootstrap 7/7、TypeScript、發行包檢查及無 dev 依賴的正式安裝通過。只改 lockfile、不改修補程式時，audit 仍為 0 項，但新的已安裝 SDK 測試失敗：lockfile 記錄 11.0.1，實際為 10.2.6。
