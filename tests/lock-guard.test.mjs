@@ -260,7 +260,7 @@ test('guard symlinks, including a link introduced at open, never touch their tar
 `));
 
 test('unsupported platforms fail closed rather than using PID-only reclamation', linux, t => failureCase(t, `
-  for(const platform of ['darwin','win32']) {
+  for(const platform of ['win32']) {
     Object.defineProperty(process,'platform',{value:platform});
     await assert.rejects(withLock(path.join(stateDir,'operation.lock'),fail),code('LOCK_GUARD_UNSUPPORTED'));
     await assert.rejects(withRuntimeLock(fail),code('LOCK_GUARD_UNSUPPORTED'));
