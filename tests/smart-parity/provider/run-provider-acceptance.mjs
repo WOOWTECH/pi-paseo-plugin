@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { memoryResult, memoryWrite as memoryWriteEvidence, fixtureMcpResult, skillRead, sendAgentPrompt, assistantReplied, workspaceRows, agentRows, runPassed, requireRuntimeIdentity, requireEvidenceIdentity } from './acceptance-evidence.mjs';
+import { MEMORY_ROUTING_INSTRUCTIONS, memoryResult, memoryWrite as memoryWriteEvidence, fixtureMcpResult, skillRead, sendAgentPrompt, assistantReplied, workspaceRows, agentRows, runPassed, requireRuntimeIdentity, requireEvidenceIdentity } from './acceptance-evidence.mjs';
 const exec = promisify(execFile);
 const [manifestPath, action = 'discover', phase = 'baseline'] = process.argv.slice(2);
 if (!/^[a-zA-Z0-9_-]{1,30}$/.test(phase)) throw new Error('Invalid acceptance phase');
@@ -104,7 +104,7 @@ try {
         const id = provider.agentId;
         const before = await fetchAgentTimelineItems(observer, id, { timeoutMs: 15000 });
         const beforeCalls = new Set(before.filter(x => x.type === 'tool_call').map(x => x.callId));
-        await command(['send', id, '--no-wait', 'Use pi_shared_memory MCP read for each exact key: ' + m.foreignWrittenKeys.join(', ') + '. Each belongs to the other isolated test host and must return memory:null here. Perform actual MCP reads, then report the missing keys. Do not read manifests or other files.']);
+        await command(['send', id, '--no-wait', MEMORY_ROUTING_INSTRUCTIONS + ' Use pi_shared_memory MCP read for each exact key: ' + m.foreignWrittenKeys.join(', ') + '. Each belongs to the other isolated test host and must return memory:null here. Perform actual MCP reads, then report the missing keys. Do not read manifests or other files.']);
         const waited = await command(['wait', id, '--timeout', '150s'], 165000);
         if (waited.status !== 'idle') throw new Error('Isolation turn did not finish');
         const items = await fetchAgentTimelineItems(observer, id, { timeoutMs: 15000 });
@@ -162,7 +162,7 @@ try {
         const priorProviderWrite = m.writes?.findLast(w => w.provider !== p.id);
         const reads = [...new Map([previous, previousBrandWrite, priorProviderWrite].filter(Boolean).map(w => [w.key, w])).values()];
         const skillDiscovery = p.id === 'claude' ? ' For Claude Code, first use ToolSearch to discover select:mcp__pi_shared_runtime__Skill, then invoke that registered Skill tool once for each exact skill name. Do not guess workspace skill paths.' : '';
-        const prompt = `Run only this harmless acceptance probe. Load the shared-host-memory skill and the ${m.skillName} skill by reading their actual instructions.${skillDiscovery} If any required skill or MCP tool is unavailable, stop immediately and report REQUIRED_RESOURCE_UNAVAILABLE with its name; do not skip it or attempt repairs. Use the configured global MCP server ${m.fixtureMcpName} read_marker tool. Use pi_shared_memory MCP to read key ${m.localMemoryKey}, then key ${m.foreignMemoryKey} (it must be absent on this host), then read key ${writeKey} and report its previous content if present. Save content ${writeMarker} to key ${writeKey}; use expectedRevision null only if absent, otherwise use the revision you just read.${reads.length ? ` Also use memory MCP to read these keys written by earlier providers or brands and report their exact content: ${reads.map(w => w.key).join(', ')}.` : ''} Return the exact values obtained from the skill and each read. Perform actual tool calls. Work only with these fixture resources. Do not read acceptance manifests, harness/report files, provider internals, other memories, credentials or other files; do not change settings, invoke direct SDK/HTTP substitutes, install tools or launch subagents.`;
+        const prompt = `${MEMORY_ROUTING_INSTRUCTIONS} Run only this harmless acceptance probe. Load the shared-host-memory skill and the ${m.skillName} skill by reading their actual instructions.${skillDiscovery} If any required skill or MCP tool is unavailable, stop immediately and report REQUIRED_RESOURCE_UNAVAILABLE with its name; do not skip it or attempt repairs. Use the configured global MCP server ${m.fixtureMcpName} read_marker tool. Use pi_shared_memory MCP to read key ${m.localMemoryKey}, then key ${m.foreignMemoryKey} (it must be absent on this host), then read key ${writeKey} and report its previous content if present. Save content ${writeMarker} to key ${writeKey}; use expectedRevision null only if absent, otherwise use the revision you just read.${reads.length ? ` Also use memory MCP to read these keys written by earlier providers or brands and report their exact content: ${reads.map(w => w.key).join(', ')}.` : ''} Return the exact values obtained from the skill and each read. Perform actual tool calls. Work only with these fixture resources. Do not read acceptance manifests, harness/report files, provider internals, other memories, credentials or other files; do not change settings, invoke direct SDK/HTTP substitutes, install tools or launch subagents.`;
         const settings = { ...(p.modeId ? { modeId: p.modeId } : {}), ...(p.thinkingOptionId ? { thinkingOptionId: p.thinkingOptionId } : {}) };
         m.attemptedWrites ||= []; m.attemptedWrites.push({ key: writeKey, marker: writeMarker });
         fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2) + '\n', { mode: 0o600 });
@@ -193,7 +193,7 @@ try {
         m.writes ||= []; m.writes.push(written);
         fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2) + '\n', { mode: 0o600 });
         await call('update_agent', { agentId: agent.agentId, settings: { model: p.alternateModel } });
-        await command(['send', agent.agentId, '--no-wait', 'Read shared memory key ' + writeKey + ' using its MCP tool, then reply with the retrieved value and MODEL_SWITCH_OK. Use no other resources.']);
+        await command(['send', agent.agentId, '--no-wait', MEMORY_ROUTING_INSTRUCTIONS + ' Read shared memory key ' + writeKey + ' using its MCP tool, then reply with the retrieved value and MODEL_SWITCH_OK. Use no other resources.']);
         await wait(agent.agentId);
         const after = await evidence(agent.agentId, p.id + '-model-switched');
         const oldCalls = new Set(first.tools.map(x => x.callId));
@@ -210,7 +210,7 @@ try {
         const foreignProviderWrite = m.writes?.findLast(w => w.provider !== row.provider);
         if (!foreignProviderWrite) { row.initial.priorProviderRead = false; row.failed = 'OTHER_PROVIDER_WRITE_UNAVAILABLE'; save(); continue; }
         const before = await evidence(row.agentId, row.provider + '-before-cross-provider');
-        await command(['send', row.agentId, '--no-wait', 'Use pi_shared_memory MCP read to retrieve key ' + foreignProviderWrite.key + '. Report its exact content from the real tool result. Do not read manifests or other files.']);
+        await command(['send', row.agentId, '--no-wait', MEMORY_ROUTING_INSTRUCTIONS + ' Use pi_shared_memory MCP read to retrieve key ' + foreignProviderWrite.key + '. Report its exact content from the real tool result. Do not read manifests or other files.']);
         await wait(row.agentId);
         const after = await evidence(row.agentId, row.provider + '-cross-provider');
         const priorCalls = new Set(before.tools.map(x => x.callId));

@@ -1,4 +1,7 @@
 // Fail-closed checks of completed provider tool results, never assistant claims or tool inputs.
+// The adapter permits unqualified tool names, but acceptance must prove which
+// server answered. Request an explicit route instead of weakening that proof.
+export const MEMORY_ROUTING_INSTRUCTIONS = 'For every memory call, explicitly select pi_shared_memory: use its server-specific tool, or set server:"pi_shared_memory" at the top level of the generic MCP dispatcher alongside tool and args. Keep only the underlying tool parameters inside args; never put server inside args or omit server when using an unqualified generic read/write tool.';
 export function requireRuntimeIdentity(value) {
   if (typeof value !== 'string' || !/^(image|package-set):sha256:[a-f0-9]{64}$/.test(value)) throw new Error('Missing or invalid acceptance runtime identity');
   return value;
