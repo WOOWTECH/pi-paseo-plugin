@@ -9,7 +9,7 @@ const lock=fs.readFileSync(path.join(template,'package-lock.json'));
 const lockSha256=createHash('sha256').update(lock).digest('hex');
 export const RUNTIME_REVISION='0.11.2-r3-'+lockSha256.slice(0,12);
 export const runtimeDirectory=loc=>path.join(loc.runtimeDir,'releases',RUNTIME_REVISION);
-// Explicit offline read/stop compatibility only; these releases are never started.
+// Existing-daemon control compatibility only; these releases are never started.
 const priorLockSha256='6d8dbe5154790bbbb0b1281e991871b6f354919022fb55a1235162e969779526';
 const priorReleases=[
  {generation:'r3',sha:priorLockSha256,patched:true},
