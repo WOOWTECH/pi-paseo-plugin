@@ -18,6 +18,8 @@ node tests/smart-parity/baseline.mjs
 
 基線會真正打開三個網站的配對視窗，檢查輸入框、取消與配對控制項，執行 `web-walkthrough-check`、`web-walkthrough-record` 與三組 `web-snapshots-compare`。這項基線只驗證配對視窗，**不表示已驗證模型、主機連線或部署**。
 
+每個 PR 的既有 CI 都執行驗收判定器測試。另有手動 `Smart web public parity baseline` workflow，可重跑三個公開網站並保留七天證據；不建立排程、不帶主機憑證，也不啟動模型。完整主機/provider 驗收使用私人 runner，避免將配對或對話資料上傳到公開 CI artifact。
+
 完整測試匯入 [`craft.mjs`](../tests/smart-parity/craft.mjs) 的 `Craft.record()`，附接同一個 Playwright/CDP 瀏覽器，讓 Craft 記錄真實操作。每個動作有穩定 `step_id`。結果必須完整、未中止且每一步成功；CLI exit code 0 本身不足以判定成功。每個情境還須用 Playwright 或後端快照檢查操作後的實際狀態。
 
 比較使用同一 Craft project 保留的 evidence ID，避免 JavaScript 重新序列化浮點時間戳導致內容雜湊不符。保存 `.cany` 專案及原始 JSON；不要修改原始證據以消除差異。
