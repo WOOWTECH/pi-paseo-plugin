@@ -23,7 +23,6 @@ jobs:
       PI_PASEO_SKIP_POSTINSTALL: '1'
       PI_PASEO_DISCOVERY_ONLY: '1'
       NEXT_TELEMETRY_DISABLED: '1'
-      MACOS_EVIDENCE_DIR: ${{ runner.temp }}/paseo-macos-evidence
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,7 +35,7 @@ jobs:
       - name: Real OS guard contention, process death, state and onboarding
         run: node --test tests/sqlite-lock-guard.test.mjs tests/onboarding.test.mjs
       - name: Actual daemon start, stop and restart without provider credentials
-        run: node tests/macos-runtime-smoke.mjs
+        run: MACOS_EVIDENCE_DIR="$RUNNER_TEMP/paseo-macos-evidence" node tests/macos-runtime-smoke.mjs
       - name: Retain nonsecret lifecycle receipt
         if: always()
         uses: actions/upload-artifact@v4
