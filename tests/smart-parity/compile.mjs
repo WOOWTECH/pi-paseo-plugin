@@ -52,7 +52,7 @@ for(const host of deployment.hosts){
   if(browserReport)validateReportRuntime(browserReport,deployment);
   phases.push({brand,r,w,files:[rf,wf,pf,bf]});
   const pairFiles=[pf,manifestName];
-  if(pairing?.status==='paired')pairFiles.push(...craft(pairing.evidence,['select-target','save-target','start-selected-target','connect-host'],host.label+'/'+brand+'/pair'),...craft(pairingReport.hostListEvidence,['list-connected-hosts'],brand+'/host-list'));
+  if(pairing?.status==='paired')pairFiles.push(...craft(pairing.evidence,['select-target','save-target','start-selected-target','connect-host','verify-connected-host','verify-reconnected-host'],host.label+'/'+brand+'/pair'),...craft(pairingReport.hostListEvidence,['list-connected-hosts'],brand+'/host-list'));
   add(host.label,brand,null,'pair',!!pairing,pairing?.status==='paired'&&pairing.visibleInHostPicker===true&&pairing.confirmationDismissed===true&&pairing.ready?.selectedTarget===brand&&pairing.ready?.activeTarget===brand&&pairing.ready?.healthy===true&&pairing.ready.configurationPending===false,pairFiles);
   const reconnectFiles=[bf];
   for(const row of browser)reconnectFiles.push(...craft(row.evidence,['observe-reconnected-conversation'],host.label+'/'+brand+'/'+row.provider));

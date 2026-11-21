@@ -14,7 +14,7 @@ function fixture() {
 function pairing(m = fixture()) {
   return { brand: 'woowtech', platform: m.platform, scope: m.scope, runId: m.runId, imageId, hostListEvidence: ['ev_list'],
     hosts: m.hosts.map(h => ({ host: h.label, initialImage: imageId, serverId: 'server-' + h.label,
-      evidence: ['ev_select','ev_start','ev_connect'], status: 'paired', visibleInHostPicker: true, confirmationDismissed: true,
+      evidence: ['ev_select','ev_start','ev_connect'], status: 'paired', visibleInHostPicker: true, confirmationDismissed: true, connection: {settingsAvailable: true, afterReload: true, route: '/settings/hosts/server-'+h.label+'/agents'},
       ready: { selectedTarget: 'woowtech', activeTarget: 'woowtech', healthy: true, configurationPending: false } })) };
 }
 function jobs() {
@@ -40,6 +40,9 @@ for (const [label, mutate] of [
 ]) test('rejects '+label,()=>{const m=fixture();mutate(m);assert.throws(()=>validateManifest(m));});
 test('conversation requires prior provider-turn authorization',()=>{const m=fixture();m.providerTurnsAuthorized=false;assert.throws(()=>validateManifest(m,{providerTurns:true}));});
 for(const [label, mutate] of [
+  ['registered but disconnected', r=>delete r.hosts[0].connection],
+  ['connection lost on reload', r=>r.hosts[0].connection.afterReload=false],
+  ['wrong connected host', r=>r.hosts[0].connection.route='/settings/hosts/other/agents'],
   ['confirmation still open', r=>r.hosts[0].confirmationDismissed=false],
   ['wrong image', r=>r.hosts[0].initialImage='old'],
   ['same server twice', r=>r.hosts[1].serverId=r.hosts[0].serverId],

@@ -36,7 +36,7 @@ export function comparisonPlan(manifest, reports, store) {
     collect(pairing.hostListEvidence, ['list-connected-hosts'], 'pair/host-list');
     for (const host of manifest.hosts) {
       collect(pairing.hosts.find(row => row.host === host.label).evidence,
-        ['select-target','save-target','start-selected-target','connect-host'], 'pair/' + host.label);
+        ['select-target','save-target','start-selected-target','connect-host','verify-connected-host','verify-reconnected-host'], 'pair/' + host.label);
       for (const provider of contract.providers) {
         const rows = conversations.rows.filter(row => row.host === host.label && row.provider === provider);
         if (rows.length !== 1) throw Error('Missing or duplicate host/provider conversation');

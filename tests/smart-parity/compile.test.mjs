@@ -114,8 +114,8 @@ test('rejects Craft evidence reused for another provider',t=>{
   const f=providerFixture(t);f.browser.rows.push({...f.browser.rows[0],provider:'codex',agentId:'other'});f.save();assert.throws(()=>compile(f.root),/reused/);
 });
 test('pair case contains every host action and global picker raw/schema evidence',t=>{
-  const f=fixture(t), pairSteps=['select-target','save-target','start-selected-target','connect-host'];
-  const hosts=f.manifest.hosts.map(h=>({host:h.label,initialImage:imageId,serverId:'server-'+h.label,status:'paired',confirmationDismissed:true,visibleInHostPicker:true,ready:{selectedTarget:brand,activeTarget:brand,healthy:true,configurationPending:false},evidence:[f.exportCraft('pair-'+h.label,'web-live/attempts/pair/'+h.label+'.json',pairSteps)]}));
+  const f=fixture(t), pairSteps=['select-target','save-target','start-selected-target','connect-host','verify-connected-host','verify-reconnected-host'];
+  const hosts=f.manifest.hosts.map(h=>({host:h.label,initialImage:imageId,serverId:'server-'+h.label,status:'paired',confirmationDismissed:true,connection:{settingsAvailable:true,afterReload:true,route:'/settings/hosts/server-'+h.label+'/agents'},visibleInHostPicker:true,ready:{selectedTarget:brand,activeTarget:brand,healthy:true,configurationPending:false},evidence:[f.exportCraft('pair-'+h.label,'web-live/attempts/pair/'+h.label+'.json',pairSteps)]}));
   f.put('web-live/'+brand+'-hosts.json',{brand,platform:f.manifest.platform,scope:f.manifest.scope,runId:f.manifest.runId,imageId,hosts,hostListEvidence:[f.exportCraft('list','web-live/attempts/pair/list.json',['list-connected-hosts'])]});
   const {matrix}=compile(f.root),pair=matrix.results.find(r=>r.host==='one'&&r.brand===brand&&r.case==='pair');
   assert.equal(pair.status,'pass');assert.equal(pair.evidence.length,6);

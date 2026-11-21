@@ -69,10 +69,28 @@ try{
  if(await trigger.isVisible()){
   const hostList=await capture(page,`${brand}-all-hosts`,[{step_id:'list-connected-hosts',kind:'click',test_id:'settings-host-picker'},{step_id:'host-list-settle',kind:'wait',ms:300}]);
   report.hostListEvidence=[hostList.id];
-  for(const row of report.hosts){row.visibleInHostPicker=await page.getByTestId(`settings-host-picker-item-${row.serverId}`).isVisible();if(row.visibleInHostPicker&&row.confirmationDismissed)row.status='paired';}
+  for(const row of report.hosts){row.visibleInHostPicker=await page.getByTestId(`settings-host-picker-item-${row.serverId}`).isVisible();if(row.visibleInHostPicker&&row.confirmationDismissed)row.status='registered-awaiting-connection';}
  }else{report.hostPickerMissing=true;}
  await page.screenshot({path:path.join(output,`${brand}-all-hosts.png`)});fs.chmodSync(path.join(output,`${brand}-all-hosts.png`),0o600);
  fs.writeFileSync(path.join(output,`${brand}-all-hosts.aria.txt`),redact(await page.locator('body').ariaSnapshot()),{mode:0o600});save();
+ // A saved pairing in the picker does not establish a working relay. Apporo
+ // can reject hello with close4004 after confirmation; exercise a host RPC UI
+ // and a fresh connection before calling the host paired.
+ for(const row of report.hosts){
+  if(!row.visibleInHostPicker||!row.confirmationDismissed)throw Error('Host registration incomplete');
+  const route=`/settings/hosts/${encodeURIComponent(row.serverId)}/agents`;
+  await page.goto(config.url+route,{waitUntil:'domcontentloaded',timeout:45000});
+  const control=page.getByTestId('host-page-inject-mcp-card').getByRole('switch');
+  await control.waitFor({timeout:45000});
+  row.connection={route,settingsAvailable:true,afterReload:false};
+  row.evidence.push((await capture(page,`${brand}-${row.host}-connected`,[{step_id:'verify-connected-host',kind:'wait',ms:500}])).id);save();
+  await page.reload({waitUntil:'domcontentloaded',timeout:45000});
+  await page.waitForURL(value=>value.origin===new URL(config.url).origin&&value.pathname===route);
+  await control.waitFor({timeout:45000});
+  row.connection.afterReload=true;
+  row.evidence.push((await capture(page,`${brand}-${row.host}-reconnected`,[{step_id:'verify-reconnected-host',kind:'wait',ms:500}])).id);
+  row.status='paired';save();
+ }
  console.log(JSON.stringify({brand,hosts:report.hosts.map(x=>({host:x.host,serverId:x.serverId,visible:x.visibleInHostPicker})),hostPickerMissing:report.hostPickerMissing}));
  validatePairingReport(report,hostManifest,brand);
 }catch(error){

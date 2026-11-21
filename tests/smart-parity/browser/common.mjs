@@ -61,6 +61,8 @@ export function validatePairingReport(report, manifest, brand, { complete = true
     if (complete || row.status === 'paired') {
       requireValue(nonempty(row.serverId) && !servers.has(row.serverId) && row.status === 'paired' &&
         row.visibleInHostPicker === true && row.confirmationDismissed === true &&
+        row.connection?.settingsAvailable === true && row.connection.afterReload === true &&
+        row.connection.route === `/settings/hosts/${encodeURIComponent(row.serverId)}/agents` &&
         row.ready?.selectedTarget === brand && row.ready.activeTarget === brand &&
         row.ready.healthy === true && row.ready.configurationPending === false, 'Host pairing was not semantically verified');
       servers.add(row.serverId);
