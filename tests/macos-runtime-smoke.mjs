@@ -15,7 +15,7 @@ const service=await import('../src/runtime.mjs');
 const evidence={platform:process.platform,arch:process.arch,node:process.versions.node,realDaemon:true,providerTurns:0,credentialFilesCreated:0};
 let stopped=false;
 try{
- await service.saveConfig({name:'Agent Connect macOS CI',target:'woowtech'});
+ await service.saveConnectionSettings({name:'Agent Connect macOS CI',target:'woowtech'});
  const first=await service.activate();
  assert.equal(first.phase,'running');assert.equal(first.daemon.running,true);assert.equal(first.daemon.reachable,true);assert.ok(first.providers.every(p=>p.enabled===false));
  const identity=fs.readFileSync(path.join(state,'daemon/server-id'),'utf8');
