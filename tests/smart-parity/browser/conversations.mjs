@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configuration, launch, readJson, redact, reportWriter,
-  validatePairingReport, validateJobs, completionMarker, workspaceRoute, contract, verifyActiveAgent, verifyReconnectedConversation, runtimeBinding } from './common.mjs';
+  validatePairingReport, validateJobs, completionMarker, workspaceRoute, contract, verifyActiveAgent, verifyReconnectedConversation, runtimeBinding, until } from './common.mjs';
 
 const [brand, ...jobFiles] = process.argv.slice(2);
 const config = configuration(brand, process.env, { providerTurns: true });
@@ -31,20 +31,32 @@ try{
    row.activeAgentVerified=true;
    const selector=page.getByTestId('combined-model-selector').filter({visible:true});
    await selector.waitFor({timeout:30000});
+   await until(async()=>await selector.isEnabled()&&Boolean((await selector.innerText()).trim())&&(await selector.innerText()).trim()!=='Select model',30000);
+   if(await page.getByTestId('combined-model-selector').count()!==1)throw Error('Ambiguous model selector DOM; bind the active agent before recording');
    row.beforeLabel=await selector.innerText();
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-model-open`,[{step_id:'open-model-picker',kind:'click',test_id:'combined-model-selector'}])).id);
    const modelId=`model-row-${job.provider}-${job.targetModel}`;
+   const providerId=`model-provider-${job.provider}`;
+   await until(async()=>await page.getByTestId(modelId).isVisible()||await page.getByTestId(providerId).isVisible(),30000);
    if(!await page.getByTestId(modelId).isVisible()){
-    const providerId=`model-provider-${job.provider}`;
     if(await page.getByTestId(providerId).isVisible())row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-provider-select`,[{step_id:'open-provider-models',kind:'click',test_id:providerId}])).id);
    }
    await page.getByTestId(modelId).waitFor({timeout:20000});
+   // Craft 0.6.1 clicks the DOM box center without scrolling. A model can be
+   // attached and visible while clipped by the menu's scroll container.
+   await page.getByTestId(modelId).scrollIntoViewIfNeeded();
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-model-select`,[{step_id:'select-provider-model',kind:'click',test_id:modelId},{step_id:'settle-selection',kind:'wait',ms:500}])).id);
+   await page.getByTestId(modelId).waitFor({state:'hidden',timeout:20000});
+   await until(async()=>await selector.innerText()!==row.beforeLabel,20000);
    row.afterLabel=await selector.innerText();
    const completion=completionMarker(job);
    if(!completion)throw Error('Missing unique web completion marker');
+   if(await page.locator('[data-testid="message-input-root"] textarea').count()!==1)throw Error('Ambiguous composer DOM; bind the active agent before recording');
+   row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-web-type`,[
+    {step_id:'type-memory-probe',kind:'fill',selector:'[data-testid="message-input-root"] textarea',value:job.prompt}
+   ])).id);
+   await until(async()=>await composer.inputValue()===job.prompt&&await page.getByRole('button',{name:'Send message',exact:true}).isEnabled(),20000);
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-web-send`,[
-    {step_id:'type-memory-probe',kind:'fill',selector:'[data-testid="message-input-root"] textarea',value:job.prompt},
     {step_id:'send-web-message',kind:'click',role:'button',name:'Send message'},
     {step_id:'observe-send',kind:'wait',ms:1000}
    ])).id);
