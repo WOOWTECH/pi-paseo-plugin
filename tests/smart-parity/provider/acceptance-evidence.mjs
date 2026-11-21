@@ -34,10 +34,10 @@ function toolName(call) {
 export function invokes(call, server, tool, fields = {}, { allowOmittedArgs = false } = {}) {
   const name = toolName(call), args = input(call);
   const dispatcherArgs = () => {
-    // Only the zero-argument fixture opts in. Supplied malformed values are
-    // never treated as omission, and parameterized tools still require args.
-    if (!Object.hasOwn(args, 'args')) return allowOmittedArgs && Object.keys(fields).length === 0 ? {} : undefined;
-    return allowOmittedArgs ? args.args : decode(args.args);
+    // The adapter accepts objects or JSON-encoded objects; an empty string
+    // means omission. Only the zero-argument fixture opts into that omission.
+    if (!Object.hasOwn(args, 'args') || args.args === '') return allowOmittedArgs && Object.keys(fields).length === 0 ? {} : undefined;
+    return decode(args.args);
   };
   let actual;
   if ([`${server}_${tool}`, `${server}__${tool}`, `${server}.${tool}`, `mcp__${server}__${tool}`, `mcp.${server}.${tool}`].includes(name)) actual = args;

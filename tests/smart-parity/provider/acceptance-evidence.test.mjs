@@ -130,12 +130,33 @@ test('zero-argument fixture dispatcher accepts omitted args only through the exp
   assert.equal(fixtureMcpResult([perServer],'acceptance_test','fixture-marker'),true);
  }
 });
-test('omitted fixture args never admits supplied null, arrays or strings',()=>{
+test('fixture dispatcher rejects non-object args including decoded malformed values',()=>{
  for(const name of ['mcp__pi_shared_runtime__pi_global_mcp','mcp__pi_shared_runtime__pi_global_mcp__acceptance_test']){
-  for(const args of [null,[],undefined,'','{}','null','[]','scalar']){
+  for(const args of [null,[],undefined,false,0,'null','[]','false','0','"scalar"','"{}"','scalar','{',' ']){
    const call=event(name,{tool:'acceptance_test_read_marker',server:'acceptance_test',args},{output:'fixture-marker'});
    assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),false);
   }
+ }
+});
+test('fixture dispatcher accepts the adapter object or JSON-encoded object union',()=>{
+ for(const name of ['mcp__pi_shared_runtime__pi_global_mcp','mcp__pi_shared_runtime__pi_global_mcp__acceptance_test']){
+  for(const args of [{},'{}',' {"unused":true} ']){
+   const call=event(name,{tool:'acceptance_test_read_marker',server:'acceptance_test',args},{output:'fixture-marker'});
+   assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),true);
+   for(const mutate of [c=>c.detail.input.server='other',c=>c.detail.input.tool='other_read_marker',c=>c.status='running',c=>c.error='failed',c=>c.detail.output={output:'wrong-marker'},c=>c.detail.output={isError:true,output:'fixture-marker'}]){
+    const changed=structuredClone(call);mutate(changed);assert.equal(fixtureMcpResult([changed],'acceptance_test','fixture-marker'),false);
+   }
+  }
+ }
+});
+test('adapter empty string means omitted args only for the zero-argument fixture opt-in',()=>{
+ for(const name of ['mcp__pi_shared_runtime__pi_global_mcp','mcp__pi_shared_runtime__pi_global_mcp__acceptance_test']){
+  const call=event(name,{tool:'acceptance_test_read_marker',server:'acceptance_test',args:''},{output:'fixture-marker'});
+  assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),true);
+  assert.equal(invokes(call,'acceptance_test','read_marker'),false);
+  assert.equal(invokes(call,'acceptance_test','read_marker',{required:'value'},{allowOmittedArgs:true}),false);
+  call.detail.input.args=undefined;
+  assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),false);
  }
 });
 test('zero-argument fixture still requires exact dispatcher server/tool and genuine completed output',()=>{
@@ -152,6 +173,13 @@ test('parameterized memory tools cannot use omitted args even when omission is r
   const read=event(name,{tool:'pi_shared_memory_read',server:'pi_shared_memory'},{output:{memory:null}});
   assert.equal(memoryResult([read],'owned-key',null),false);
   assert.equal(invokes(read,'pi_shared_memory','read',{key:'owned-key'},{allowOmittedArgs:true}),false);
+  for(const args of ['', '{}', undefined, 'null', '[]', 'false', '0', 'invalid']){
+   read.detail.input.args=args;
+   assert.equal(memoryResult([read],'owned-key',null),false);
+   assert.equal(invokes(read,'pi_shared_memory','read',{key:'owned-key'},{allowOmittedArgs:true}),false);
+  }
+  read.detail.input.args='{"key":"owned-key"}';
+  assert.equal(memoryResult([read],'owned-key',null),true);
   const write=event(name,{tool:'pi_shared_memory_write',server:'pi_shared_memory'},{output:{memory:{key:'owned-key',content:'nonce',revision:'r'}}});
   assert.equal(memoryWrite([write],'owned-key','nonce'),false);
  }
