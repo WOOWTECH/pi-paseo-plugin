@@ -80,6 +80,16 @@ node tests/smart-parity/browser/pair.mjs woowtech inspect
 
 Pairing selects/saves the target through the GUI, stops/restarts the service as needed, and verifies selected/active target and health. It obtains the private offer and uses the public confirmation controls with the Smart security prompt's delay and keyboard gesture. A removed URL fragment is insufficient: confirmation must close and each distinct server must appear in the public host picker. `inspect` checks the existing profile without switching the connector.
 
+Before creating the acceptance agents, enable the existing **Settings → Host → Agents → Paseo tools** opt-in on each owned host. Paseo 0.11.2 resolves an absent `daemon.mcp.injectIntoAgents` to `false`: the top-level MCP endpoint can work while agents have no Paseo tools. Do not replace missing agent tools with direct HTTP/SDK calls or remove caller identity to bypass this setting.
+
+The optional setup runner records this explicit GUI configuration:
+
+```sh
+node tests/smart-parity/browser/coordination.mjs woowtech
+```
+
+First add a fresh externally inspected boolean `coordinationBefore` to each manifest host. The runner opens that exact paired server's settings URL, waits for the switch to match the observed value, enables it if needed, then checks the same route after reload. This avoids the app's optimistic initial switch value and asynchronous host-picker selection. The owner must independently read each host's persisted `daemon.mcp.injectIntoAgents` after the run and retain a receipt bound to its runtime and browser attempt. A GUI-only success is insufficient. Recreate existing test agents after enabling injection; their prior tool policy and failed evidence remain unchanged. This setup does not change package defaults or authorize provider turns.
+
 Run the provider observer's `prepare BRAND` action on each owned host, then copy its `web-jobs.json` into the private evidence directory. Keep checkpoints and expected read markers private. Provider acceptance, Web jobs, checkpoints and verifier reports must carry the manifest's exact `runtimeIdentity`; evidence from another image/package set is rejected even if host and agent IDs were retained. Run:
 
 ```sh
@@ -103,6 +113,7 @@ Never commit or publish browser profiles, manifests, offers, screenshots, conver
 node --test tests/smart-parity/browser/*.test.mjs
 node --check tests/smart-parity/browser/pair.mjs
 node --check tests/smart-parity/browser/conversations.mjs
+node --check tests/smart-parity/browser/coordination.mjs
 ```
 
 Tests reject wrong scope/image/ownership, shared data, mismatched pairing/jobs, reused markers, a different active agent after reload, absent assistant evidence and wrong origins. They verify harness assertions, not actual public-site/provider acceptance.
