@@ -6,6 +6,19 @@ import { contract, validateManifest, validatePairingReport, writePrivate, runtim
 import { validateReportRuntime } from './browser/runtime.mjs';
 import { evidenceStore, assertProviderIdentity, assertProviderRows, semanticWebPassed } from './evidence-store.mjs';
 
+const uniqueIds = values => Array.isArray(values) && values.every(id => typeof id === 'string' && id.length > 0) && new Set(values).size === values.length;
+function cliSendersDeleted(report, providers) {
+ const edges=report?.communication?.edges;
+ if(!Array.isArray(edges)||edges.length!==providers.length||!uniqueIds(edges.map(e=>e.agentId))||new Set(edges.map(e=>e.senderProvider)).size!==providers.length||edges.some(e=>!providers.includes(e.senderProvider)))return false;
+ if(!uniqueIds(report.agents)||!Array.isArray(report.deleted)||!Array.isArray(report.deletedAgentAbsence))return false;
+ return edges.every(({agentId})=>report.agents.includes(agentId)&&report.deleted.filter(id=>id===agentId).length===1&&report.deletedAgentAbsence.filter(row=>row.id===agentId).length===1&&report.deletedAgentAbsence.some(row=>row.id===agentId&&row.absent===true));
+}
+function providerAgentsArchived(report, providers) {
+ const rows=report?.providers, lifecycle=report?.mcpConversationLifecycle;
+ if(!Array.isArray(rows)||rows.length!==providers.length||!uniqueIds(rows.map(row=>row.agentId))||!uniqueIds(report.agents)||!Array.isArray(lifecycle)||lifecycle.length!==rows.length||!uniqueIds(lifecycle.map(row=>row.agentId)))return false;
+ return rows.every(row=>report.agents.includes(row.agentId)&&lifecycle.some(value=>value.agentId===row.agentId&&value.archived===true&&value.retainedInArchive===true));
+}
+
 // This compiles actual observer/Craft evidence. It does not run providers or grant release approval.
 export function compile(evidenceDirectory, { platform, manifestName = 'browser-hosts.private.json' } = {}) {
  const store=evidenceStore(evidenceDirectory),root=store.root,read=store.read,proof=store.proof;
@@ -46,9 +59,10 @@ for(const host of deployment.hosts){
   add(host.label,brand,null,'reconnect',browser.length>0,browser.length===providers.length&&new Set(browser.map(x=>x.provider)).size===providers.length&&browser.every(x=>x.activeAgentVerified===true&&x.reconnected===true&&x.completionVisible===true&&x.reconnectedAgentVerified===true&&x.reconnectedAnswerVisible===true),reconnectFiles);
   add(host.label,brand,null,'workspace-cli-create',!!r,r?.cliWorkspaceLifecycle?.created===true,[rf]);
   add(host.label,brand,null,'workspace-mcp-create',!!r,typeof r?.workspaceId==='string'&&r.workspaceId.length>0,[rf]);
-  add(host.label,brand,null,'workspace-archive',typeof r?.cleanupPass==='boolean',r?.workspaceArchived===true&&r.workspaceDirectoryRetained===true&&r.cliWorkspaceLifecycle?.archived===true,[rf]);
-  add(host.label,brand,null,'conversation-cli-create-delete',typeof r?.cleanupPass==='boolean',!!r?.communication?.agentId&&r.deletedAgentAbsence?.some(x=>x.id===r.communication.agentId&&x.absent===true),[rf]);
-  add(host.label,brand,null,'conversation-mcp-create-archive',typeof r?.cleanupPass==='boolean',r?.providers?.length===providers.length&&r.mcpConversationLifecycle?.length===providers.length&&r.mcpConversationLifecycle.every(x=>x.archived===true&&x.retainedInArchive===true),[rf]);
+  const cleaned=r?.cleanupPass===true&&!r.cleanupErrors?.length;
+  add(host.label,brand,null,'workspace-archive',typeof r?.cleanupPass==='boolean',cleaned&&r.workspaceArchived===true&&r.workspaceDirectoryRetained===true&&r.cliWorkspaceLifecycle?.archived===true,[rf]);
+  add(host.label,brand,null,'conversation-cli-create-delete',typeof r?.cleanupPass==='boolean',cleaned&&cliSendersDeleted(r,providers),[rf]);
+  add(host.label,brand,null,'conversation-mcp-create-archive',typeof r?.cleanupPass==='boolean',cleaned&&providerAgentsArchived(r,providers),[rf]);
   add(host.label,brand,null,'agent-coordination',!!r?.communication,r?.communication?.actualSendTool===true&&r.communication.receivedMarker===true&&r.communication.receiverResponded===true&&communicationCyclePassed(r.communication),[rf,...(r?.communication?.edges||[]).flatMap(edge=>[edge.evidenceFile&&base+'/'+path.basename(edge.evidenceFile),edge.receiverEvidenceFile&&base+'/'+path.basename(edge.receiverEvidenceFile)])]);
   for(const provider of providers){
    const p=r?.providers?.find(x=>x.provider===provider),v=w?.providers?.find(x=>x.provider===provider),b=browser.find(x=>x.provider===provider);

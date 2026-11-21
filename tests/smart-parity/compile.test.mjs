@@ -34,6 +34,37 @@ function providerFixture(t) {
   f.exportCraft('web-id','web-live/attempts/test/web.json');save();
   return {...f,base,backend,verifier,browser,save};
 }
+function lifecycleFixture(t) {
+  const f=fixture(t), providers=['claude','codex','pi'], senders=['codex','pi','claude'].map(provider=>({senderProvider:provider,agentId:'sender-'+provider}));
+  const backend={runId:'test-run',hostLabel:'one',phase:brand,runtimeIdentity:'image:'+imageId,workspaceId:'workspace',cleanupPass:true,workspaceArchived:true,workspaceDirectoryRetained:true,cliWorkspaceLifecycle:{created:true,archived:true,directoryRetained:true},providers:providers.map(provider=>({provider,agentId:'receiver-'+provider})),communication:{agentId:senders[0].agentId,edges:senders}};
+  backend.agents=[...backend.providers.map(row=>row.agentId),...senders.map(row=>row.agentId)];
+  backend.deleted=[...backend.agents];backend.deletedAgentAbsence=backend.agents.map(id=>({id,absent:true}));
+  backend.mcpConversationLifecycle=backend.providers.map(row=>({agentId:row.agentId,archived:true,retainedInArchive:true}));
+  const save=()=>f.put('hosts/one/evidence/'+brand+'/provider-acceptance.json',backend);save();
+  const statuses=()=>Object.fromEntries(compile(f.root).matrix.results.filter(row=>row.host==='one'&&row.brand===brand&&['workspace-archive','conversation-cli-create-delete','conversation-mcp-create-archive'].includes(row.case)).map(row=>[row.case,row.status]));
+  return {...f,backend,save,statuses};
+}
+test('lifecycle cases require successful cleanup of all owned CLI senders and exact MCP agents',t=>{
+  const f=lifecycleFixture(t);assert.deepEqual(Object.values(f.statuses()),['pass','pass','pass']);
+  f.backend.cleanupPass=false;f.save();assert.deepEqual(Object.values(f.statuses()),['fail','fail','fail']);
+  f.backend.cleanupPass=true;f.backend.cleanupErrors=[{agentId:'sender-pi'}];f.save();assert.deepEqual(Object.values(f.statuses()),['fail','fail','fail']);
+});
+for(const [label,mutate] of [
+  ['second sender not deleted',r=>r.deleted=r.deleted.filter(id=>id!=='sender-pi')],
+  ['third sender still present',r=>r.deletedAgentAbsence.find(x=>x.id==='sender-claude').absent=false],
+  ['only first sender absence recorded',r=>r.deletedAgentAbsence=r.deletedAgentAbsence.filter(x=>x.id===r.communication.agentId)],
+  ['sender outside owned agents',r=>r.agents=r.agents.filter(id=>id!=='sender-pi')],
+  ['duplicate CLI sender',r=>r.communication.edges[1].agentId=r.communication.edges[0].agentId],
+  ['duplicate absence receipt',r=>r.deletedAgentAbsence.push({...r.deletedAgentAbsence.at(-1)})],
+  ['first-sender alias without full cycle',r=>delete r.communication.edges],
+])test('CLI lifecycle rejects '+label,t=>{const f=lifecycleFixture(t);mutate(f.backend);f.save();assert.equal(f.statuses()['conversation-cli-create-delete'],'fail');});
+for(const [label,mutate] of [
+  ['foreign archive agent',r=>r.mcpConversationLifecycle[1].agentId='foreign-agent'],
+  ['duplicate archive agent',r=>r.mcpConversationLifecycle[1].agentId=r.mcpConversationLifecycle[0].agentId],
+  ['duplicate provider agent',r=>r.providers[1].agentId=r.providers[0].agentId],
+  ['provider outside owned agents',r=>r.agents=r.agents.filter(id=>id!=='receiver-codex')],
+  ['missing retained archive',r=>r.mcpConversationLifecycle[1].retainedInArchive=false],
+])test('MCP lifecycle rejects '+label,t=>{const f=lifecycleFixture(t);mutate(f.backend);f.save();assert.equal(f.statuses()['conversation-mcp-create-archive'],'fail');});
 test('empty run remains explicitly unrun, never a passing matrix', t=>{
   const f=fixture(t), {matrix,result}=compile(f.root);
   assert.equal(result.passed,false);assert.equal(matrix.results.length,178);
