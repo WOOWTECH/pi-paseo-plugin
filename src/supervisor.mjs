@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {DefaultPackageManager, SettingsManager} from '@earendil-works/pi-coding-agent';
 import * as runtime from './runtime.mjs';
+import {SUPERVISOR_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {processIdentity, assertSafePath} from './state.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -73,7 +74,7 @@ export async function startSupervisor({cwd}={}) {
   const old=readRecord(file);
   if(sameProcess(old)) {
    if(old.packageRoot===root)return {running:true,pid:old.pid};
-   await stopOwnedSupervisor(old,5000);
+   await stopOwnedSupervisor(old,SUPERVISOR_STOP_TIMEOUT_MS);
   }
   const logFile=path.join(loc.stateDir,'supervisor.log');
   assertSafePath(logFile);
@@ -88,7 +89,7 @@ export async function startSupervisor({cwd}={}) {
   return {running:true,pid:child.pid};
  });
 }
-export async function stopSupervisor({timeoutMs=5000}={}) {
+export async function stopSupervisor({timeoutMs=SUPERVISOR_STOP_TIMEOUT_MS}={}) {
  const loc=runtime.locations();
  return withLock(path.join(loc.stateDir,'supervisor-start.lock'),async()=>{
   await stopOwnedSupervisor(readRecord(path.join(loc.stateDir,'supervisor.json')),timeoutMs);

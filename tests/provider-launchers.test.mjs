@@ -1,3 +1,4 @@
+import * as lifecycleTimeouts from '../src/lifecycle-timeouts.mjs';
 import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
@@ -264,6 +265,7 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './chat-result.mjs') return {};
     if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
     if (spec === './runtime-layout.mjs') return runtimeLayout;
+    if (spec === './lifecycle-timeouts.mjs') return lifecycleTimeouts;
     // This test models a non-Linux provider reload; Linux birth/transition
     // behavior is exercised with the actual identity module in daemon-identity.
     if (spec === './daemon-identity.mjs') return { observeOwnedInstance: async () => null, rememberOwnedInstance: async () => {}, recoverStaleInstance: () => assert.fail('no recovery on healthy provider reload') };

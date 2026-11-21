@@ -14,6 +14,7 @@ import {createRequire} from 'node:module';
 import ts from 'typescript';
 import * as state from '../src/state.mjs';
 import * as layout from '../src/runtime-layout.mjs';
+import * as lifecycleTimeouts from '../src/lifecycle-timeouts.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 const require=createRequire(import.meta.url);
 let identityModule={};
@@ -55,6 +56,7 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./state.mjs')return {...state,processIdentity:pid=>processes.get(pid)?.startTicks??state.processIdentity(pid)};
   if(spec==='./daemon-identity.mjs')return identity;
   if(spec==='./runtime-layout.mjs')return layout;
+  if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
   if(spec==='./web-client.mjs')return {ensureWebClient:async()=>{webBuilds++;return {ready:true};},webClientStatus:()=>({ready:true}),managedPairUrl:()=>'/paseo-web/welcome#fixture'};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
