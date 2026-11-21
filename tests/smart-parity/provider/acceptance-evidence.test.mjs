@@ -13,6 +13,27 @@ test('nested MCP strings and native direct calls are accepted without scanning i
  assert.equal(memoryResult([event('pi_shared_runtime.pi_global_mcp',{tool:'pi_shared_memory_read',args:{key:'foreign'}},{content:[{type:'text',text:'{\"memory\":null}'}]})],'foreign',null),true);
  assert.equal(memoryResult([proxy('pi_shared_memory_read',{key:'local',content:'nonce'},{memory:null})],'local','nonce'),false);
 });
+const namespace = (server,tool,args,output) => event('mcp__pi_shared_runtime__pi_global_mcp__'+server,{tool,args},{output});
+test('Claude server dispatcher binds exact server, prefixed tool and nested arguments',()=>{
+ assert.equal(memoryResult([namespace('pi_shared_memory','pi_shared_memory_read',{key:'local'},{memory:{key:'local',content:'nonce'}})],'local','nonce'),true);
+ assert.equal(memoryWrite([namespace('pi_shared_memory','pi_shared_memory_write',{key:'local',content:'nonce'},{memory:{key:'local',content:'nonce',revision:'r'}})],'local','nonce'),true);
+ assert.equal(fixtureMcpResult([namespace('acceptance_test','acceptance_test_read_marker',{},'fixture-marker')],'acceptance_test','fixture-marker'),true);
+});
+test('Claude server dispatcher also accepts the exact short underlying tool name',()=>{
+ assert.equal(memoryResult([namespace('pi_shared_memory','read',{key:'foreign'},{memory:null})],'foreign',null),true);
+ assert.equal(memoryWrite([namespace('pi_shared_memory','write',{key:'local',content:'nonce'},{memory:{key:'local',content:'nonce',revision:'r'}})],'local','nonce'),true);
+ assert.equal(fixtureMcpResult([namespace('acceptance_test','read_marker',{},'fixture-marker')],'acceptance_test','fixture-marker'),true);
+ assert.equal(memoryResult([namespace('other','read',{key:'foreign'},{memory:null})],'foreign',null),false);
+ assert.equal(memoryResult([namespace('pi_shared_memory','other_read',{key:'foreign'},{memory:null})],'foreign',null),false);
+});
+test('Claude dispatcher rejects wrong server, tool, argument nesting, completion and output',()=>{
+ const valid=namespace('pi_shared_memory','pi_shared_memory_read',{key:'local'},{memory:{key:'local',content:'nonce'}});
+ for(const mutate of [c=>c.name='mcp__pi_shared_runtime__pi_global_mcp__other',c=>c.name+='__extra',c=>c.detail.input.tool='other_read',c=>c.detail.input.tool='pi_shared_memory_read_extra',c=>c.detail.input.tool='pi_shared_memory_write',c=>c.detail.input.args.key='other',c=>c.detail.input.server='other',c=>c.detail.input.args=[],c=>{c.detail.input.key='local';delete c.detail.input.args;},c=>c.status='running',c=>c.status='failed',c=>c.error='failed',c=>c.detail.output={isError:true,output:{memory:{key:'local',content:'nonce'}}},c=>c.detail.output={output:{isError:true,memory:{key:'local',content:'nonce'}}},c=>{c.detail.input.args.content='nonce';c.detail.output={output:{memory:null}};}]) {
+  const call=structuredClone(valid);mutate(call);assert.equal(memoryResult([call],'local','nonce'),false);
+ }
+ assert.equal(fixtureMcpResult([namespace('other','acceptance_test_read_marker',{},'fixture-marker')],'acceptance_test','fixture-marker'),false);
+ assert.equal(memoryWrite([namespace('other','pi_shared_memory_write',{key:'local',content:'nonce'},{memory:{key:'local',content:'nonce',revision:'r'}})],'local','nonce'),false);
+});
 test('write evidence binds content and successful returned revision',()=>{
  assert.equal(memoryWrite([proxy('pi_shared_memory_write',{key:'local',content:'nonce'},{memory:{key:'local',content:'nonce',revision:'r'}})],'local','nonce'),true);
  assert.equal(memoryWrite([proxy('pi_shared_memory_write',{key:'local',content:'nonce'},{memory:null})],'local','nonce'),false);
@@ -25,6 +46,14 @@ test('skill evidence requires real skill source and output',()=>{
  assert.equal(skillRead([event('Skill',{skill:'test'},'marker')],'test','marker'),true);
  assert.equal(skillRead([{...event('read',{},null),detail:{type:'read',filePath:'/home/skills/test/SKILL.md',content:'marker'}}],'test','marker'),true);
  assert.equal(skillRead([{...event('read',{},null),detail:{type:'read',filePath:'/home/manifest.json',content:'marker'}}],'test','marker'),false);
+});
+test('shared runtime Skill requires exact name, successful completion and hidden output',()=>{
+ const call=event('mcp__pi_shared_runtime__Skill',{skill:'acceptance-test'},{output:'actual instructions hidden-marker'});
+ assert.equal(skillRead([call],'acceptance-test','hidden-marker'),true);
+ for(const mutate of [c=>c.detail.input.skill='other',c=>c.name='mcp__other__Skill',c=>c.detail.output='different instructions',c=>c.detail.output={isError:true,output:'hidden-marker'},c=>c.status='failed',c=>c.error='failed',c=>{c.detail.input.marker='hidden-marker';c.detail.output='';}]) {
+  const changed=structuredClone(call);mutate(changed);assert.equal(skillRead([changed],'acceptance-test','hidden-marker'),false);
+ }
+ assert.equal(skillRead([{...event('Read',{},'hidden-marker'),detail:{type:'read',filePath:'/workspace/.claude/skills',content:'hidden-marker'}}],'acceptance-test','hidden-marker'),false);
 });
 test('coordination requires send receiver identity and separate assistant response',()=>{
  assert.equal(sendAgentPrompt([event('mcp__paseo__send_agent_prompt',{agentId:'owned'}, {})],'owned'),true);
@@ -59,6 +88,21 @@ test('Web verifier needs fresh resource tools, persisted CAS write and actual ch
   const failed=structuredClone(items);failed[index].error='failed';assert.equal(webTurnChecks(agent,job,failed,stored)[check],false,check+' needs completed success');
  }
  assert.equal(Object.values(webTurnChecks(agent,job,[items.at(-1)],stored)).every(Boolean),false);
+});
+test('Web freshness and CAS checks apply to Claude dispatcher and shared Skill events',async()=>{
+ const {webTurnChecks}=await import('./acceptance-evidence.mjs');
+ const {agent,job,items,stored}=webFixture();agent.provider=job.provider='claude';
+ for(const index of [0,3,4,5]) {
+  const call=items[index],args=call.detail.input,server=index===3?'acceptance_test':'pi_shared_memory';
+  call.name='mcp__pi_shared_runtime__pi_global_mcp__'+server;
+  call.detail.output={output:JSON.parse(call.detail.output.content[0].text)};
+  if(index===4)args.tool='read';
+ }
+ for(const index of [1,2]){items[index].name='mcp__pi_shared_runtime__Skill';items[index].detail.input={skill:index===1?job.skillName:job.sharedMemorySkillName};}
+ assert.equal(Object.values(webTurnChecks(agent,job,items,stored)).every(Boolean),true);
+ for(const mutate of [x=>x[5].name='mcp__pi_shared_runtime__pi_global_mcp__other',x=>x[5].detail.input.args.expectedRevision='stale',x=>x[4].callId='old-call',x=>x[1].callId='old-call',x=>x[1].detail.output='missing-marker']) {
+  const changed=structuredClone(items);mutate(changed);assert.equal(Object.values(webTurnChecks(agent,job,changed,stored)).every(Boolean),false);
+ }
 });
 test('Web resource claims cannot substitute wrong routes, files, values, CAS or persisted memory',async()=>{
  const {webTurnChecks}=await import('./acceptance-evidence.mjs'); const {agent,job,items,stored}=webFixture();

@@ -36,7 +36,11 @@ export function invokes(call, server, tool, fields = {}) {
   let actual;
   if ([`${server}_${tool}`, `${server}__${tool}`, `${server}.${tool}`, `mcp__${server}__${tool}`, `mcp.${server}.${tool}`].includes(name)) actual = args;
   else if (name === 'mcp' && (args.tool === `${server}_${tool}` || (args.server === server && args.tool === tool))) actual = decode(args.args);
-  if (!actual || typeof actual !== 'object') return false;
+  // The adapter also exposes one dispatcher per server. Bind both the outer
+  // namespace and the exact underlying tool; never infer a server from args.
+  else if (name === `mcp__${server}` && [tool, `${server}_${tool}`].includes(args.tool) &&
+    (!Object.hasOwn(args, 'server') || args.server === server)) actual = decode(args.args);
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)) return false;
   return Object.entries(fields).every(([key, value]) => actual[key] === value);
 }
 export function memoryResult(items, key, expected) {

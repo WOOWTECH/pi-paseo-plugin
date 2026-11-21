@@ -32,6 +32,10 @@ test('actual Web observer keeps read nonces private, verifies fresh resources an
     invoke('prepare');
     const publicJobs = fs.readFileSync(path.join(workspace, phase, 'web-jobs.json'), 'utf8');
     for (const hidden of ['PRIVATE_SKILL', 'PRIVATE_MCP', ...manifest.writes.map(x => x.marker)]) assert.equal(publicJobs.includes(hidden), false);
+    const claudePrompt = JSON.parse(publicJobs).jobs.find(job => job.provider === 'claude').prompt;
+    assert.match(claudePrompt, /select:mcp__pi_shared_runtime__Skill/);
+    assert.match(claudePrompt, /REQUIRED_RESOURCE_UNAVAILABLE/);
+    assert.match(claudePrompt, /Do not guess workspace skill paths/);
     const checkpoint = read(path.join(workspace, phase, 'web-checkpoint.private.json'));
     assert.equal(checkpoint.runtimeIdentity, runtimeIdentity);
     assert.equal(JSON.parse(publicJobs).runtimeIdentity, runtimeIdentity);
