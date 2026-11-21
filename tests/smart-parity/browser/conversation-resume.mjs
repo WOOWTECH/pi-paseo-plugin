@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { evidenceStore } from '../evidence-store.mjs';
 import { contract, validateManifest, validateJobs } from './common.mjs';
 import { runtimeBinding, validateReportRuntime } from './runtime.mjs';
@@ -42,13 +43,21 @@ function readPrivate(root, file) {
 
 export function loadConversationResume(config, jobs, resumeFile) {
   if (resumeFile === undefined || resumeFile === null || resumeFile === '') return { rows: [], resumeFrom: null };
+  return loadOriginal(config, jobs, resumeFile, new Set());
+}
+
+function loadOriginal(config, jobs, resumeFile, ancestors) {
   requireValue(typeof resumeFile === 'string' && !resumeFile.split(/[\\/]/).includes('..'), 'invalid resume file');
   requireValue(path.isAbsolute(config.root) && path.resolve(config.root) === fs.realpathSync(config.root), 'evidence root must be a real absolute directory');
   const root = path.resolve(config.root), output = path.join(root, 'web-live');
   requireValue(config.output === output && Object.hasOwn(contract.brands, config.brand), 'unexpected output directory or brand');
   validateManifest(config.manifest);
   validateJobs(jobs, config.manifest, config.brand);
-  const file = path.resolve(root, resumeFile), raw = readPrivate(root, file), report = JSON.parse(raw);
+  const file = path.resolve(root, resumeFile);
+  requireValue(!ancestors.has(file), 'resume chain cycle');
+  requireValue(ancestors.size < 6, 'resume chain depth exceeds six original reports');
+  const chain = new Set([...ancestors, file]);
+  const raw = readPrivate(root, file), report = JSON.parse(raw);
   requireValue(report && typeof report === 'object' && !Array.isArray(report), 'invalid original report');
   requireValue(typeof report.attempt === 'string' && new RegExp(`^${config.brand}-conversations-[0-9]+-[a-f0-9-]{36}$`).test(report.attempt), 'invalid original attempt');
   const attemptDirectory = path.join(output, 'attempts', report.attempt);
@@ -60,18 +69,38 @@ export function loadConversationResume(config, jobs, resumeFile) {
     JSON.stringify(runtimeBinding(report)) === JSON.stringify(runtimeBinding(config.manifest)), 'stale runtime');
   requireValue(report.craftProject === 'web-live/shared.cany', 'resume needs the retained shared Craft project');
   privatePath(root, path.join(root, report.craftProject), true);
-  requireValue(!Object.hasOwn(report, 'resumeFrom'), 'recursive resume is forbidden');
   requireValue(report.uiCompleted !== true && Array.isArray(report.rows) && report.rows.length > 0, 'no unfinished original prefix');
   const expected = jobs.flatMap(group => group.jobs.map(job => ({ host: group.hostLabel,
     provider: job.provider, agentId: job.agentId, workspaceId: group.workspaceId, targetModel: job.targetModel })));
   requireValue(new Set(expected.map(row => row.agentId)).size === expected.length && report.rows.length <= expected.length, 'duplicate agents or excess rows');
+  let inherited = [];
+  if (Object.hasOwn(report, 'resumeFrom')) {
+    const parent = report.resumeFrom;
+    requireValue(parent && typeof parent === 'object' && !Array.isArray(parent) &&
+      Object.keys(parent).length === 3 && ['attempt', 'file', 'sha256'].every(key => Object.hasOwn(parent, key)) &&
+      nonempty(parent.attempt) && nonempty(parent.file) && !path.isAbsolute(parent.file) &&
+      typeof parent.sha256 === 'string' && /^[a-f0-9]{64}$/.test(parent.sha256), 'invalid parent provenance');
+    const validated = loadOriginal(config, jobs, parent.file, chain);
+    requireValue(isDeepStrictEqual(parent, validated.resumeFrom), 'parent provenance/SHA mismatch');
+    inherited = validated.rows;
+    requireValue(isDeepStrictEqual(report.rows.slice(0, inherited.length), inherited), 'inherited completed prefix changed');
+  }
   const store = evidenceStore(root), usedEvidence = new Set(), completed = [];
   let running = false;
   for (const [index, row] of report.rows.entries()) {
     requireValue(row && identityFields.every(key => row[key] === expected[index][key]), 'job order/identity changed');
+    if (index < inherited.length) {
+      row.evidence.forEach(id => usedEvidence.add(id));
+      completed.push(structuredClone(row));
+      continue;
+    }
     if (row.status === 'running') {
       const allowed = new Set([...identityFields, 'status', 'evidence', 'activeAgentVerified']);
-      requireValue(index === report.rows.length - 1 && !running && preMutationErrors.has(report.error) &&
+      // cc0a12f binds controls before setting activeAgentVerified or recording
+      // any action. A timeout after that boundary is never safe to replay.
+      const beforeBindingTimeout = report.error === 'Timed out awaiting verified browser/connector state' &&
+        !Object.hasOwn(row, 'activeAgentVerified');
+      requireValue(index === report.rows.length - 1 && !running && (preMutationErrors.has(report.error) || beforeBindingTimeout) &&
         Array.isArray(row.evidence) && row.evidence.length === 0 && Object.keys(row).every(key => allowed.has(key)) &&
         (!Object.hasOwn(row, 'activeAgentVerified') || row.activeAgentVerified === true), 'partial row may have mutated the conversation');
       running = true;

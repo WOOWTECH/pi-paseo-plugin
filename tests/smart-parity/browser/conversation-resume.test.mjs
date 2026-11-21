@@ -66,8 +66,8 @@ for(const [label,mutate]of[
   ['platform',f=>f.report.platform='ha-addon'],['runtime identity',f=>f.report.runtimeIdentity='image:sha256:'+'b'.repeat(64)],
   ['runtime provenance',f=>f.report.runtime.imageId='sha256:'+'b'.repeat(64)],['missing runtime',f=>delete f.report.runtime],
   ['Craft project',f=>f.report.craftProject='web-live/old.cany'],['attempt identity',f=>f.report.attempt=f.report.attempt.replace('1234567890','1234567891')],
-  ['attempt directory',f=>f.report.attemptDirectory='web-live'],['recursive resume',f=>f.report.resumeFrom={attempt:'previous'}],
-  ['recursive empty field',f=>f.report.resumeFrom=null],['empty rows',f=>f.report.rows=[]],['completed report',f=>f.report.uiCompleted=true],
+  ['attempt directory',f=>f.report.attemptDirectory='web-live'],['malformed parent link',f=>f.report.resumeFrom={attempt:'previous'}],
+  ['null parent link',f=>f.report.resumeFrom=null],['empty rows',f=>f.report.rows=[]],['completed report',f=>f.report.uiCompleted=true],
 ])test('rejects stale or unsafe '+label,t=>{const f=fixture(t);mutate(f);f.save();assert.throws(f.load);});
 for(const key of ['host','provider','agentId','workspaceId','targetModel'])test('binds ordered row '+key+' to the current jobs',t=>{
   const f=fixture(t);f.report.rows[0][key]='changed';f.save();assert.throws(f.load);
@@ -125,4 +125,74 @@ test('only the original private attempt report is eligible, never latest aliases
 test('rejects symlinked attempt directories and nonprivate proof files',t=>{
   const f=fixture(t);fs.chmodSync(f.proofFiles[0],0o644);assert.throws(f.load);fs.chmodSync(f.proofFiles[0],0o600);
   const actual=f.directory+'-real';fs.renameSync(f.directory,actual);fs.symlinkSync(actual,f.directory);assert.throws(f.load);
+});
+
+function chained(f, { parent = f.file, completeNext = false } = {}) {
+  const raw=fs.readFileSync(parent),previous=JSON.parse(raw);
+  f.chainNumber=(f.chainNumber||0)+1;
+  const attempt=`paseo-conversations-${1234567890+f.chainNumber}-11111111-2222-4333-8444-555555555555`;
+  const directory=path.join(f.output,'attempts',attempt);fs.mkdirSync(directory,{mode:0o700});
+  const rows=previous.rows.filter(row=>row.status==='ui-completed-awaiting-tool-verification').map(row=>structuredClone(row));
+  if(completeNext){
+    const start=f.proofFiles.length,row=f.completed(rows.length);rows.push(row);
+    for(const file of f.proofFiles.slice(start))for(const suffix of ['.json','-schema.json']){
+      const from=file.replace(/\.json$/,suffix);fs.renameSync(from,path.join(directory,path.basename(from)));
+    }
+  }
+  const running=f.partial(rows.length);delete running.activeAgentVerified;rows.push(running);
+  const report={...previous,attempt,attemptDirectory:path.relative(f.root,directory),rows,
+    resumeFrom:{attempt:previous.attempt,file:path.relative(f.root,parent),sha256:crypto.createHash('sha256').update(raw).digest('hex')},
+    error:'Timed out awaiting verified browser/connector state'};
+  const file=path.join(directory,'paseo-web-conversations.json'),save=()=>f.write(file,report);save();
+  return {report,file,directory,save,load:()=>loadConversationResume(f.config,f.jobs,file)};
+}
+test('hash-bound chain validates inherited and new proof in their original attempts',t=>{
+  const f=fixture(t),parentRaw=fs.readFileSync(f.file),child=chained(f,{completeNext:true}),childRaw=fs.readFileSync(child.file),value=child.load();
+  assert.equal(value.rows.length,2);assert.deepEqual(value.rows,child.report.rows.slice(0,2));
+  assert.equal(value.resumeFrom.attempt,child.report.attempt);assert.equal(value.resumeFrom.sha256,crypto.createHash('sha256').update(childRaw).digest('hex'));
+  value.rows[0].afterLabel='local change';assert.equal(child.load().rows[0].afterLabel,'New model');
+  assert.deepEqual(fs.readFileSync(f.file),parentRaw);assert.deepEqual(fs.readFileSync(child.file),childRaw);
+});
+for(const [label,mutate]of[
+  ['parent SHA mismatch',c=>c.report.resumeFrom.sha256='0'.repeat(64)],
+  ['missing parent SHA',c=>delete c.report.resumeFrom.sha256],
+  ['parent attempt mismatch',c=>c.report.resumeFrom.attempt='wrong'],
+  ['missing parent file',c=>c.report.resumeFrom.file='web-live/missing.json'],
+  ['extra parent provenance',c=>c.report.resumeFrom.approved=true],
+])test('chain rejects '+label,t=>{const f=fixture(t),c=chained(f);mutate(c);c.save();assert.throws(c.load);});
+test('chain rejects parent bytes changed even when parsed data is identical',t=>{
+  const f=fixture(t),c=chained(f);fs.appendFileSync(f.file,'\n');assert.throws(c.load,/parent.*SHA|parent.*provenance/i);
+});
+test('inherited completed prefix must remain deeply equal with no omissions or additions',t=>{
+  const f=fixture(t),c=chained(f,{completeNext:true}),original=structuredClone(c.report.rows);
+  for(const mutate of [rows=>rows[0].afterLabel='changed',rows=>rows[0].extra='added',rows=>rows[0].evidence.reverse(),rows=>rows[0].reconnected=false,rows=>rows.shift()]){
+    c.report.rows=structuredClone(original);mutate(c.report.rows);c.save();assert.throws(c.load);
+  }
+});
+test('chain recursively requires retained ancestor proof and current-attempt new proof',t=>{
+  const f=fixture(t),c=chained(f,{completeNext:true}),proof=f.proofFiles[0],raw=fs.readFileSync(proof);
+  fs.unlinkSync(proof);assert.throws(c.load);fs.writeFileSync(proof,raw,{mode:0o600});
+  const current=path.join(c.directory,'paseo-hosta-codex-action-0.json');
+  for(const suffix of ['.json','-schema.json']){
+    const from=current.replace(/\.json$/,suffix);fs.renameSync(from,path.join(f.directory,path.basename(from)));
+  }
+  assert.throws(c.load,/another attempt\/job/);
+});
+test('detects direct and multi-attempt resume cycles',t=>{
+  const f=fixture(t),c=chained(f);
+  f.report.resumeFrom={attempt:c.report.attempt,file:path.relative(f.root,c.file),sha256:'0'.repeat(64)};f.save();assert.throws(c.load,/cycle/i);
+  f.report.resumeFrom={attempt:f.report.attempt,file:path.relative(f.root,f.file),sha256:'0'.repeat(64)};f.save();assert.throws(f.load,/cycle/i);
+});
+test('accepts six original reports at most and rejects depth seven',t=>{
+  const f=fixture(t);let parent=f.file,last;
+  for(let i=0;i<5;i++){last=chained(f,{parent});parent=last.file;}
+  assert.equal(last.load().rows.length,1);const excessive=chained(f,{parent});assert.throws(excessive.load,/depth/i);
+});
+test('generic binder timeout is eligible only before active-agent verification and all mutations',t=>{
+  const f=fixture(t);f.report.error='Timed out awaiting verified browser/connector state';delete f.report.rows[1].activeAgentVerified;f.save();assert.equal(f.load().rows.length,1);
+  const original=structuredClone(f.report.rows[1]);
+  for(const [key,value]of [['activeAgentVerified',true],['activeAgentVerified',false],['activeAgentVerified',null],['beforeLabel','Sol'],['afterLabel','Terra'],['evidence',['mutation']],['completionVisible',false]]){
+    f.report.rows[1]={...original,[key]:value};f.save();assert.throws(f.load);
+  }
+  f.report.rows[1]=original;f.report.error='Timed out awaiting other state';f.save();assert.throws(f.load);
 });

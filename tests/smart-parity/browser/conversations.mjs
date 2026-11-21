@@ -31,7 +31,7 @@ try{
    const route=workspaceRoute(paired.serverId,host.workspaceId,job.agentId);
    await page.goto(config.url+route,{waitUntil:'domcontentloaded',timeout:45000});
    const controls=await bindConversationControls(page,job.agentId);
-   const {composer,model:selector,send,selectors}=controls;
+   let {composer,model:selector,send,selectors}=controls;
    row.activeAgentVerified=true;
    row.beforeLabel=await selector.innerText();
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-model-open`,[{step_id:'open-model-picker',kind:'click',selector:selectors.model}])).id);
@@ -51,7 +51,7 @@ try{
    row.afterLabel=await selector.innerText();
    const completion=completionMarker(job);
    if(!completion)throw Error('Missing unique web completion marker');
-   await bindConversationControls(page,job.agentId);
+   ({composer,model:selector,send,selectors}=await bindConversationControls(page,job.agentId));
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-web-type`,[
     {step_id:'type-memory-probe',kind:'fill',selector:selectors.composer,value:job.prompt}
    ])).id);

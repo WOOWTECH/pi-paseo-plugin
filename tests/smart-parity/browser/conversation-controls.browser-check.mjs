@@ -9,7 +9,7 @@ const page=await browser.newPage();
 const controls='<div data-testid="message-input-root"><textarea></textarea><button data-testid="combined-model-selector">Model A</button><button role="button" aria-label="Send message">Send</button></div>';
 const pane=(id,agent,selected,content)=>`<section data-testid="workspace-pane-${id}"><button data-testid="workspace-tab-agent_${agent}" aria-selected="${selected}">Tab</button>${content}</section>`;
 try {
- await page.setContent(pane('main','owned',true,controls)+`<aside hidden>${controls}</aside>`+pane('other','foreign',true,controls));
+ await page.setContent(pane('main','owned',true,`<style>.inactive{display:none}</style><div class="inactive">${controls}</div>${controls}`)+`<aside hidden>${controls}</aside>`+pane('other','foreign',true,controls));
  const bound=await bindConversationControls(page,'owned',1000);
  for(const key of ['model','composer','send']) assert.equal(await page.evaluate(s=>document.querySelectorAll(s).length,bound.selectors[key]),1);
  await page.locator(bound.selectors.composer).fill('owned only');
