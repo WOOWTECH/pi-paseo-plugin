@@ -71,7 +71,10 @@ async function serverModule(relative) { const root=controlRuntimeDirectory()||ru
 async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
 async function currentInstance() { if (!controlRuntimeDirectory() || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
 function instanceNeedsRuntimeRestart(instance) {
- if(process.platform!=='linux')return false;
+ if(process.platform!=='linux'){
+   const state=readState();
+   return state.daemonPid!==instance.pid||state.daemonStartedAt!==instance.startedAt||state.daemonRuntimeRevision!==RUNTIME_REVISION;
+ }
  try {
    const env = fs.readFileSync(`/proc/${instance.pid}/environ`, 'utf8').split('\0');
    return !env.includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`) || !env.includes('PI_PASEO_CONNECTION_PROFILE_VERSION=1');
@@ -195,7 +198,7 @@ export async function activate(options = {}) {
         updateState({ phase: 'starting' });
         await cli(['daemon', 'start', '--timeout', '90'], { timeoutMs: 105000 });
         const instance = await currentInstance(); await verifyInstanceOwnership(instance);
-        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
+        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
       }
       const healthy = await currentInstance();
       const observation = await observeOwnedInstance(locations(), healthy, verifyInstanceOwnership);

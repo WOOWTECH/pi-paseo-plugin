@@ -80,7 +80,7 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 ## 設定與配對
 
-1. 到 **設定 → 插件 → Agent Connect**，選擇 **Woowtech Smart／Apporo Smart／Paseo** 並儲存。若服務正在執行，先結束使用中的回合，再停止並啟動服務，確認新標的已套用。每台主機一次連接一個標的。
+1. 到 **設定 → 插件 → Agent Connect**，選擇 **Woowtech Smart／Apporo Smart／Paseo** 並儲存。若服務正在執行，先結束使用中的回合，再停止並啟動服務，確認新標的已套用。每台主機一次連接一個標的。主機握手會同步宣告所選品牌，供 Smart 網頁確認連線身份；切換後須重新啟動才能套用。
 2. 缺少或過期的登入，使用 `claude auth login`、`codex login` 或 Pi 的 `/login`。密碼、API Key 與 OAuth 資訊只在官方登入介面或 Pi Web 模型設定輸入。
 3. 確認服務已就緒，按 **產生配對連結**，再用顯示所選平台名稱的按鈕開啟網站並確認配對。Paseo 選項使用同一 Pi Web 網址的 `/paseo-web/`，另需內建網頁準備完成；兩個 Smart 選項開啟各自官方網站。切換網站需在新網站配對，Claude／Codex／Pi 的主機登入沿用。
 4. 在所選網站選擇這台主機、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。

@@ -207,7 +207,7 @@ test('runtime applies new private commands with the official reload API and repo
   fs.mkdirSync(cliRoot, { recursive: true }); fs.mkdirSync(path.dirname(ui), { recursive: true });
   fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: '0.11.2' })); fs.writeFileSync(ui, 'fixture UI');
   seedPidFiles(f.loc);runtimeLayout.markRuntimeReady(f.loc);
-  let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running' };
+  let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running', daemonPid: 5000, daemonStartedAt: 'fixture-start', daemonRuntimeRevision: runtimeLayout.RUNTIME_REVISION };
   fs.writeFileSync(path.join(f.loc.paseoHome, '.pi-paseo-owner.json'), JSON.stringify({ installationId: state.installationId, home: f.loc.paseoHome }));
   const configFile = path.join(f.loc.paseoHome, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify({ agents: { providers: { pi: { env: { CUSTOM_SETTING: 'keep' } } } } }));
@@ -324,6 +324,8 @@ test('runtime applies new private commands with the official reload API and repo
   await assert.rejects(runtime.activate(), error => error.code === 'RESTART_REQUIRED');
   // Normal daemon replacement loads the persisted commands and clears the old pending receipt.
   instance.pid++; instance.startedAt = 'fixture-restarted';
+  // The owned start path records this non-Linux generation before reload.
+  Object.assign(state, {daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: runtimeLayout.RUNTIME_REVISION});
   await runtime.activate();
   assert.equal(state.providerReloadPending, null);
   assert.equal(state.phase, 'running');

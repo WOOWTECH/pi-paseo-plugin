@@ -60,7 +60,7 @@ test('official release/refresh missing home semantics do not create a directory'
 
 test('supported r2 fallback requires exact receipt, package versions, writer bytes and safe path',t=>{
  const {loc,root}=runtime(t);markRuntimeReady(loc);seedPidFiles(loc);
- const old=root.replace('-r3-','-r2-'),receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.pidLockPatchId;
+ const old=root.replace('-r4-','-r2-'),receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.pidLockPatchId;
  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify(receipt));fs.renameSync(root,old);
  assert.equal(previousRuntimeDirectory(loc),old);
  for(const relative of ['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.map(p=>'node_modules/@getpaseo/server/'+p+'/pid-lock.js')]){

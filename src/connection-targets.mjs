@@ -24,6 +24,7 @@ export function connectionPreferences(loc) {
 export function targetEnvironment(target) {
   const profile = connectionTarget(target);
   return {
+    PI_PASEO_CONNECTION_TARGET: profile.id,
     PASEO_APP_BASE_URL: profile.appUrl,
     PASEO_RELAY_ENABLED: 'true',
     PASEO_RELAY_ENDPOINT: profile.relayEndpoint,

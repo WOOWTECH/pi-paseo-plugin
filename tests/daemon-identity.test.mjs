@@ -19,7 +19,7 @@ const require=createRequire(import.meta.url);
 let identityModule={};
 try {identityModule=await import('../src/daemon-identity.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 
-function fixture(t) {
+function fixture(t, { platform = process.platform } = {}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-birth-'));
  const keys=['HOME','PI_CODING_AGENT_DIR','PI_PASEO_STATE_DIR','PI_PASEO_RUNTIME_DIR'];
  const saved=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
@@ -65,8 +65,8 @@ function fixture(t) {
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
- vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process,URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r3-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r3-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -241,4 +241,13 @@ test('an older running process without the pinned connection environment require
  assert.equal(result.diagnosticCode,'RESTART_REQUIRED');
  assert.equal(f.starts(),0);assert.equal(f.stops(),0);
  assert.equal(fs.existsSync(f.proofFile),false);
+});
+
+for(const platform of ['darwin','win32'])test(platform+' keeps an older daemon pending until explicit stop/start records the new revision',async t=>{
+ const f=fixture(t,{platform});
+ const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.diagnosticCode,'RESTART_REQUIRED');assert.equal(f.starts(),0);assert.equal(f.stops(),0);
+ f.permitStop();await f.runtime.deactivate();await f.runtime.activate();
+ assert.equal(f.starts(),1);assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
+ assert.equal((await f.runtime.status()).diagnosticCode,null);
+ await f.runtime.activate();assert.equal(f.starts(),1);
 });

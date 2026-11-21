@@ -4,14 +4,16 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {privateDirectory,atomicJson,RuntimeError,assertSafePath} from './state.mjs';
 import {applyPidLockPatch,pidLockPatchReady,PID_LOCK_PATCH_ID,PID_LOCK_COPIES,ORIGINAL_PID_LOCK_SHA256} from './pid-lock-patch.mjs';
+import {applyBrandIdentityPatch,brandIdentityPatchReady,BRAND_IDENTITY_PATCH_ID} from './brand-identity-patch.mjs';
 const template=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const lock=fs.readFileSync(path.join(template,'package-lock.json'));
 const lockSha256=createHash('sha256').update(lock).digest('hex');
-export const RUNTIME_REVISION='0.11.2-r3-'+lockSha256.slice(0,12);
+export const RUNTIME_REVISION='0.11.2-r4-'+lockSha256.slice(0,12);
 export const runtimeDirectory=loc=>path.join(loc.runtimeDir,'releases',RUNTIME_REVISION);
 // Existing-daemon control compatibility only; these releases are never started.
 const priorLockSha256='6d8dbe5154790bbbb0b1281e991871b6f354919022fb55a1235162e969779526';
 const priorReleases=[
+ {generation:'r3',sha:lockSha256,patched:true},
  {generation:'r3',sha:priorLockSha256,patched:true},
  {generation:'r2',sha:priorLockSha256,patched:false},
  {generation:'r2',sha:lockSha256,patched:false},
@@ -46,7 +48,7 @@ export function runtimeReady(loc) {
   const root=runtimeDirectory(loc);
   assertSafePath(path.join(root,'.pi-paseo-runtime.json'));
   const receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));
-  return receipt.lockSha256===lockSha256&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version==='0.11.2';
+  return receipt.lockSha256===lockSha256&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&receipt.brandIdentityPatchId===BRAND_IDENTITY_PATCH_ID&&brandIdentityPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version==='0.11.2';
  } catch {return false;}
 }
 export function prepareRuntimeManifest(loc) {
@@ -58,4 +60,4 @@ export function prepareRuntimeManifest(loc) {
  }
  return root;
 }
-export function markRuntimeReady(loc) {const root=runtimeDirectory(loc);applyPidLockPatch(root);atomicJson(path.join(root,'.pi-paseo-runtime.json'),{lockSha256,revision:RUNTIME_REVISION,pidLockPatchId:PID_LOCK_PATCH_ID});}
+export function markRuntimeReady(loc) {const root=runtimeDirectory(loc);applyPidLockPatch(root);applyBrandIdentityPatch(root);atomicJson(path.join(root,'.pi-paseo-runtime.json'),{lockSha256,revision:RUNTIME_REVISION,pidLockPatchId:PID_LOCK_PATCH_ID,brandIdentityPatchId:BRAND_IDENTITY_PATCH_ID});}

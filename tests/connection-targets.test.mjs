@@ -34,6 +34,7 @@ test('targets bind each trusted web app to its own TLS relay', () => {
     assert.equal(env.PASEO_RELAY_PUBLIC_ENDPOINT, target.relayEndpoint);
     assert.equal(env.PASEO_RELAY_PUBLIC_USE_TLS, 'true');
     assert.equal(env.PASEO_APP_BASE_URL, target.appUrl);
+    assert.equal(env.PI_PASEO_CONNECTION_TARGET, target.id);
     assert.deepEqual(config.daemon.cors.allowedOrigins, ['https://local.example', target.appUrl]);
   }
   for (const value of ['custom', '', 'Paseo', '__proto__', null, 1]) assert.throws(() => connectionTarget(value), { code: 'INVALID_TARGET' });
