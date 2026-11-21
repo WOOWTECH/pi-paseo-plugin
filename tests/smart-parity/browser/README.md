@@ -59,7 +59,7 @@ For `windows-wsl2`, `macos` and `ubuntu`, omit every `imageId` field. Declare a 
     "digest": "sha256:<computed package-set digest>",
     "packages": [
       {"name": "@woowtech/pi-paseo", "version": "0.1.17", "archiveSha256": "<64 lowercase hex characters>"},
-      {"name": "@woowtech/pi-omnigent", "version": "0.3.33", "archiveSha256": "<64 lowercase hex characters>"}
+      {"name": "@woowtech/pi-omnigent-plugin", "version": "0.3.33", "archiveSha256": "<64 lowercase hex characters>"}
     ]
   }
 }
