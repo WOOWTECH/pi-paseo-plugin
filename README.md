@@ -21,7 +21,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 
 ## 0.1.10 PID 復原修補
 
-新 managed runtime revision 為 `0.11.2-r3-6d8dbe515479`，沿用 0.11.2 的固定依賴，額外驗證並修補兩份官方 PID writer。Linux 下，健康啟動或採用後會記錄私有程序出生證明；若同一核心重用了 PID，只在原 installation、home、PID lock 與 boot/start identity 都能證明舊程序已消失時，才隔離自己的過期 PID record 並重新啟動。外來程序不會被終止；設定、登入、資料庫、配對及初始化對話保留。
+此歷史修補的 managed runtime revision 為 `0.11.2-r3-6d8dbe515479`，沿用 0.11.2 的固定依賴，額外驗證並修補兩份官方 PID writer。Linux 下，健康啟動或採用後會記錄私有程序出生證明；若同一核心重用了 PID，只在原 installation、home、PID lock 與 boot/start identity 都能證明舊程序已消失時，才隔離自己的過期 PID record 並重新啟動。外來程序不會被終止；設定、登入、資料庫、配對及初始化對話保留。
 
 這項自動復原需要此前成功啟動時建立的 proof。舊版沒有可信 proof 的陌生 PID 仍回報 `DAEMON_NOT_OWNED`，不會自動清檔。仍健康運作的 r2 daemon 會回報 `RESTART_REQUIRED`；正常停止後再啟用即可建立 r3 proof，無須移除私人資料。
 
@@ -31,7 +31,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 
 ## 相容版本
 
-- Linux、Node.js 22.19.0+、npm、git、util-linux `flock`。其他平台目前不納入此版本的部署驗收。
+- Node.js 22.19.0+、npm、git。Linux（包含 Windows 既有 WSL2、Ubuntu、k3s/PaaS、HA add-on）需要 util-linux `flock`；macOS 使用 Node SQLite 交易鎖。原生 Windows 不在本次範圍。各平台的真實部署與 provider 驗收須分別記錄，不能由來源測試推定通過。
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
 - Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
@@ -50,7 +50,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-正式部署可固定 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.16`。若同一 Pi Web 也安裝 Omnigent，兩個套件的共用介面必須使用同時驗證過的 adapter 版本與 SHA-256，再重新啟動 Pi Web。配對只在 **設定 → 插件 → Paseo** 執行。各版本的實測範圍請參考驗證紀錄。
+舊版正式部署範例為 `git:github.com/WOOWTECH/pi-paseo-plugin@v0.1.16`。部署新版 Agent Connect 時，請固定已發布的正式標籤，或使用核對過來源與 SHA256 的候選套件；不要假設候選版本已發布。若同一 Pi Web 也安裝 Omnigent，兩個套件的共用介面必須使用同時驗證過的 adapter 版本與 SHA-256，再重新啟動 Pi Web。配對只在 **設定 → 插件 → Agent Connect** 執行。各版本的實測範圍請參考驗證紀錄。
 
 或在 Pi Web 使用者的終端直接執行：
 
@@ -58,7 +58,7 @@ https://github.com/WOOWTECH/pi-paseo-plugin
 pi install https://github.com/WOOWTECH/pi-paseo-plugin
 ```
 
-Git 安裝會下載依賴並執行 postinstall。首次安裝準備完成後，依下面的啟動入口說明重新啟動 Pi Web，即可在插件設定中連接 Paseo。
+Git 安裝會下載依賴並執行 postinstall。首次安裝準備完成後，依下面的啟動入口說明重新啟動 Pi Web，即可在 Agent Connect 設定中選擇並連接目標平台。
 
 在 Pi Web 使用者的持久化 HOME 執行：
 
@@ -72,18 +72,18 @@ bash scripts/install.sh --source "$PWD"
 
 Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只準備下一次啟動的入口並回報 `restartRequired`；請透過原服務管理方式重新啟動。原容器以 PATH 呼叫 `pi-web` 時可使用持久化 launcher；已有 shared-runtime 或 Omnigent 啟動器時沿用其原始呼叫鏈。若回報 `manual-routing-required`，請將現有 launcher 的 Pi Web 終端入口接到回報的 `pendingRestart` 路徑。
 
-從 Pi Web 插件頁安裝 npm 發行包時，postinstall 同樣下載 Paseo、準備 Pi Web 整合層並啟動服務。插件頁在首次加入整合層後，需要重新啟動 Pi Web 才能顯示設定頁內的 Paseo 控制項。
+從 Pi Web 插件頁安裝 npm 發行包時，postinstall 同樣下載 Paseo、準備 Pi Web 整合層並啟動服務。插件頁在首次加入整合層後，需要重新啟動 Pi Web 才能顯示設定頁內的 Agent Connect 控制項。
 
 若回報 `pathUpdateRequired: true`，將回報的 `launcherDirectory` 放到服務啟動環境的 PATH 最前方，再重新啟動。Kubernetes 容器需設定工作負載的 PATH，終端中的 `export PATH=...` 只作用於該次終端。
 
-第一次載入整合層後，在 **設定 → 插件** 選擇 Paseo。安裝、啟用及 Pi Web 重啟會啟動／恢復服務，不會建立對話或在首頁顯示 Paseo 專用按鈕。舊的 `/paseo/setup` 連結會導向插件設定；停用／移除只停止插件擁有的程序，保留既有對話、provider 登入及 Paseo 資料。
+第一次載入整合層後，在 **設定 → 插件** 選擇 Agent Connect。安裝、啟用及 Pi Web 重啟會啟動／恢復服務，不會建立對話或自動開啟品牌網站。舊的 `/paseo/setup` 連結會導向插件設定；停用／移除只停止插件擁有的程序，保留既有對話、provider 登入及 Paseo 資料。
 
 ## 設定與配對
 
-1. 到 **設定 → 插件 → Paseo**，查看服務與三種 provider 的診斷。
+1. 到 **設定 → 插件 → Agent Connect**，選擇 **Woowtech Smart／Apporo Smart／Paseo** 並儲存。若服務正在執行，先結束使用中的回合，再停止並啟動服務，確認新標的已套用。每台主機一次連接一個標的。
 2. 缺少或過期的登入，使用 `claude auth login`、`codex login` 或 Pi 的 `/login`。密碼、API Key 與 OAuth 資訊只在官方登入介面或 Pi Web 模型設定輸入。
-3. 等待「修正版 Paseo 網頁已就緒」，再按 **產生配對連結** → **使用配對連結開啟 Paseo**。入口位於同一 Pi Web 網址的 `/paseo-web/`；從官方網站改到此入口時需要在新入口配對一次，Claude／Codex／Pi 不必重新登入。
-4. 在 Paseo 選擇這個容器、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。
+3. 確認服務已就緒，按 **產生配對連結**，再用顯示所選平台名稱的按鈕開啟網站並確認配對。Paseo 選項使用同一 Pi Web 網址的 `/paseo-web/`，另需內建網頁準備完成；兩個 Smart 選項開啟各自官方網站。切換網站需在新網站配對，Claude／Codex／Pi 的主機登入沿用。
+4. 在所選網站選擇這台主機、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
 
@@ -97,9 +97,9 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 驗證命令由 Claude 的 invocation-local `apiKeyHelper` 按需執行，最長快取 15 分鐘；插件不把命令或產生的憑證寫入 Paseo 設定、啟動檔或日誌，也不修改 Omnigent 設定與官方登入檔。插件私有目錄內的 `0700` 啟動檔只存路徑與設定指紋，讓 Paseo 的 Claude SDK 能用單一執行檔啟動。驗證命令的輸出上限為 4 KB、逾時為 20 秒，失敗只回報固定錯誤碼。
 
-在 Omnigent 切回官方 Claude provider 後，於 Paseo 設定按「啟動服務」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
+在 Omnigent 切回官方 Claude provider 後，於 Agent Connect 設定按「啟動服務」會恢復原本的 Claude 執行檔與模型設定。變更 gateway、模型或驗證命令後也要執行此操作，再建立新的對話；舊設定指紋會被拒絕，避免沿用錯誤路由。此整合僅支援既有 `auth_command` 型 gateway 與 HTTPS（本機 loopback 可用 HTTP）；inline key、secret reference、其他 provider 類型不在此自動橋接範圍。gateway 缺少必要設定時會標示不可用，不會改用另一個帳號。
 
-從 gateway 改用 Claude 官方訂閱時，先在 Pi Web 相同 HOME 執行 `claude auth login --claudeai`，完成[官方瀏覽器授權](https://code.claude.com/docs/en/authentication)，再將 Omnigent 的 **Anthropic 預設來源**選為 Claude 訂閱並於 Paseo 設定啟動服務。只完成 CLI 登入，不會覆蓋仍被選用的 gateway。切換時保留 OpenAI 與 Pi 的預設來源；官方登入資料由 Claude CLI 管理，不應貼入 Paseo 或 Omnigent 的設定檔。Pi4 的切換、重啟及實測範圍見[官方訂閱驗證](docs/pi4-official-subscription-2026-10-26.md)。
+從 gateway 改用 Claude 官方訂閱時，先在 Pi Web 相同 HOME 執行 `claude auth login --claudeai`，完成[官方瀏覽器授權](https://code.claude.com/docs/en/authentication)，再將 Omnigent 的 **Anthropic 預設來源**選為 Claude 訂閱並於 Agent Connect 設定啟動服務。只完成 CLI 登入，不會覆蓋仍被選用的 gateway。切換時保留 OpenAI 與 Pi 的預設來源；官方登入資料由 Claude CLI 管理，不應貼入 Paseo 或 Omnigent 的設定檔。Pi4 的切換、重啟及實測範圍見[官方訂閱驗證](docs/pi4-official-subscription-2026-10-26.md)。
 
 ### 選用 Omnigent gateway 作為 Codex 模型來源
 
@@ -129,7 +129,7 @@ Codex 的 gateway 仍須另外設定；標準安裝不會更改內建 `codex` pr
 
 ## Pi 操作
 
-- **Pi Web 設定 → 插件 → Paseo**：唯一的配對與整合設定入口。
+- **Pi Web 設定 → 插件 → Agent Connect**：唯一的配對與整合設定入口。
 - `paseo_status`、`paseo_diagnose`、`paseo_models`：無秘密的狀態及模型探測。
 - `paseo_chat`、`paseo_continue`：建立與續接 Paseo 對話。
 
@@ -177,7 +177,7 @@ npm pack --ignore-scripts
 
 `health` 輸出不含秘密；只有已安裝、啟用、程序屬於本插件、服務可達且三種 provider 可啟動時才回傳 exit 0。真正對話及 relay 配對另外顯示驗證時間，不能以歷史成功取代目前連線健康。
 
-狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。Settings → Paseo 開著（分頁可見）時每 5 秒查一次狀態，每次都會讓 Paseo 執行各 provider 的 `--version`。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
+狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。Settings → Agent Connect 開著（分頁可見）時每 5 秒查一次狀態，每次都會讓 Paseo 執行各 provider 的 `--version`。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
 
 安裝器使用程序群組時限與 Linux 核心鎖，建置或發布失敗回滾自身變更。更新期間請避免外部同時編輯 launcher；安裝器保留偵測到的外部改動，檔案系統不提供跨外部寫入者的原子 compare-and-swap。程序群組無法涵蓋刻意逃離 session 的程序，部署隔離依賴容器及其資源限制。
 
@@ -187,7 +187,7 @@ npm pack --ignore-scripts
 
 Pi SDK 1.0.0 的內嵌 shrinkwrap 忽略消費者 overrides；安裝階段會以固定官方 `brace-expansion` 5.0.12、`undici` 8.12.3 替換其私有受影響依賴，並由回歸測試驗證 API 相容性。插件自身的 SDK 另將私有 `minimatch` 10.2.6 換成固定的 11.0.1（GHSA-g3hv-75wg-m249）；11.0.1 新增的 `@isaacs/nonrecursive-glob-match` 由發行 lockfile 安裝在上層 `node_modules`，若 SDK 位置載入不到同一版本，修補會在替換前中止並保留原檔。Pi SDK 1.5 起自帶已修補的 `minimatch`，安裝時不更動。Pi Web 主機 adapter 尚未固定 `minimatch`，主機建置內的 SDK 副本不在此替換範圍。請使用發行 lockfile 和安裝流程，避免在使用中的套件目錄執行 `npm install` 或 `npm ci`。
 
-完整驗收紀錄與已知限制見 [驗證紀錄](docs/validation.md)。
+完整驗收紀錄與已知限制見 [驗證紀錄](docs/validation.md)；三品牌、兩台獨立主機及五平台的 Craft Anything 驗收方式見 [功能一致性標準](docs/smart-web-parity.md)。
 
 ## 官方參考
 

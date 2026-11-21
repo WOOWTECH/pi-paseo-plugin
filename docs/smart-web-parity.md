@@ -10,7 +10,7 @@
 
 ```sh
 python3 tests/smart-parity/setup-craft.py artifacts/smart-parity/tools
-node --test tests/smart-parity/*.test.mjs
+node --test tests/smart-parity/*.test.mjs tests/smart-parity/provider/*.test.mjs tests/smart-parity/browser/*.test.mjs
 node tests/smart-parity/baseline.mjs
 ```
 
@@ -26,7 +26,11 @@ node tests/smart-parity/baseline.mjs
 
 完成紀錄後執行 `node tests/smart-parity/audit.mjs PRIVATE_EVIDENCE_DIRECTORY/matrix.json`。matrix 宣告 `platform`、`scope`、`hosts[{id,dataIdentity,runtimeIdentity}]`，每筆 `results` 使用 `host`、`brand`、`provider`、`case`、`status` 及 `evidence[{path,sha256}]`。host 層級案例省略 brand/provider；host × brand 案例省略 provider。`model-switch` 還必須記錄 `models{initial,alternate,actual}`，前兩者須不同且 actual 等於 alternate。工具依 contract 展開每個必要案例，缺項、blocked、證據遺失或雜湊變動均回傳非零。這是矩陣完整性及證據完整性檢查；`passed` 不能單獨代表功能已通過，仍須審閱各項證據中的實際操作與工具事件。
 
+實際 provider 與 Web 回合的準備、觀測與清理流程，見 [`provider/README.md`](../tests/smart-parity/provider/README.md)。公開網站的實際配對、模型切換、回覆與重連，使用 [`browser/README.md`](../tests/smart-parity/browser/README.md) 的標準 runner；再由 `compile.mjs` 核對來源、主機、對話、模型與 Craft 原始紀錄，產生完整矩陣。判定器測試由 PR CI 執行；工具事件驗證與瀏覽器操作必須同時通過。
+
 ## 完整驗收矩陣
+
+manifest 必須明確宣告受測平台。k3s/PaaS 與 HA add-on 綁定實際映像 configuration digest；Windows WSL2、macOS 與 Ubuntu 綁定每個已安裝套件的固定版本與 archive SHA256，並計算整組套件的 digest。套件 digest 不得標成映像 digest，也不能取代主機上的實際安裝核對。
 
 每個受測平台至少兩台獨立主機。每台同時只連一個品牌，依序切換三品牌；切換後同一主機的資源與記憶必須保留，各主機資料必須獨立。
 

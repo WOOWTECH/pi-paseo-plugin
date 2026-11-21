@@ -24,7 +24,7 @@
     "provider": ["actual-provider-id", "requested-and-actual-model", "completed-tool-events"],
     "sharing": ["hidden-marker", "writer-provider-and-brand", "reader-provider-and-brand", "persisted-content-check"],
     "isolation": ["actual-foreign-key", "completed-mcp-read", "absent-result"],
-    "deployment": ["source-commit", "image-id-or-digest", "host-identity", "separate-data-volume", "production-or-isolated-scope"]
+    "deployment": ["source-commit", "typed-runtime-identity-and-installed-provenance", "host-identity", "separate-data-volume", "production-or-isolated-scope"]
   },
   "resultStates": ["pass", "fail", "blocked", "unrun"],
   "normalizationPolicy": "Only explicit brand names, origins and separately declared volatile IDs; never normalize missing controls, errors, versions, tool results or unsupported features.",

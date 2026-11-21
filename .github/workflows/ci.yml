@@ -21,7 +21,7 @@ jobs:
       - run: npm audit --omit=dev
       - run: npm audit --omit=dev --prefix runtime
       - run: npm test
-      - run: node --test tests/smart-parity/*.test.mjs
+      - run: node --test tests/smart-parity/*.test.mjs tests/smart-parity/provider/*.test.mjs tests/smart-parity/browser/*.test.mjs
       - run: node --test scripts/install-host.test.mjs
       - run: node --test scripts/bootstrap.test.mjs
       - run: npm run typecheck

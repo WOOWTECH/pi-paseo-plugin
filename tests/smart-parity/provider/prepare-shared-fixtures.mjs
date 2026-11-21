@@ -1,0 +1,53 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { requireRuntimeIdentity } from './acceptance-evidence.mjs';
+const [runId, hostLabel, foreignHostLabel, mode] = process.argv.slice(2);
+if (![runId, hostLabel, foreignHostLabel].every(v => /^[a-zA-Z0-9_-]{1,45}$/.test(v || '')) || mode !== '--execute') throw new Error('Usage: prepare-shared-fixtures.mjs RUN_ID HOST FOREIGN_HOST --execute');
+const runtimeIdentity = requireRuntimeIdentity(process.env.PASEO_ACCEPTANCE_RUNTIME_IDENTITY);
+const root = process.env.PI_SHARED_PACKAGE_ROOT || '/opt/woow/pi-agent-shared-runtime';
+const { locations, saveJSON, readJSON, digest } = await import(pathToFileURL(path.join(root, 'src/common.mjs')));
+const { memoryWrite } = await import(pathToFileURL(path.join(root, 'src/memory.mjs')));
+const { synchronize } = await import(pathToFileURL(path.join(root, 'src/sync.mjs')));
+const loc = locations();
+const workspaceRoot = path.join(loc.home, 'work', 'agent-connect-acceptance-' + runId);
+fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
+const manifestPath = path.join(workspaceRoot, 'acceptance-manifest.json');
+if (fs.existsSync(manifestPath)) throw new Error('Fixture manifest already exists; use its cleanup procedure before repeating');
+const skillName = 'acceptance-' + runId.toLowerCase();
+const skillDir = path.join(loc.data, 'skills', skillName);
+if (fs.existsSync(skillDir)) throw new Error('Fixture skill already exists');
+const localMemoryKey = 'acceptance-' + runId + '-' + hostLabel;
+const foreignMemoryKey = 'acceptance-' + runId + '-' + foreignHostLabel;
+const marker = label => label + '_' + crypto.randomUUID();
+const manifest = { runId, hostLabel, runtimeIdentity, root, workspaceRoot, skillName, skillDir, localMemoryKey, foreignMemoryKey, expectedMemory: marker('MEMORY_' + hostLabel), expectedSkill: marker('SKILL_' + hostLabel), expectedMcp: marker('MCP_' + hostLabel), fixtureMcpName: 'acceptance_' + runId, createdAt: new Date().toISOString() };
+saveJSON(manifestPath, manifest);
+fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${skillName}\ndescription: Use when asked to run the ${runId} shared resource acceptance probe.\n---\n\nRead this skill and report its exact marker: ${manifest.expectedSkill}\n`, { mode: 0o600 });
+const memory = await memoryWrite(loc, { key: localMemoryKey, content: manifest.expectedMemory, expectedRevision: null });
+manifest.memoryRevision = memory.revision;
+const fixtureServer = path.join(workspaceRoot, 'readonly-marker-mcp.mjs');
+const sdk = path.join(root, 'node_modules/@modelcontextprotocol/sdk/dist/esm');
+fs.writeFileSync(fixtureServer, `import {Server} from ${JSON.stringify(sdk + '/server/index.js')};\nimport {StdioServerTransport} from ${JSON.stringify(sdk + '/server/stdio.js')};\nimport {ListToolsRequestSchema,CallToolRequestSchema} from ${JSON.stringify(sdk + '/types.js')};\nconst s=new Server({name:'readonly-acceptance',version:'1'},{capabilities:{tools:{}}});\ns.setRequestHandler(ListToolsRequestSchema,()=>({tools:[{name:'read_marker',description:'Read the harmless host-local acceptance marker',inputSchema:{type:'object',properties:{},additionalProperties:false}}]}));\ns.setRequestHandler(CallToolRequestSchema,r=>r.params.name==='read_marker'?{content:[{type:'text',text:process.env.ACCEPTANCE_MARKER}]}:{isError:true,content:[{type:'text',text:'UNKNOWN_TOOL'}]});\nawait s.connect(new StdioServerTransport());\n`, { mode: 0o600 });
+const configFile = path.join(loc.data, 'mcp.json'), config = readJSON(configFile);
+config.mcpServers ||= {};
+if (Object.hasOwn(config.mcpServers, manifest.fixtureMcpName)) throw new Error('Fixture MCP name already exists');
+const entry = { command: process.execPath, args: [fixtureServer], env: { ACCEPTANCE_MARKER: manifest.expectedMcp } };
+config.mcpServers[manifest.fixtureMcpName] = entry;
+manifest.mcpEntryHash = digest(entry);
+saveJSON(configFile, config); saveJSON(manifestPath, manifest);
+// Initial distribution setup may still be converging after the Web port is
+// ready. Keep every observation and retry only resource discovery, never turns.
+manifest.discoveryAttempts = [];
+for (let attempt = 0; attempt < 4; attempt++) {
+  const sync = await synchronize({ cwd: loc.home, loc });
+  manifest.skillDiscovered = sync.skills.some(s => s.name === skillName);
+  manifest.sharedMemorySkillDiscovered = sync.skills.some(s => s.name === 'shared-host-memory');
+  manifest.discoveryAttempts.push({ at: new Date().toISOString(), skillDiscovered: manifest.skillDiscovered, sharedMemorySkillDiscovered: manifest.sharedMemorySkillDiscovered, conflicts: sync.conflicts.length });
+  saveJSON(manifestPath, manifest);
+  if (manifest.skillDiscovered && manifest.sharedMemorySkillDiscovered) break;
+  if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000));
+}
+if (!manifest.skillDiscovered || !manifest.sharedMemorySkillDiscovered) throw new Error('Acceptance skills did not synchronize');
+console.log(JSON.stringify({ hostLabel, manifestPath, skillDiscovered: true, sharedMemorySkillDiscovered: true, fixtureMcpName: manifest.fixtureMcpName }));
