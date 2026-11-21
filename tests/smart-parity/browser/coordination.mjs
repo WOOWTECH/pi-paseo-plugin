@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { configuration, launch, readJson, validatePairingReport, runtimeBinding,
   reportWriter, until, redact, writePrivate, screenshotPrivate } from './common.mjs';
@@ -5,10 +6,11 @@ import { configuration, launch, readJson, validatePairingReport, runtimeBinding,
 // Configure the product's existing opt-in through the public UI. This does not
 // change the package default or grant provider turns. Existing agents must be
 // recreated after enabling injection; their captured failures remain evidence.
-const [brand] = process.argv.slice(2);
-const config = configuration(brand);
-const pairing = validatePairingReport(readJson(path.join(config.output, brand + '-hosts.json')), config.manifest, brand);
-const browser = await launch(config, 'coordination');
+export async function runCoordination(config, open = launch) {
+const { brand } = config;
+const pairing = config.productionSession ? config.productionSession.pairing(readJson(path.join(config.output, brand + '-hosts.json'))) :
+  validatePairingReport(readJson(path.join(config.output, brand + '-hosts.json')), config.manifest, brand);
+const browser = await open(config, 'coordination');
 const report = { brand, scope: config.manifest.scope, runId: config.manifest.runId,
   ...runtimeBinding(config.manifest), attempt: browser.attempt, craftProject: browser.craftProject,
   attemptDirectory: path.relative(config.root, browser.output), hosts: [], passed: false };
@@ -16,7 +18,7 @@ const save = reportWriter(config, browser, brand + '-coordination-settings.json'
 try {
   const page = await browser.context.newPage();
   for (const host of pairing.hosts) {
-    const observed = config.manifest.hosts.find(value => value.label === host.host)?.coordinationBefore;
+    const observed = config.coordinationBefore?.[host.host] ?? config.manifest.hosts.find(value => value.label === host.host)?.coordinationBefore;
     if (typeof observed !== 'boolean') throw Error('Fresh externally observed injection setting is required');
     const route = `/settings/hosts/${encodeURIComponent(host.serverId)}/agents`;
     const row = { host: host.host, serverId: host.serverId, route, observedBefore: observed, evidence: [] };
@@ -37,7 +39,7 @@ try {
       row.evidence.push((await browser.record(page, `${brand}-${host.host}-enable-coordination`, [
         { step_id: 'enable-paseo-agent-tools', kind: 'click', selector: '[data-testid="host-page-inject-mcp-card"] [role="switch"]' },
         { step_id: 'await-saved-coordination', kind: 'wait', ms: 750 },
-      ])).id);
+      ], [], { kind: 'coordination.enable', hostLabel: host.host })).id);
     }
     await until(async () => await control.getAttribute('aria-checked') === 'true', 15000);
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -60,3 +62,9 @@ try {
   }
   report.error = redact(error.message); save(); console.error(JSON.stringify({ brand, error: report.error })); process.exitCode = 1;
 } finally { await browser.close(); }
+
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runCoordination(configuration(process.argv[2]));
+}

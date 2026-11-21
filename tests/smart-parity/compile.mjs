@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { audit } from './audit.mjs';
+import { validateFunctionalCapture } from './production-functional.mjs';
 import { communicationCyclePassed } from './provider/acceptance-evidence.mjs';
-import { contract, validateManifest, validatePairingReport, writePrivate, runtimeBinding } from './browser/common.mjs';
+import { contract, validateManifest, validatePairingReport, writePrivate, runtimeBinding, validatedProductionContext } from './browser/common.mjs';
+import { productionCompletion, validateProductionReport } from './production-scope.mjs';
 import { validateReportRuntime } from './browser/runtime.mjs';
 import { evidenceStore, assertProviderIdentity, assertProviderRows, semanticWebPassed } from './evidence-store.mjs';
 
@@ -22,7 +24,8 @@ function providerAgentsArchived(report, providers) {
 // This compiles actual observer/Craft evidence. It does not run providers or grant release approval.
 export function compile(evidenceDirectory, { platform, manifestName = 'browser-hosts.private.json' } = {}) {
  const store=evidenceStore(evidenceDirectory),root=store.root,read=store.read,proof=store.proof;
- const deployment=validateManifest(read(manifestName));
+ const deployment=validateManifest(read(manifestName), {evidenceDirectory:root,manifestName});
+ const production=validatedProductionContext(deployment);
  const binding=runtimeBinding(deployment);
  if(platform!==undefined&&platform!==binding.platform)throw Error('Requested platform does not match runtime manifest');
  platform=binding.platform;
@@ -34,6 +37,10 @@ export function compile(evidenceDirectory, { platform, manifestName = 'browser-h
   return files;
  };
  const matrix={platform,scope:deployment.scope,runId:deployment.runId,generatedAt:new Date().toISOString(),hosts:deployment.hosts.map(h=>({id:h.label,dataIdentity:h.dataIdentity,runtimeIdentity:binding.runtimeIdentity})),results:[]};
+ if(production){
+  matrix.production={manifest:production.manifestProof};
+  matrix.hosts.forEach((host,i)=>{const source=deployment.hosts[i];Object.assign(host,{release:source.release,serverId:source.serverId,productionBinding:source.productionBinding});});
+ }
  const add=(host,brand,provider,name,available,passed,files,extra={})=>matrix.results.push({host,...(brand?{brand}:{}),...(provider?{provider}:{}),case:name,status:available?(passed===true?'pass':'fail'):'unrun',evidence:proof(files),...extra});
 for(const host of deployment.hosts){
  const phases=[];
@@ -41,9 +48,11 @@ for(const host of deployment.hosts){
   const base=`hosts/${host.label}/evidence/${brand}`;
   const rf=base+'/provider-acceptance.json',wf=base+'/web-verification.json';
   const r=read(rf),w=read(wf),pf=`web-live/${brand}-hosts.json`,bf=`web-live/${brand}-web-conversations.json`;
+  const functional=production&&w?validateFunctionalCapture(production,host,brand):null;
   const pairingReport=read(pf),pairing=pairingReport?.hosts?.find(x=>x.host===host.label);
-  if(pairingReport)validatePairingReport(pairingReport,deployment,brand,{complete:false});
+  if(pairingReport)validatePairingReport(pairingReport,deployment,brand,{complete:false,allowSessions:!!production});
   const browserReport=read(bf),browser=browserReport?.rows?.filter(x=>x.host===host.label)||[];
+  if(production)for(const report of [r,w,browserReport])if(report)validateProductionReport(report,production,{allowSessions:true});
   if(browserReport&&(!Array.isArray(browserReport.rows)||browserReport.rows.some(row=>!deployment.hosts.some(h=>h.label===row.host))))throw Error('Unknown browser host evidence');
   for(const rows of [r?.providers,w?.providers,browser])assertProviderRows(rows,providers);
   if(r&&(r.runId!==deployment.runId||r.hostLabel!==host.label||r.phase!==brand||r.runtimeIdentity!==binding.runtimeIdentity))throw Error('Backend evidence ownership mismatch: '+rf);
@@ -67,7 +76,7 @@ for(const host of deployment.hosts){
   for(const provider of providers){
    const p=r?.providers?.find(x=>x.provider===provider),v=w?.providers?.find(x=>x.provider===provider),b=browser.find(x=>x.provider===provider);
    if(v&&b){assertProviderIdentity({backend:p,verifier:v,browser:b,provider,brand});if(b.workspaceId!==r?.workspaceId)throw Error('Mixed browser workspace identity');}
-   const evidence=[rf,wf,bf,p?.evidenceFile&&base+'/'+path.basename(p.evidenceFile),v?.evidenceFile&&base+'/'+path.basename(v.evidenceFile)];
+   const evidence=[rf,wf,bf,...(functional?[functional.index.path,...functional.files.map(x=>x.path)]:[]),p?.evidenceFile&&base+'/'+path.basename(p.evidenceFile),v?.evidenceFile&&base+'/'+path.basename(v.evidenceFile)];
    if(b)evidence.push(...craft(b.evidence,['open-model-picker','select-provider-model','type-memory-probe','send-web-message','observe-completed-turn','observe-reconnected-conversation'],host.label+'/'+brand+'/'+provider));
    if(v?.passed&&!semanticWebPassed(v))throw Error('Web success lacks complete semantic verifier checks');
    if(p?.modelSwitch?.evidenceFile)evidence.push(base+'/'+path.basename(p.modelSwitch.evidenceFile));
@@ -85,8 +94,13 @@ for(const host of deployment.hosts){
  const later=phases.slice(1);
  add(host.label,null,null,'memory-read-after-brand-switch',later.every(x=>!!x.r),later.every(x=>x.r?.providers?.length===providers.length&&x.r.providers.every(p=>p.initial?.previousBrandRead===true&&p.previousBrandWrite?.source==='public-web')),later.flatMap(x=>x.files));
  add(host.label,null,null,'target-switch-preserves-resources',phases.every(x=>!!x.r&&!!x.w),phases.every(x=>x.r?.providers?.length===providers.length&&x.r.providers.every(p=>p.initial?.skillRead===true&&p.initial.globalMcpCall===true&&p.initial.memoryRead===true)&&x.w?.passed===true),phases.flatMap(x=>x.files));
+ if(production)matrix.results.push(...productionCompletion(production,host));
 }
-
+ if(production){
+  const sources=[production.manifestProof,production.transportProof,...(production.sessions?
+    [production.sessionIndex,...[...production.sessions.values()].flatMap(session=>[session.manifestProof,session.transportProof])]:[])];
+  for(const row of matrix.results)for(const item of sources)if(!row.evidence.some(x=>x.path===item.path))row.evidence.push(item);
+ }
  return { matrix, result: audit(matrix,root) };
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
