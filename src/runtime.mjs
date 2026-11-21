@@ -4,17 +4,20 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { locations, readState, updateState, atomicJson, privateDirectory, withRuntimeLock, processIdentity, RuntimeError } from './state.mjs';
+import { locations, readState, updateState, atomicJson, privateDirectory, withRuntimeLock, processIdentity, RuntimeError, assertSafePath } from './state.mjs';
 import { findExecutable, runProcess } from './process.mjs';
 import { resolveProviderLaunchers, configureProviders } from './provider-launchers.mjs';
 import { providerReplyError } from './provider-reply.mjs';
 import { assistantEntries, latestAssistantCursor, chatResult } from './chat-result.mjs';
+import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION} from './runtime-layout.mjs';
-import { ensureWebClient, managedPairUrl, webClientStatus } from './web-client.mjs';
+import { ensureWebClient, webClientStatus } from './web-client.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
+import { readRecord, writeRecord } from './onboarding.mjs';
+import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export const PASEO_VERSION = '0.11.2';
 const PROVIDERS = ['claude', 'codex', 'pi'];
@@ -36,6 +39,8 @@ function inheritedEnv() {
   // Web login protects the host UI; provider children do not need this credential.
   delete env.PI_WEB_PASSWORD;
   env.PI_PASEO_RUNTIME_REVISION=RUNTIME_REVISION;
+  Object.assign(env, targetEnvironment(connectionPreferences(loc).target));
+  env.PI_PASEO_CONNECTION_PROFILE_VERSION = '1';
   return env;
 }
 async function cli(args, options = {}) {
@@ -67,8 +72,14 @@ async function serverModule(relative) { const root=controlRuntimeDirectory()||ru
 async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
 async function currentInstance() { if (!controlRuntimeDirectory() || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
 function instanceNeedsRuntimeRestart(instance) {
- if(process.platform!=='linux')return false;
- try{return !fs.readFileSync(`/proc/${instance.pid}/environ`,'utf8').split('\0').includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`);}catch{return true;}
+ if(process.platform!=='linux'){
+   const state=readState();
+   return state.daemonPid!==instance.pid||state.daemonStartedAt!==instance.startedAt||state.daemonRuntimeRevision!==RUNTIME_REVISION;
+ }
+ try {
+   const env = fs.readFileSync(`/proc/${instance.pid}/environ`, 'utf8').split('\0');
+   return !env.includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`) || !env.includes('PI_PASEO_CONNECTION_PROFILE_VERSION=1');
+ } catch { return true; }
 }
 function verifyInstanceOwnership(instance) {
   if (!ownsHome() || !instance || !processIdentity(instance.pid)) throw new RuntimeError('DAEMON_NOT_OWNED');
@@ -127,6 +138,7 @@ async function writeConfig(port, launchers) {
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
   };
+  config = targetConfiguration(config, connectionPreferences(loc).target);
   const { savePersistedConfig } = await serverModule('dist/server/server/config.js');
   try { savePersistedConfig(loc.paseoHome, config); fs.chmodSync(file, 0o600); } catch { throw new RuntimeError('CONFIG_INVALID'); }
   updateState({ port, providerLaunchers: launchers });
@@ -150,7 +162,7 @@ export async function activate(options = {}) {
     try {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
       await installRuntime();
-      await ensureWebClient(locations());
+      if (connectionPreferences(locations()).target === 'paseo') await ensureWebClient(locations());
       let existing = await currentInstance();
       if (existing) {
         try { verifyInstanceOwnership(existing); }
@@ -164,6 +176,10 @@ export async function activate(options = {}) {
       const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
         await verifyInstanceOwnership(existing);
+        if (readState().configurationPending === true) {
+          updateState({ phase: 'restart_required', lastError: { code: 'CONFIGURATION_PENDING', at: new Date().toISOString() } });
+          return status();
+        }
         if(instanceNeedsRuntimeRestart(existing)) {
           updateState({phase:'restart_required',lastError:{code:'RESTART_REQUIRED',at:new Date().toISOString()}});
           return status();
@@ -183,7 +199,7 @@ export async function activate(options = {}) {
         updateState({ phase: 'starting' });
         await cli(['daemon', 'start', '--timeout', '90'], { timeoutMs: 105000 });
         const instance = await currentInstance(); await verifyInstanceOwnership(instance);
-        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt });
+        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
       }
       const healthy = await currentInstance();
       const observation = await observeOwnedInstance(locations(), healthy, verifyInstanceOwnership);
@@ -204,7 +220,7 @@ export async function deactivate() {
       await verifyInstanceOwnership(instance);
       const control = await controlModule();
       // The official lifecycle rechecks PID plus startedAt immediately before signaling.
-      try { await control.stopDaemonInstance(locations().paseoHome, { instance, timeoutMs: 20000, force: false }); }
+      try { await control.stopDaemonInstance(locations().paseoHome, { instance, timeoutMs: DAEMON_STOP_TIMEOUT_MS, force: false }); }
       catch (error) { throw new RuntimeError(safeCode(error)); }
     }
     updateState({ phase: 'disabled', daemonPid: null, daemonStartedAt: null });
@@ -313,15 +329,46 @@ async function readModels(provider) {
   }, 150000);
 }
 export async function pair() {
-  if (!webClientStatus(locations()).ready) throw new RuntimeError('WEB_CLIENT_NOT_READY');
-  const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
-  const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
-  if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');
-  const url = new URL(offer.url); if (url.protocol !== 'https:' || url.hostname !== 'app.paseo.sh') throw new RuntimeError('PAIRING_ORIGIN_INVALID');
-  const pairing = { url: managedPairUrl(offer.url), createdAt: new Date().toISOString() };
-  atomicJson(path.join(locations().stateDir, 'pairing.private.json'), pairing);
-  updateState({ pairingCreatedAt: pairing.createdAt });
-  return pairing;
+  return withRuntimeLock(async () => {
+    const target = connectionPreferences(locations()).target;
+    if (readState().configurationPending === true || (readState().activeTarget || 'paseo') !== target) throw new RuntimeError('CONFIGURATION_PENDING');
+    if (target === 'paseo' && !webClientStatus(locations()).ready) throw new RuntimeError('WEB_CLIENT_NOT_READY');
+    const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
+    const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
+    if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');
+    const pairing = { url: targetPairUrl(offer.url, target), target, createdAt: new Date().toISOString() };
+    atomicJson(path.join(locations().stateDir, 'pairing.private.json'), pairing);
+    updateState({ pairingCreatedAt: pairing.createdAt });
+    return pairing;
+  }, { timeoutMs: 30000 });
+}
+
+export async function saveConnectionSettings(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid settings');
+  if (Object.keys(input).some(key => !['name', 'target'].includes(key))) throw new Error('Unsupported setting');
+  if (input.name !== undefined && typeof input.name !== 'string') throw new Error('Invalid name');
+  const name = input.name?.trim();
+  if (name !== undefined && (name.length > 100 || /[\x00-\x1f\x7f]/.test(name))) throw new Error('Invalid name');
+  if (Object.hasOwn(input, 'target')) {
+    if (typeof input.target !== 'string') throw new RuntimeError('INVALID_TARGET');
+    connectionTarget(input.target);
+  }
+  return withRuntimeLock(async () => {
+    const loc = locations(), file = path.join(loc.stateDir, 'preferences.json');
+    const previous = readRecord(file), previousTarget = connectionTarget(previous.target).id;
+    const target = input.target === undefined ? previousTarget : connectionTarget(input.target).id;
+    const changed = target !== previousTarget;
+    if (changed) {
+      const pairingFile = path.join(loc.stateDir, 'pairing.private.json');
+      assertSafePath(pairingFile);
+      // Pending is published before preferences, so a partial write cannot make
+      // the UI offer a new brand while an old daemon still owns the connection.
+      updateState({ configurationPending: true, relayVerification: null, pairingCreatedAt: null });
+      fs.rmSync(pairingFile, { force: true });
+    }
+    writeRecord(file, { ...previous, name: name === undefined ? previous.name || 'Pi Agent' : name || 'Pi Agent', connection: 'relay', target });
+    return { saved: true, target, configurationPending: readState().configurationPending === true };
+  }, { timeoutMs: 30000 });
 }
 /** Runs exactly two tiny turns per selected provider. Call only after user authorization. */
 export async function acceptance(options = {}) {

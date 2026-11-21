@@ -8,7 +8,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { readRecord, writeRecord } from '../src/onboarding.mjs';
-import { RuntimeError } from '../src/state.mjs';
+import { RuntimeError, assertSafePath } from '../src/state.mjs';
+import * as targets from '../src/connection-targets.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
@@ -24,6 +25,7 @@ function fixture(t) {
   const prefs = path.join(loc.stateDir, 'preferences.json');
   const configFile = path.join(loc.paseoHome, 'config.json');
   const calls = { status: 0, activate: 0, saves: 0 };
+  let state = {};
   const configRuntime = {
     locations: () => loc,
     status: async () => { calls.status++; throw Error('UNRELATED_DAEMON_FAILURE'); },
@@ -39,7 +41,8 @@ function fixture(t) {
     const scopedRequire = spec => {
       if (spec === './runtime.mjs') return configRuntime;
       if (spec === './onboarding.mjs') return { readRecord, writeRecord, onboardingStatus: () => ({}) };
-      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, updateState: () => ({}) };
+      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, assertSafePath, readState: () => state, updateState: patch => (state = { ...state, ...patch }), withRuntimeLock: fn => fn() };
+      if (spec === './connection-targets.mjs') return targets;
       if (spec === './provider-launchers.mjs') return { configureProviders: () => providers };
       if (spec === './runtime-layout.mjs') return { runtimeDirectory: () => loc.runtimeDir, runtimeReady: () => true, RUNTIME_REVISION: 'fixture' };
       if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => {
@@ -57,7 +60,9 @@ function fixture(t) {
     vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { process: { env: {}, execPath: process.execPath }, setTimeout, clearTimeout }, { filename: file })(scopedRequire, record, record.exports);
     return record.exports;
   };
-  return { loc, calls, prefs, configFile, providers, host: load('src/host-api.mjs'), runtime: load('src/runtime.mjs', true) };
+  const runtime = load('src/runtime.mjs', true);
+  configRuntime.saveConnectionSettings = runtime.saveConnectionSettings;
+  return { loc, calls, prefs, configFile, providers, host: load('src/host-api.mjs'), runtime };
 }
 
 test('display label saves independently of daemon health and is validated before writing', async t => {
@@ -98,14 +103,14 @@ test('activation repairs legacy daemon.name while preserving other daemon and pr
   const saved = readRecord(f.configFile);
   assert.equal(Object.hasOwn(saved.daemon, 'name'), false);
   assert.equal(saved.daemon.appendSystemPrompt, 'keep');
-  assert.equal(saved.daemon.relay.endpoint, 'relay.example.invalid:443');
+  assert.equal(saved.daemon.relay.endpoint, 'relay.paseo.sh:443');
   assert.equal(readRecord(f.prefs).name, 'PI3');
 });
 
-test('malformed display preferences cannot poison provider activation and remain available for diagnosis', async t => {
+test('malformed target preferences fail closed and remain available for diagnosis', async t => {
   const f = fixture(t);
   fs.writeFileSync(f.prefs, '{invalid-display-preferences', { mode: 0o600 });
-  await f.runtime.writeConfig(6769, {});
-  assert.equal(f.calls.saves, 1);
+  await assert.rejects(f.runtime.writeConfig(6769, {}));
+  assert.equal(f.calls.saves, 0);
   assert.equal(fs.readFileSync(f.prefs, 'utf8'), '{invalid-display-preferences');
 });

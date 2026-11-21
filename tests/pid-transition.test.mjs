@@ -60,11 +60,27 @@ test('official release/refresh missing home semantics do not create a directory'
 
 test('supported r2 fallback requires exact receipt, package versions, writer bytes and safe path',t=>{
  const {loc,root}=runtime(t);markRuntimeReady(loc);seedPidFiles(loc);
- const old=root.replace('-r3-','-r2-'),receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.pidLockPatchId;
+ const old=root.replace('-r4-','-r2-'),receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.pidLockPatchId;
  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify(receipt));fs.renameSync(root,old);
  assert.equal(previousRuntimeDirectory(loc),old);
  for(const relative of ['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.map(p=>'node_modules/@getpaseo/server/'+p+'/pid-lock.js')]){
   const file=path.join(old,relative),bytes=fs.readFileSync(file);fs.writeFileSync(file,'{}');assert.equal(previousRuntimeDirectory(loc),null,relative);fs.writeFileSync(file,bytes);
  }
  fs.renameSync(old,old+'.target');fs.symlinkSync(old+'.target',old);assert.equal(previousRuntimeDirectory(loc),null);
+});
+
+for(const generation of ['r2','r3'])test('pre-security-update '+generation+' supports verified offline control across lockfile changes',t=>{
+ const {loc,root}=runtime(t);markRuntimeReady(loc);if(generation==='r2')seedPidFiles(loc);
+ const priorSha='6d8dbe5154790bbbb0b1281e991871b6f354919022fb55a1235162e969779526';
+ const old=path.join(path.dirname(root),'0.11.2-'+generation+'-'+priorSha.slice(0,12));
+ const receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));
+ receipt.revision=path.basename(old);receipt.lockSha256=priorSha;if(generation==='r2')delete receipt.pidLockPatchId;
+ fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify(receipt));fs.renameSync(root,old);
+ assert.equal(runtimeReady(loc),false);assert.equal(previousRuntimeDirectory(loc),old);
+ const files=['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.flatMap(p=>['pid-lock.js',...(generation==='r3'?['pi-paseo-pid-transition.mjs']:[])].map(n=>'node_modules/@getpaseo/server/'+p+'/'+n))];
+ for(const relative of files){
+  const file=path.join(old,relative),bytes=fs.readFileSync(file);fs.writeFileSync(file,'{}');assert.equal(previousRuntimeDirectory(loc),null,relative);fs.writeFileSync(file,bytes);
+ }
+ const unknown=old.replace(priorSha.slice(0,12),'000000000000');fs.renameSync(old,unknown);assert.equal(previousRuntimeDirectory(loc),null);
+ fs.symlinkSync(unknown,old);assert.equal(previousRuntimeDirectory(loc),null);
 });

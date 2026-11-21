@@ -22,7 +22,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function fixture(t) {
+function fixture(t, { clock } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-lifecycle-'));
   const loc = { home: path.join(dir, 'home'), agentDir: path.join(dir, 'agent'), stateDir: path.join(dir, 'state') };
   for (const p of Object.values(loc)) fs.mkdirSync(p, { recursive: true });
@@ -35,6 +35,7 @@ function fixture(t) {
     pid: 4000, platform: 'linux', execPath: process.execPath, env: { HOME: loc.home, PI_CODING_AGENT_DIR: loc.agentDir, PI_PASEO_STATE_DIR: loc.stateDir, PI_PASEO_RUNTIME_DIR: path.join(dir, 'runtime') }, cwd: () => loc.home,
     kill(pid, signal = 'SIGTERM') {
       if (signal === 0 && pid === this.pid) return true;
+      if (signal === 0 && clock && processes.get(pid)?.exitAt <= clock.now) processes.delete(pid);
       if (!processes.has(pid)) throw Object.assign(new Error('No process'), { code: 'ESRCH' });
       if (signal !== 0) { calls.push(['signal', pid, signal]); onSignal(pid, signal); }
       return true;
@@ -86,7 +87,7 @@ function fixture(t) {
       if (spec.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(absolute), spec)));
       return require(spec);
     };
-    vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { process: fakeProcess, URL, setTimeout: (fn, ms) => setTimeout(fn, ms >= 15000 ? 1 : ms), clearTimeout, console }, { filename: absolute })(localRequire, module, module.exports);
+    vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { process: fakeProcess, URL, Date: clock ? class extends Date { static now() { return clock.now; } } : Date, setTimeout: (fn, ms) => clock ? (clock.now += ms, queueMicrotask(fn), 0) : setTimeout(fn, ms >= 15000 ? 1 : ms), clearTimeout, console }, { filename: absolute })(localRequire, module, module.exports);
     return module.exports;
   }
   function write(name, value) { fs.writeFileSync(path.join(loc.stateDir, name + '.json'), JSON.stringify(value)); }
@@ -508,4 +509,19 @@ test('LOOP-DISABLE: the poll loop still deactivates when the host recorded a rea
   await f.load('src/supervisor.mjs').supervise();
   assert.equal(f.calls.filter(c => c[0] === 'deactivate').length, 1, 'a recorded disable was not finished');
   assert.equal(f.calls.some(c => c[0] === 'activate'), false);
+});
+
+test('first host stop waits through the full graceful daemon shutdown before reporting success',async t=>{
+ const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);const pid=f.owned();
+ f.setSignalHandler((owner,signal)=>{assert.equal(signal,'SIGTERM');f.processes.get(owner).exitAt=clock.now+21000;});
+ const start=clock.now,result=await f.load('src/host-api.mjs').lifecycle({action:'disable'});
+ assert.equal(result.phase,'disabled');assert.equal(f.processes.has(pid),false);assert.ok(clock.now-start>=21000);
+ assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
+ assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
+});
+test('default supervisor shutdown remains bounded and never force-kills a process that does not exit',async t=>{
+ const clock={now:Date.now()},f=fixture(t,{clock}),pid=f.owned();f.setSignalHandler(()=>{});
+ const start=clock.now;await assert.rejects(f.load('src/supervisor.mjs').stopSupervisor(),/still stopping/);
+ assert.equal(clock.now-start,30000);assert.equal(f.processes.has(pid),true);
+ assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
 });

@@ -1,16 +1,21 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import * as runtime from './runtime.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 import { startSupervisor, stopSupervisor, packageEnabled } from './supervisor.mjs';
-import { serveWebClient, webClientStatus, WEB_BASE_PATH } from './web-client.mjs';
+import { serveWebClient, webClientStatus } from './web-client.mjs';
+import { CONNECTION_TARGETS, connectionPreferences, connectionTarget } from './connection-targets.mjs';
 
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
 export async function status() {
   const result=await runtime.status();
+  const settings = connectionPreferences(runtime.locations());
+  const activeTarget = result.daemon?.running ? result.state?.activeTarget || 'paseo' : null;
+  const configurationPending = result.state?.configurationPending === true || (activeTarget !== null && activeTarget !== settings.target);
   return {...result,
-    openUrl:WEB_BASE_PATH,webClient:webClientStatus(runtime.locations()),setupUrl:'/paseo/setup',settings:readRecord(path.join(runtime.locations().stateDir,'preferences.json'))};
+    openUrl:connectionTarget(settings.target).openUrl,webClient:webClientStatus(runtime.locations()),setupUrl:'/paseo/setup',settings,
+    selectedTarget:settings.target,activeTarget,configurationPending,
+    connectionTargets:CONNECTION_TARGETS.map(({id,label,appUrl})=>({id,label,appUrl}))};
 }
 export function web(request) { return serveWebClient(request, runtime.locations()); }
 export async function lifecycle(input={}) {
@@ -40,17 +45,8 @@ export async function listModels(provider) { return runtime.listModels(provider)
 export async function diagnostics() { return runtime.diagnose(); }
 export async function pair() {
   const result=await runtime.pair();
-  return {url:result.url, ...(result.expiresAt?{expiresAt:result.expiresAt}:{})};
+  return {url:result.url,target:result.target, ...(result.expiresAt?{expiresAt:result.expiresAt}:{})};
 }
 export async function saveConfig(input) {
-  if (!input||typeof input!=='object'||Array.isArray(input)) throw new Error('Invalid settings');
-  if (Object.keys(input).some(k=>!['name'].includes(k))) throw new Error('Unsupported setting');
-  if (input.name!==undefined&&typeof input.name!=='string') throw new Error('Invalid name');
-  const name=(input.name||'').trim();
-  if (name.length>100||/[\x00-\x1f\x7f]/.test(name)) throw new Error('Invalid name');
-  writeRecord(path.join(runtime.locations().stateDir,'preferences.json'),{name:name||'Pi Agent',connection:'relay'});
-  // This is a plugin display label. Paseo 0.11.2 has no daemon.name field
-  // or rename RPC; its Web app stores renamed host labels on the client.
-  // Saving a label must not depend on provider/daemon activation.
-  return {saved:true};
+  return runtime.saveConnectionSettings(input);
 }

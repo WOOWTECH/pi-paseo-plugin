@@ -50,6 +50,19 @@ test('unknown dependency versions fail closed without replacing existing files',
  const f=fixture(t,'6.0.0');assert.throws(()=>repairSdkDependency(f.root),/SDK_DEPENDENCY_UNSUPPORTED/);
  assert.equal(JSON.parse(fs.readFileSync(path.join(f.target,'package.json'))).version,'6.0.0');
 });
+test('current SDK fixed dependency updates are retained without replacement or downgrade',t=>{
+ const f=fixture(t,'5.0.13');
+ write(path.join(f.targetUndici,'package.json'),{name:'undici',version:'8.12.4',main:'index.cjs'});
+ const before=[f.target,f.targetUndici].map(p=>fs.statSync(p).ino);
+ assert.deepEqual(repairSdkDependency(f.root),{patched:true});
+ assert.equal(versionAt(f.target),'5.0.13');assert.equal(versionAt(f.targetUndici),'8.12.4');
+ assert.deepEqual([f.target,f.targetUndici].map(p=>fs.statSync(p).ino),before);
+ for(const version of ['8.12.2','9.0.0','8.12.4-beta.1']){
+  write(path.join(f.targetUndici,'package.json'),{name:'undici',version,main:'index.cjs'});
+  assert.throws(()=>repairSdkDependency(f.root),/SDK_DEPENDENCY_UNSUPPORTED/);
+  assert.equal(versionAt(f.targetUndici),version);
+ }
+});
 test('a redirected repair target cannot replace external files',t=>{
  const f=fixture(t);fs.rmSync(f.target,{recursive:true});fs.symlinkSync(f.source,f.target,'dir');
  // A version already patched is harmless and requires no replacement.
@@ -113,7 +126,9 @@ test('the installed Pi SDK matches globs with the minimatch 11 that the lockfile
  write(path.join(pkg,'package.json'),{name:'glob-fixture',version:'1.0.0',pi:{extensions:['./extensions'],skills:['./skills']}});
  write(path.join(agentDir,'settings.json'),{packages:[{source:pkg,extensions:['extensions/*.ts','!**/skip.ts'],skills:['!skills/b*']}]});
  const resolved=await new DefaultPackageManager({cwd,agentDir,settingsManager:SettingsManager.create(cwd,agentDir)}).resolve();
- const enabled=type=>resolved[type].map(r=>[path.relative(pkg,r.path),r.enabled]);
+ // The SDK also discovers this machine's user skills. Check the fixture package's
+ // glob results without treating unrelated user resources as package members.
+ const enabled=type=>resolved[type].filter(r=>!path.relative(pkg,r.path).startsWith('..'+path.sep)).map(r=>[path.relative(pkg,r.path),r.enabled]);
  assert.deepEqual(enabled('extensions'),[['extensions/keep.ts',true],['extensions/nested/index.ts',false],['extensions/skip.ts',false]]);
  assert.deepEqual(enabled('skills'),[['skills/alpha/SKILL.md',true],['skills/beta/SKILL.md',false]]);
 });
