@@ -78,7 +78,7 @@ export async function compare(env = process.env) {
       const row = { ...item, status: 'missing-corresponding-actions' }; report.rows.push(row);
       if (item.before && item.after) {
         row.status = 'running'; save();
-        const value = await craft.compare(item.before.id, item.after.id, `comparison-${index}`);
+        const value = await craft.compare(item.before, item.after, `comparison-${index}`);
         row.status = 'compared'; row.evidenceId = value.id;
         row.evidence = store.proof([path.relative(root, path.join(directory, `comparison-${index}.json`)), item.before.file, item.after.file]);
       }

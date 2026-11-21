@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertWalkthrough } from './craft.mjs';
+import { assertWalkthrough, Craft } from './craft.mjs';
 
 const complete = () => ({
   id: 'test', operation: 'web_walkthrough_record', coverage: { status: 'complete' },
@@ -22,3 +22,21 @@ for (const [name, mutate] of [
     assert.throws(() => assertWalkthrough(evidence, ['open', 'submit']));
   });
 }
+
+
+test('comparison sends exact retained IDs without reserializing browser evidence', async () => {
+  const before={id:'ev_'+'a'.repeat(64)},after={id:'ev_'+'b'.repeat(64)};
+  let called=false;
+  const value=await Craft.prototype.compare.call({call:async(tool,params)=>{
+    called=true;assert.equal(tool,'web-snapshots-compare');
+    assert.deepEqual(params.before,{kind:'saved',evidence_id:before.id});
+    assert.deepEqual(params.after,{kind:'saved',evidence_id:after.id});
+    return {id:'comparison',result:{comparable:true}};
+  }},before,after,'pair');
+  assert.equal(called,true);assert.equal(value.id,'comparison');
+});
+test('missing descriptors fail before invoking Craft instead of omitting evidence_id',async()=>{
+ const call=async()=>assert.fail('invalid input reached CLI');
+ for(const before of [undefined,null,{},'ev_'+'a'.repeat(64),{id:'wrong'}])
+  await assert.rejects(Craft.prototype.compare.call({call},before,{id:'ev_'+'b'.repeat(64)},'bad'),/exact IDs/);
+});

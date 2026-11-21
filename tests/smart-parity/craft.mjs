@@ -89,6 +89,8 @@ export class Craft {
   }
 
   async compare(before, after, name) {
+    if (![before, after].every(value => typeof value?.id === 'string' && /^ev_[a-f0-9]{64}$/.test(value.id)))
+      throw new Error('Craft comparison requires retained evidence descriptors with exact IDs');
     // Use retained IDs: parsing/re-serializing browser floating point timestamps in JS can
     // change a content-addressed evidence hash. Keep the original Craft store alongside JSON.
     const evidence = await this.call('web-snapshots-compare', {
