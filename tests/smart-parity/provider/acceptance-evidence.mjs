@@ -31,15 +31,22 @@ function resultValues(value, depth = 0) {
 function toolName(call) {
   return String(call.name).replace(/^mcp__pi_shared_runtime__/, '').replace(/^(?:mcp\.)?pi_shared_runtime\./, '').replace(/^pi_global_/, '');
 }
-export function invokes(call, server, tool, fields = {}) {
+export function invokes(call, server, tool, fields = {}, { allowOmittedArgs = false } = {}) {
   const name = toolName(call), args = input(call);
+  const dispatcherArgs = () => {
+    // Only the zero-argument fixture opts in. Supplied malformed values are
+    // never treated as omission, and parameterized tools still require args.
+    if (!Object.hasOwn(args, 'args')) return allowOmittedArgs && Object.keys(fields).length === 0 ? {} : undefined;
+    return allowOmittedArgs ? args.args : decode(args.args);
+  };
   let actual;
   if ([`${server}_${tool}`, `${server}__${tool}`, `${server}.${tool}`, `mcp__${server}__${tool}`, `mcp.${server}.${tool}`].includes(name)) actual = args;
-  else if (name === 'mcp' && (args.tool === `${server}_${tool}` || (args.server === server && args.tool === tool))) actual = decode(args.args);
+  else if (name === 'mcp' && (!Object.hasOwn(args, 'server') || args.server === server) &&
+    (args.tool === `${server}_${tool}` || (args.server === server && args.tool === tool))) actual = dispatcherArgs();
   // The adapter also exposes one dispatcher per server. Bind both the outer
   // namespace and the exact underlying tool; never infer a server from args.
   else if (name === `mcp__${server}` && [tool, `${server}_${tool}`].includes(args.tool) &&
-    (!Object.hasOwn(args, 'server') || args.server === server)) actual = decode(args.args);
+    (!Object.hasOwn(args, 'server') || args.server === server)) actual = dispatcherArgs();
   if (!actual || typeof actual !== 'object' || Array.isArray(actual)) return false;
   return Object.entries(fields).every(([key, value]) => actual[key] === value);
 }
@@ -53,7 +60,7 @@ export function memoryWrite(items, key, content) {
     value?.memory?.key === key && value.memory.content === content && typeof value.memory.revision === 'string'));
 }
 export function fixtureMcpResult(items, server, marker) {
-  return completedCalls(items).some(call => invokes(call, server, 'read_marker') && resultValues(output(call)).some(value => value === marker));
+  return completedCalls(items).some(call => invokes(call, server, 'read_marker', {}, { allowOmittedArgs: true }) && resultValues(output(call)).some(value => value === marker));
 }
 export function skillRead(items, name, marker) {
   return completedCalls(items).some(call => {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {memoryResult,memoryWrite,fixtureMcpResult,skillRead,sendAgentPrompt,assistantReplied,workspaceRows,agentRows,runPassed} from './acceptance-evidence.mjs';
+import {invokes,memoryResult,memoryWrite,fixtureMcpResult,skillRead,sendAgentPrompt,assistantReplied,workspaceRows,agentRows,runPassed} from './acceptance-evidence.mjs';
 const event = (name,input,output) => ({type:'tool_call',status:'completed',name,detail:{type:'unknown',input,output}});
 const proxy = (tool,args,output) => event('mcp__pi_shared_runtime__pi_global_mcp',{tool,args}, {content:[{type:'text',text:JSON.stringify(output)}]});
 test('absent read requires exact call, key and structured null in result',()=>{
@@ -118,4 +118,41 @@ test('verified public Web writes append once and refuse conflicting existing own
  assert.equal(appendVerifiedWebWrite(manifest,record),true);assert.equal(appendVerifiedWebWrite(manifest,{...record,writtenAt:'second'}),false);assert.equal(manifest.writes.length,1);assert.equal(manifest.writes[0].writtenAt,'first');
  for(const field of ['marker','provider','agentId','phase','source','revision'])assert.throws(()=>appendVerifiedWebWrite(manifest,{...record,[field]:'conflict'}),/conflict/);
  assert.equal(manifest.writes[0].marker,'nonce');
+});
+
+test('zero-argument fixture dispatcher accepts omitted args only through the explicit fixture opt-in',()=>{
+ const call=event('mcp__pi_shared_runtime__pi_global_mcp',{tool:'acceptance_test_read_marker',server:'acceptance_test'},{output:'fixture-marker'});
+ assert.equal(invokes(call,'acceptance_test','read_marker'),false);
+ assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),true);
+ for(const tool of ['read_marker','acceptance_test_read_marker']){
+  const perServer=event('mcp__pi_shared_runtime__pi_global_mcp__acceptance_test',{tool},{output:'fixture-marker'});
+  assert.equal(invokes(perServer,'acceptance_test','read_marker'),false);
+  assert.equal(fixtureMcpResult([perServer],'acceptance_test','fixture-marker'),true);
+ }
+});
+test('omitted fixture args never admits supplied null, arrays or strings',()=>{
+ for(const name of ['mcp__pi_shared_runtime__pi_global_mcp','mcp__pi_shared_runtime__pi_global_mcp__acceptance_test']){
+  for(const args of [null,[],undefined,'','{}','null','[]','scalar']){
+   const call=event(name,{tool:'acceptance_test_read_marker',server:'acceptance_test',args},{output:'fixture-marker'});
+   assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),false);
+  }
+ }
+});
+test('zero-argument fixture still requires exact dispatcher server/tool and genuine completed output',()=>{
+ const valid=event('mcp__pi_shared_runtime__pi_global_mcp',{tool:'acceptance_test_read_marker',server:'acceptance_test'},{output:'fixture-marker'});
+ for(const mutate of [c=>c.detail.input.server='other',c=>c.detail.input.tool='other_read_marker',c=>c.name='mcp__pi_shared_runtime__pi_global_mcp__other',c=>c.status='running',c=>c.status='failed',c=>c.error='error',c=>c.detail.output={output:'wrong-marker'},c=>c.detail.output={isError:true,output:'fixture-marker'},c=>c.detail.output={output:{isError:true,content:'fixture-marker'}}]){
+  const call=structuredClone(valid);mutate(call);assert.equal(fixtureMcpResult([call],'acceptance_test','fixture-marker'),false);
+ }
+ const explicitWrong=structuredClone(valid);explicitWrong.detail.input.server='other';explicitWrong.detail.input.args={};
+ assert.equal(fixtureMcpResult([explicitWrong],'acceptance_test','fixture-marker'),false);
+ const explicit=structuredClone(valid);explicit.detail.input.args={};assert.equal(fixtureMcpResult([explicit],'acceptance_test','fixture-marker'),true);
+});
+test('parameterized memory tools cannot use omitted args even when omission is requested',()=>{
+ for(const name of ['mcp__pi_shared_runtime__pi_global_mcp','mcp__pi_shared_runtime__pi_global_mcp__pi_shared_memory']){
+  const read=event(name,{tool:'pi_shared_memory_read',server:'pi_shared_memory'},{output:{memory:null}});
+  assert.equal(memoryResult([read],'owned-key',null),false);
+  assert.equal(invokes(read,'pi_shared_memory','read',{key:'owned-key'},{allowOmittedArgs:true}),false);
+  const write=event(name,{tool:'pi_shared_memory_write',server:'pi_shared_memory'},{output:{memory:{key:'owned-key',content:'nonce',revision:'r'}}});
+  assert.equal(memoryWrite([write],'owned-key','nonce'),false);
+ }
 });
