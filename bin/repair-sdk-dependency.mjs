@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 // Pi 1.0.0 publishes npm-shrinkwrap.json; npm ignores consumer overrides for
 // its nested dependencies. Repair the fixed versions before loading Pi.
+// Preserve newer stable fixes in the same major; do not downgrade modern SDKs.
 const readJson=file=>JSON.parse(fs.readFileSync(file));
 // Search node_modules like Node does, without depending on a package's exports map.
 const packageDir=(from,name)=>(createRequire(path.join(from,'package.json')).resolve.paths(name)||[])
@@ -26,7 +27,7 @@ function atLeast(version,minimum) {
  for(let i=0;i<3;i++)if(parts[i]!==floor[i])return parts[i]>floor[i];
  return true;
 }
-function replaceNestedDependency(source, target, name, unsafe, safe, sdk, patched=version=>version===safe) {
+function replaceNestedDependency(source, target, name, unsafe, safe, sdk, patched=version=>version.split('.')[0]===safe.split('.')[0]&&atLeast(version,safe)) {
  const manifest=readJson(path.join(target,'package.json'));
  if(manifest.name!==name)throw new Error('SDK_PATCH_PATH_INVALID');
  if(patched(manifest.version))return;

@@ -28,7 +28,7 @@ function fixture(t) {
   write(path.join(source, '.gitignore'), 'node_modules/\n');
   write(path.join(source, 'package.json'), JSON.stringify({ name: '@woowtech/pi-paseo', version: '0.1.0', type: 'module' }));
   write(path.join(source, 'package-lock.json'), '{"lockfileVersion":3}\n');
-  for (const file of ['bin/cli.mjs', 'bin/repair-sdk-dependency.mjs', 'src/host-api.mjs', 'src/onboarding.mjs', 'src/state.mjs']) write(path.join(source, file), fs.readFileSync(path.join(root, file)));
+  for (const file of ['bin/cli.mjs', 'bin/repair-sdk-dependency.mjs', 'src/host-api.mjs', 'src/onboarding.mjs', 'src/state.mjs', 'src/connection-targets.mjs']) write(path.join(source, file), fs.readFileSync(path.join(root, file)));
   write(path.join(source, 'bin/install-host.mjs'), `import fs from 'node:fs';export async function installHost(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'host-install\\n');return {restartRequired:true}};if(process.argv[1]?.endsWith('install-host.mjs'))await installHost();\n`);
   write(path.join(source, 'src/runtime.mjs'), `import fs from 'node:fs';export const locations=()=>({home:process.env.HOME,stateDir:process.env.BOOTSTRAP_STATE});export async function activate(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'activate\\n')}export async function deactivate(){fs.appendFileSync(process.env.BOOTSTRAP_LOG,'deactivate\\n')}export async function status(){return {daemon:{running:false}}}\n`);
   write(path.join(source, 'src/health.mjs'), 'export async function healthReport(){return {healthy:true}}\n');
