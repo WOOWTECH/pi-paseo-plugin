@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { bindConversationControls } from './conversation-controls.mjs';
+import { loadConversationResume } from './conversation-resume.mjs';
 import { configuration, launch, readJson, redact, reportWriter,
   validatePairingReport, validateJobs, completionMarker, workspaceRoute, contract, verifyActiveAgent, verifyReconnectedConversation, runtimeBinding, until } from './common.mjs';
 
@@ -7,34 +9,32 @@ const [brand, ...jobFiles] = process.argv.slice(2);
 const config = configuration(brand, process.env, { providerTurns: true });
 const pairing = validatePairingReport(readJson(path.join(config.output, brand + '-hosts.json')), config.manifest, brand);
 const jobs = validateJobs(jobFiles.map(readJson), config.manifest, brand);
+const resume = loadConversationResume(config, jobs, process.env.SMART_PARITY_RESUME_REPORT);
 const browser = await launch(config, 'conversations');
 const { context, output, record } = browser;
 const report = { brand, scope: config.manifest.scope, runId: config.manifest.runId,
   ...runtimeBinding(config.manifest), attempt: browser.attempt, craftProject: browser.craftProject, attemptDirectory: path.relative(config.root, output),
-  startedAt: new Date().toISOString(), rows: [] };
+  startedAt: new Date().toISOString(), ...(resume.resumeFrom ? { resumeFrom: resume.resumeFrom } : {}), rows: resume.rows };
 const save = reportWriter(config, browser, brand + '-web-conversations.json', report);
 let currentPage;
+let completedPrefix = resume.rows.length;
 try{
  for(const host of jobs){
   const paired=pairing.hosts.find(x=>x.host===host.hostLabel);
   if(!paired?.serverId||paired.visibleInHostPicker!==true)throw Error('Host was not verified in public web picker');
   for(const job of host.jobs){
    if(!['claude','codex','pi'].includes(job.provider)||typeof job.prompt!=='string'||!job.targetModel||job.targetModel===job.alternateModel)throw Error('Unexpected provider job');
+   if (completedPrefix > 0) { completedPrefix--; continue; }
    const row={host:host.hostLabel,provider:job.provider,agentId:job.agentId,workspaceId:host.workspaceId,targetModel:job.targetModel,evidence:[],status:'running'};
    report.rows.push(row);save();
    const page=await context.newPage();currentPage=page;
    const route=workspaceRoute(paired.serverId,host.workspaceId,job.agentId);
    await page.goto(config.url+route,{waitUntil:'domcontentloaded',timeout:45000});
-   const composer=page.locator('[data-testid="message-input-root"]:visible textarea');
-   await composer.waitFor({timeout:60000});
-   await verifyActiveAgent(page,job.agentId);
+   const controls=await bindConversationControls(page,job.agentId);
+   const {composer,model:selector,send,selectors}=controls;
    row.activeAgentVerified=true;
-   const selector=page.getByTestId('combined-model-selector').filter({visible:true});
-   await selector.waitFor({timeout:30000});
-   await until(async()=>await selector.isEnabled()&&Boolean((await selector.innerText()).trim())&&(await selector.innerText()).trim()!=='Select model',30000);
-   if(await page.getByTestId('combined-model-selector').count()!==1)throw Error('Ambiguous model selector DOM; bind the active agent before recording');
    row.beforeLabel=await selector.innerText();
-   row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-model-open`,[{step_id:'open-model-picker',kind:'click',test_id:'combined-model-selector'}])).id);
+   row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-model-open`,[{step_id:'open-model-picker',kind:'click',selector:selectors.model}])).id);
    const modelId=`model-row-${job.provider}-${job.targetModel}`;
    const providerId=`model-provider-${job.provider}`;
    await until(async()=>await page.getByTestId(modelId).isVisible()||await page.getByTestId(providerId).isVisible(),30000);
@@ -51,13 +51,13 @@ try{
    row.afterLabel=await selector.innerText();
    const completion=completionMarker(job);
    if(!completion)throw Error('Missing unique web completion marker');
-   if(await page.locator('[data-testid="message-input-root"] textarea').count()!==1)throw Error('Ambiguous composer DOM; bind the active agent before recording');
+   await bindConversationControls(page,job.agentId);
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-web-type`,[
-    {step_id:'type-memory-probe',kind:'fill',selector:'[data-testid="message-input-root"] textarea',value:job.prompt}
+    {step_id:'type-memory-probe',kind:'fill',selector:selectors.composer,value:job.prompt}
    ])).id);
-   await until(async()=>await composer.inputValue()===job.prompt&&await page.getByRole('button',{name:'Send message',exact:true}).isEnabled(),20000);
+   await until(async()=>await composer.inputValue()===job.prompt&&await send.isEnabled(),20000);
    row.evidence.push((await record(page,`${brand}-${host.hostLabel}-${job.provider}-web-send`,[
-    {step_id:'send-web-message',kind:'click',role:'button',name:'Send message'},
+    {step_id:'send-web-message',kind:'click',selector:selectors.send},
     {step_id:'observe-send',kind:'wait',ms:1000}
    ])).id);
    // Match the assistant bubble, never the marker echoed in the user's prompt.

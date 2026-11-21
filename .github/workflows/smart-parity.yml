@@ -22,6 +22,9 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/parity-tools" --no-audit --no-fund --ignore-scripts --save-exact playwright@1.63.0
           "$RUNNER_TEMP/parity-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify active conversation controls in Chromium
+        run: |
+          SMART_PARITY_PLAYWRIGHT_MODULE="$RUNNER_TEMP/parity-tools/node_modules/playwright/index.mjs" node tests/smart-parity/browser/conversation-controls.browser-check.mjs
       - name: Record and compare three real public web apps
         run: |
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/parity-tools/node_modules/playwright/index.mjs" node tests/smart-parity/baseline.mjs
