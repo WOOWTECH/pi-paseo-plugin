@@ -113,7 +113,9 @@ test('the installed Pi SDK matches globs with the minimatch 11 that the lockfile
  write(path.join(pkg,'package.json'),{name:'glob-fixture',version:'1.0.0',pi:{extensions:['./extensions'],skills:['./skills']}});
  write(path.join(agentDir,'settings.json'),{packages:[{source:pkg,extensions:['extensions/*.ts','!**/skip.ts'],skills:['!skills/b*']}]});
  const resolved=await new DefaultPackageManager({cwd,agentDir,settingsManager:SettingsManager.create(cwd,agentDir)}).resolve();
- const enabled=type=>resolved[type].map(r=>[path.relative(pkg,r.path),r.enabled]);
+ // The SDK also discovers this machine's user skills. Check the fixture package's
+ // glob results without treating unrelated user resources as package members.
+ const enabled=type=>resolved[type].filter(r=>!path.relative(pkg,r.path).startsWith('..'+path.sep)).map(r=>[path.relative(pkg,r.path),r.enabled]);
  assert.deepEqual(enabled('extensions'),[['extensions/keep.ts',true],['extensions/nested/index.ts',false],['extensions/skip.ts',false]]);
  assert.deepEqual(enabled('skills'),[['skills/alpha/SKILL.md',true],['skills/beta/SKILL.md',false]]);
 });
