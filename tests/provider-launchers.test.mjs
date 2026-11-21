@@ -1,3 +1,5 @@
+import * as connectionTargets from '../src/connection-targets.mjs';
+import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -75,6 +77,7 @@ test('valid mounted commands stay in place without any private installation or v
 test('only missing Claude and Codex install into the private prefix using fixed official packages', async t => {
   const f = fixture(t); const pi = f.mounted('pi');
   f.env.PI_WEB_PASSWORD='web-password-sentinel';
+  Object.assign(f.env, { PASEO_APP_BASE_URL: 'https://untrusted.example', PASEO_RELAY_ENDPOINT: 'untrusted.example:80', PASEO_RELAY_PUBLIC_ENDPOINT: 'untrusted.example:80', PASEO_RELAY_USE_TLS: 'false', PASEO_RELAY_PUBLIC_USE_TLS: 'false' });
   const launchers = await f.resolve({ installMissing: true });
   const installs = f.calls.filter(c => c.command === f.npm);
   assert.equal(installs.length, 2);
@@ -195,6 +198,7 @@ test('Paseo provider configuration binds absolute binaries and reuses account di
 test('runtime applies new private commands with the official reload API and reports RESTART_REQUIRED safely', async t => {
   const f = fixture(t); const pi = f.mounted('pi');
   f.env.PI_WEB_PASSWORD='web-password-sentinel';
+  Object.assign(f.env, { PASEO_APP_BASE_URL: 'https://untrusted.example', PASEO_RELAY_ENDPOINT: 'untrusted.example:80', PASEO_RELAY_PUBLIC_ENDPOINT: 'untrusted.example:80', PASEO_RELAY_USE_TLS: 'false', PASEO_RELAY_PUBLIC_USE_TLS: 'false' });
   Object.assign(f.loc, { stateDir: path.join(f.loc.home, 'state'), runtimeDir: path.join(f.loc.home, 'runtime'), port: 6769 });
   f.loc.paseoHome = path.join(f.loc.stateDir, 'daemon');
   fs.mkdirSync(f.loc.paseoHome, { recursive: true });
@@ -228,6 +232,9 @@ test('runtime applies new private commands with the official reload API and repo
   const code = ts.transpileModule(fs.readFileSync(sourceFile, 'utf8'), { fileName: sourceFile + '.ts', compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
   const module = { exports: {} }, require = createRequire(import.meta.url);
   const localRequire = spec => {
+  if(spec==='./connection-targets.mjs')return connectionTargets;
+  if(spec==='./onboarding.mjs')return onboarding;
+
     if (spec === './state.mjs') return {
       locations: () => f.loc, readState: () => state, updateState: patch => (state = { ...state, ...patch, updatedAt:String(Number(state.updatedAt||0)+1) }),
       privateDirectory, RuntimeError, withRuntimeLock: fn => fn(), processIdentity: pid => pid === instance.pid ? 'fixture-process' : null,
@@ -241,6 +248,11 @@ test('runtime applies new private commands with the official reload API and repo
         assert.deepEqual(Array.from(args), [path.join(cliRoot, 'bin/paseo'), '--version']);
         assert.equal(options.env.HOME, f.loc.home);
         assert.equal(options.env.PI_WEB_PASSWORD,undefined);
+        assert.equal(options.env.PASEO_APP_BASE_URL,'https://app.paseo.sh');
+        assert.equal(options.env.PASEO_RELAY_ENDPOINT,'relay.paseo.sh:443');
+        assert.equal(options.env.PASEO_RELAY_PUBLIC_ENDPOINT,'relay.paseo.sh:443');
+        assert.equal(options.env.PASEO_RELAY_USE_TLS,'true');
+        assert.equal(options.env.PASEO_RELAY_PUBLIC_USE_TLS,'true');
         return '0.11.2';
       },
     };

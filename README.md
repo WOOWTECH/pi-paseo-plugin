@@ -1,8 +1,21 @@
-# Pi Paseo plugin
+# Agent Connect
 
-Pi Agent / Pi Web 插件。在 Pi 容器中下載並管理 Paseo，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。安裝、啟用與重啟只管理背景服務；配對由使用者在 **Pi Web 設定 → 插件 → Paseo** 手動開始。
+Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, routes and data directory.
 
-Paseo Remote 使用官方加密 relay，從 Pi Web 的受保護設定頁產生配對連結，再在新分頁開啟完整 Paseo。官方 relay 不需要額外的 Paseo 帳號密碼。修正版網頁由 Pi Web 既有登入保護；分享入口網址不會自動分享配對權限。
+Changing the target saves its app URL and relay together. If the daemon is running, finish any conversations, disable the connector, then enable it to apply the change. Target changes clear previous pairing and relay verification; generate a fresh pairing link after restarting. Saving only a display name does not restart the daemon. A target change does not revoke a device already paired with the daemon.
+
+| Target | Web app | Relay |
+| --- | --- | --- |
+| Woowtech Smart | https://smart.woowtech.io | relay.woowtech.io:443 |
+| Apporo Smart | https://smart.apporo.ai | relay.apporo.ai:443 |
+| Paseo | bundled `/paseo-web` client | relay.paseo.sh:443 |
+
+The connector uses upstream Paseo 0.11.2 and its V2 pairing format. Smart mobile push notifications use a fork-specific FCM protocol and are not supported by this configuration-only integration; desktop/mobile production pairing still needs live acceptance. The branded app source currently identifies itself as 0.10.1.
+
+
+Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。使用者在 **Pi Web 設定 → 插件 → Agent Connect** 選擇連線標的並開始配對。
+
+各標的使用自己的加密 relay；從 Pi Web 的受保護設定頁產生配對連結，再開啟所選標的。Paseo 的內建網頁由 Pi Web 既有登入保護；品牌網頁會在各自官方網站開啟。
 
 `v0.1.9` 由插件下載並管理已修補的 Paseo Web 0.13.0，透過 Pi Web 同一網址的 `/paseo-web` 開啟。固定發布包須通過 SHA-256 與來源版本驗證，完成後才切換；登入保護、provider 登入及官方加密 relay 沿用現有設定。修補包含回覆途中重新整理的重複顯示與長回覆截斷；官方 `app.paseo.sh` 的部署進度另見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "name": "Agent Connect functional parity",
+  "brands": {
+    "woowtech": "https://smart.woowtech.io",
+    "apporo": "https://smart.apporo.ai",
+    "paseo": "https://app.paseo.sh"
+  },
+  "platforms": ["windows-wsl2", "macos", "ubuntu", "k3s-paas", "ha-addon"],
+  "minimumIndependentHosts": 2,
+  "providers": ["claude", "codex", "pi"],
+  "minimumModelsPerProvider": 2,
+  "requiredHostBrandCases": [
+    "pair", "reconnect", "workspace-cli-create", "workspace-mcp-create", "workspace-archive",
+    "conversation-cli-create-delete", "conversation-mcp-create-archive", "agent-coordination"
+  ],
+  "requiredProviderCases": [
+    "web-conversation", "model-switch", "shared-mcp-tool", "shared-skill-read",
+    "shared-memory-write", "shared-memory-read-other-provider", "foreign-host-memory-absent"
+  ],
+  "requiredHostCases": ["memory-read-after-brand-switch", "target-switch-preserves-resources"],
+  "evidenceRequirements": {
+    "web": ["craft-script-check", "craft-walkthrough", "semantic-state-assertion"],
+    "provider": ["actual-provider-id", "requested-and-actual-model", "completed-tool-events"],
+    "sharing": ["hidden-marker", "writer-provider-and-brand", "reader-provider-and-brand", "persisted-content-check"],
+    "isolation": ["actual-foreign-key", "completed-mcp-read", "absent-result"],
+    "deployment": ["source-commit", "image-id-or-digest", "host-identity", "separate-data-volume", "production-or-isolated-scope"]
+  },
+  "resultStates": ["pass", "fail", "blocked", "unrun"],
+  "normalizationPolicy": "Only explicit brand names, origins and separately declared volatile IDs; never normalize missing controls, errors, versions, tool results or unsupported features.",
+  "completionPolicy": "Every required case in the declared platform scope must have passing evidence. Blocked, missing, aborted or truncated evidence cannot pass. Isolated-host acceptance does not count as deployment to existing production hosts."
+}
