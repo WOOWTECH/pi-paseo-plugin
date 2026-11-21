@@ -18,10 +18,20 @@ test('a complete matrix passes integrity checks but missing, blocked and tampere
       for (const name of contract.requiredHostCases) matrix.results.push({ host: host.id, case: name, status: 'pass', evidence });
       for (const brand of Object.keys(contract.brands)) {
         for (const name of contract.requiredHostBrandCases) matrix.results.push({ host: host.id, brand, case: name, status: 'pass', evidence });
-        for (const provider of contract.providers) for (const name of contract.requiredProviderCases) matrix.results.push({ host: host.id, brand, provider, case: name, status: 'pass', evidence });
+        for (const provider of contract.providers) for (const name of contract.requiredProviderCases) matrix.results.push({ host: host.id, brand, provider, case: name, status: 'pass', evidence, ...(name === 'model-switch' ? { models: { initial: 'model-a', alternate: 'model-b', actual: 'model-b' } } : {}) });
       }
     }
     assert.equal(audit(matrix, dir).passed, true);
+    matrix.hosts[0].id = '';
+    assert.equal(audit(matrix, dir).passed, false);
+    matrix.hosts[0].id = 'a';
+    const model = matrix.results.find(row => row.case === 'model-switch');
+    model.models.actual = 'model-a';
+    assert.equal(audit(matrix, dir).passed, false);
+    model.models.actual = 'model-b';
+    model.models.alternate = 'model-a';
+    assert.equal(audit(matrix, dir).passed, false);
+    model.models.alternate = 'model-b';
     matrix.results[0].status = 'blocked';
     assert.equal(audit(matrix, dir).passed, false);
     matrix.results[0].status = 'pass';

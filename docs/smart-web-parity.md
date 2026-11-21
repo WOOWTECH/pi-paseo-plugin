@@ -22,7 +22,7 @@ node tests/smart-parity/baseline.mjs
 
 比較使用同一 Craft project 保留的 evidence ID，避免 JavaScript 重新序列化浮點時間戳導致內容雜湊不符。保存 `.cany` 專案及原始 JSON；不要修改原始證據以消除差異。
 
-完成紀錄後執行 `node tests/smart-parity/audit.mjs PRIVATE_EVIDENCE_DIRECTORY/matrix.json`。matrix 宣告 `platform`、`scope`、`hosts[{id,dataIdentity,runtimeIdentity}]`，每筆 `results` 使用 `host`、`brand`、`provider`、`case`、`status` 及 `evidence[{path,sha256}]`。host 層級案例省略 brand/provider；host × brand 案例省略 provider。工具依 contract 展開每個必要案例，缺項、blocked、證據遺失或雜湊變動均回傳非零。完整性檢查仍須搭配實際操作與工具事件審閱。
+完成紀錄後執行 `node tests/smart-parity/audit.mjs PRIVATE_EVIDENCE_DIRECTORY/matrix.json`。matrix 宣告 `platform`、`scope`、`hosts[{id,dataIdentity,runtimeIdentity}]`，每筆 `results` 使用 `host`、`brand`、`provider`、`case`、`status` 及 `evidence[{path,sha256}]`。host 層級案例省略 brand/provider；host × brand 案例省略 provider。`model-switch` 還必須記錄 `models{initial,alternate,actual}`，前兩者須不同且 actual 等於 alternate。工具依 contract 展開每個必要案例，缺項、blocked、證據遺失或雜湊變動均回傳非零。這是矩陣完整性及證據完整性檢查；`passed` 不能單獨代表功能已通過，仍須審閱各項證據中的實際操作與工具事件。
 
 ## 完整驗收矩陣
 

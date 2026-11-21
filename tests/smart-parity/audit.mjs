@@ -10,7 +10,7 @@ export function audit(manifest, evidenceDirectory) {
   const problems = [];
   if (!contract.platforms.includes(manifest.platform)) problems.push('Unknown declared platform');
   const hosts = manifest.hosts || [];
-  if (hosts.length < contract.minimumIndependentHosts || new Set(hosts.map(h => h.id)).size !== hosts.length) problems.push('At least two distinct hosts are required');
+  if (hosts.length < contract.minimumIndependentHosts || hosts.some(h => typeof h.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(h.id)) || new Set(hosts.map(h => h.id)).size !== hosts.length) problems.push('At least two distinct named hosts are required');
   if (hosts.some(h => !h.dataIdentity || !h.runtimeIdentity) || new Set(hosts.map(h => h.dataIdentity)).size !== hosts.length) problems.push('Hosts need independent data identities and recorded runtimes');
   if (!['isolated-candidate', 'existing-production'].includes(manifest.scope)) problems.push('Declare isolated-candidate or existing-production scope');
   const base = fs.realpathSync(evidenceDirectory);
@@ -21,6 +21,12 @@ export function audit(manifest, evidenceDirectory) {
     rows.set(id, row);
     if (!contract.resultStates.includes(row.status)) problems.push(`Invalid result state: ${id}`);
     if (row.status !== 'pass') continue;
+    if (row.case === 'model-switch' && (
+      !row.models || typeof row.models.initial !== 'string' || !row.models.initial ||
+      typeof row.models.alternate !== 'string' || !row.models.alternate ||
+      new Set([row.models.initial, row.models.alternate]).size < contract.minimumModelsPerProvider ||
+      row.models.actual !== row.models.alternate
+    )) problems.push(`Two distinct models and matching actual switched model required: ${id}`);
     if (!Array.isArray(row.evidence) || !row.evidence.length) { problems.push(`No evidence: ${id}`); continue; }
     for (const item of row.evidence) {
       try {
