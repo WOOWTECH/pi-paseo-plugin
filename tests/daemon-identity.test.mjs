@@ -253,3 +253,27 @@ for(const platform of ['darwin','win32'])test(platform+' keeps an older daemon p
  assert.equal((await f.runtime.status()).diagnosticCode,null);
  await f.runtime.activate();assert.equal(f.starts(),1);
 });
+
+// Upstream Paseo writes paseo.pid with open(path,'wx') and no mode: under Ubuntu's umask 002 it is
+// 0664. Measured on an Ubuntu host: DAEMON_IDENTITY_UNSAFE on every retry until the file was 0600.
+test('umask 002: a group-writable official PID file in the private home is adopted, then recovered',async t=>{
+ const f=fixture(t);fs.chmodSync(f.pidFile,0o664);
+ assert.equal((await f.runtime.activate()).daemon.reachable,true);assert.equal(f.starts(),0);
+ assert.equal(fs.statSync(f.proofFile).mode&0o777,0o600);
+ // Stale-PID recovery re-reads the file and its quarantine copy under the same rule.
+ f.reuse();fs.chmodSync(f.pidFile,0o664);
+ assert.equal((await f.runtime.activate()).daemon.reachable,true);assert.equal(f.starts(),1);
+ // Recovery keeps the quarantined 0664 PID file as evidence, as it does for 0644.
+ const stale=fs.readdirSync(f.loc.paseoHome).filter(n=>n.startsWith('.paseo.pid.stale-'));
+ assert.equal(stale.length,1);assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,stale[0]))).pid,f.initial.pid);f.keep();
+});
+
+test('group write is accepted only inside a verified private home; other write never',async t=>{
+ const f=fixture(t);await f.runtime.activate();
+ fs.chmodSync(f.pidFile,0o664);fs.chmodSync(f.loc.paseoHome,0o750);
+ await assert.rejects(f.runtime.activate(),{code:'DAEMON_IDENTITY_UNSAFE'});
+ fs.chmodSync(f.loc.paseoHome,0o700);fs.chmodSync(f.pidFile,0o662);
+ await assert.rejects(f.runtime.activate(),{code:'DAEMON_IDENTITY_UNSAFE'});
+ fs.chmodSync(f.pidFile,0o664);assert.equal((await f.runtime.activate()).daemon.reachable,true);
+ assert.equal(f.starts(),0);f.keep();
+});
