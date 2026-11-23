@@ -44,7 +44,8 @@ function fixture(t, { platform = process.platform } = {}) {
  const identity=identityModule.createDaemonIdentity?.({readBirth:pid=>{const p=processes.get(pid);if(p?.unreadable)throw new state.RuntimeError('DAEMON_IDENTITY_UNVERIFIABLE');return p?{bootId:p.bootId,startTicks:p.startTicks,uid:p.uid}:null;},assertNoSupervisor:verifyProc});
  const fakeFs={...fs,readFileSync(file,...args){const m=/^\/proc\/(\d+)\/(cmdline|environ)$/.exec(String(file));if(m){const p=processes.get(Number(m[1]));if(!p)throw Object.assign(new Error('gone'),{code:'ENOENT'});return m[2]==='cmdline'?(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0'):`PASEO_HOME=${p.home}\0PI_PASEO_RUNTIME_REVISION=${p.revision||layout.RUNTIME_REVISION}\0${p.noConnectionProfile?'':'PI_PASEO_CONNECTION_PROFILE_VERSION=1\0'}`;}return fs.readFileSync(file,...args);},realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);}};
  const loadInstance=()=>fs.existsSync(pidFile)?JSON.parse(fs.readFileSync(pidFile)):null;
- const client={reloadDaemonConfig:async()=>({appliedPaths:['agents.providers'],restartRequiredPaths:[],overrideControlledPaths:[]}),getDaemonStatus:async()=>({pid:loadInstance().pid+1,providers:[],relay:{enabled:true}}),close:async()=>{}};
+ let reloads=0,reloadResult={appliedPaths:['agents.providers'],restartRequiredPaths:[],overrideControlledPaths:[]};
+ const client={reloadDaemonConfig:async()=>{reloads++;return reloadResult;},getDaemonStatus:async()=>({pid:loadInstance().pid+1,providers:[],relay:{enabled:true}}),close:async()=>{}};
  const source=new URL('../src/runtime.mjs',import.meta.url);
  const code=ts.transpileModule(fs.readFileSync(source,'utf8'),{fileName:source.pathname+'.ts',compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  const module={exports:{}};
@@ -68,7 +69,7 @@ function fixture(t, { platform = process.platform } = {}) {
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -276,4 +277,44 @@ test('group write is accepted only inside a verified private home; other write n
  await assert.rejects(f.runtime.activate(),{code:'DAEMON_IDENTITY_UNSAFE'});
  fs.chmodSync(f.pidFile,0o664);assert.equal((await f.runtime.activate()).daemon.reachable,true);
  assert.equal(f.starts(),0);f.keep();
+});
+
+test('agent collaboration defaults off and reloads the running daemon without a restart', async t => {
+ const f=fixture(t);await f.runtime.activate();
+ const configFile=path.join(f.loc.paseoHome,'config.json');
+ const mcp=()=>JSON.parse(fs.readFileSync(configFile)).daemon.mcp;
+ assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:false});
+ assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false);
+ const pid=fs.readFileSync(f.pidFile),reloads=f.reloads();
+ const on=await f.runtime.saveConnectionSettings({agentCollaboration:true});
+ assert.equal(on.agentCollaboration,true);assert.equal(on.agentCollaborationApplied,'applied');
+ assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:true});
+ assert.equal(fs.statSync(configFile).mode&0o777,0o600);
+ assert.equal(f.reloads(),reloads+1,'one live reload');
+ assert.deepEqual(fs.readFileSync(f.pidFile),pid);assert.equal(f.starts(),0);assert.equal(f.stops(),0);
+ assert.notEqual(state.readState().configurationPending,true,'collaboration is not a pending target change');
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).custom,'preserve');
+ await f.runtime.activate();assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:true},'activation keeps the saved choice');
+ const before=f.reloads();
+ assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:true})).agentCollaborationApplied,'unchanged');
+ assert.equal(f.reloads(),before);
+ assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:false})).agentCollaborationApplied,'applied');
+ assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:false});
+ await f.runtime.saveConnectionSettings({name:'Renamed'});
+ assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false,'other saves keep the choice');
+ f.keep();
+});
+
+test('a daemon that cannot take the collaboration setting live asks for a restart', async t => {
+ const f=fixture(t);await f.runtime.activate();
+ f.setReload({appliedPaths:[],restartRequiredPaths:['daemon.mcp'],overrideControlledPaths:[]});
+ const saved=await f.runtime.saveConnectionSettings({agentCollaboration:true});
+ assert.equal(saved.agentCollaborationApplied,'restart-required');
+ assert.equal(state.readState().phase,'restart_required');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,'config.json'))).daemon.mcp.injectIntoAgents,true,'written for the next start');
+ assert.equal(f.starts(),0);assert.equal(f.stops(),0);
+ f.setReload({appliedPaths:[],restartRequiredPaths:[],overrideControlledPaths:['daemon.mcp.injectIntoAgents']});
+ assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:false})).agentCollaborationApplied,'restart-required');
+ await assert.rejects(f.runtime.saveConnectionSettings({agentCollaboration:'yes'}),{code:'INVALID_SETTING'});
+ assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false);
 });

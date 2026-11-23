@@ -117,3 +117,22 @@ test('target config validates and resolves through installed Paseo runtime', { s
     }
   }
 });
+
+test('agent collaboration is an explicit opt-in that leaves target, pairing and relay evidence alone', async t => {
+  const f = fixture(t);
+  writeRecord(f.preferences, { name: 'Existing', target: 'apporo', futurePreference: 7 });
+  writeRecord(f.pairing, { url: 'keep-private' });
+  updateState({ relayVerification: { verified: true }, activeTarget: 'apporo' });
+  assert.equal(connectionPreferences(locations()).agentCollaboration, false);
+  const saved = await saveConfig({ agentCollaboration: true });
+  assert.deepEqual(saved, { saved: true, target: 'apporo', agentCollaboration: true, agentCollaborationApplied: 'next-start', configurationPending: false });
+  assert.equal(connectionPreferences(locations()).agentCollaboration, true);
+  assert.equal(readRecord(f.preferences).target, 'apporo');
+  assert.equal(readRecord(f.preferences).futurePreference, 7);
+  assert.equal(fs.existsSync(f.pairing), true);
+  assert.deepEqual(readState().relayVerification, { verified: true });
+  const before = fs.readFileSync(f.preferences, 'utf8');
+  for (const agentCollaboration of ['true', 1, null, {}]) await assert.rejects(saveConfig({ agentCollaboration }));
+  await assert.rejects(saveConfig({ agentCollaboration: false, target: 'custom' }));
+  assert.equal(fs.readFileSync(f.preferences, 'utf8'), before);
+});

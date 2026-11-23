@@ -121,6 +121,38 @@ async function choosePort(preferred) {
 async function detectLaunchers({ installMissing = false } = {}) {
   return resolveProviderLaunchers(locations(), { installMissing, env: inheritedEnv() });
 }
+// Paseo 0.11.2 hands its agents the Paseo MCP tools (create_agent,
+// send_agent_prompt, set_agent_mode, respond_to_permission, ...) only when
+// daemon.mcp.injectIntoAgents is true, and leaves it false by default. The
+// Agent Connect "agent collaboration" setting owns that value; the daemon
+// reloads it without a restart.
+const COLLABORATION_PATH = 'daemon.mcp.injectIntoAgents';
+function collaborationMcp(mcp, enabled) { return { ...mcp, enabled: true, injectIntoAgents: enabled === true }; }
+async function applyAgentCollaboration(enabled) {
+  const loc = locations(), file = path.join(loc.paseoHome, 'config.json');
+  // No config yet: the next start writes it from the saved preference.
+  if (!fs.existsSync(file)) return 'next-start';
+  let config;
+  try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); }
+  if (config.daemon?.mcp?.injectIntoAgents === enabled && config.daemon?.mcp?.enabled === true) return 'unchanged';
+  const { savePersistedConfig } = await serverModule('dist/server/server/config.js');
+  try { savePersistedConfig(loc.paseoHome, { ...config, daemon: { ...config.daemon, mcp: collaborationMcp(config.daemon?.mcp, enabled) } }); fs.chmodSync(file, 0o600); }
+  catch { throw new RuntimeError('CONFIG_INVALID'); }
+  let instance = null;
+  try { instance = await currentInstance(); if (instance) verifyInstanceOwnership(instance); }
+  catch { instance = null; }
+  if (!instance) return 'next-start';
+  try {
+    const reload = await withClient(client => client.reloadDaemonConfig(), 15000);
+    const owns = paths => Array.isArray(paths) && paths.some(p => p === COLLABORATION_PATH || COLLABORATION_PATH.startsWith(p + '.'));
+    if (!Array.isArray(reload?.restartRequiredPaths) || !Array.isArray(reload?.overrideControlledPaths) || owns(reload.restartRequiredPaths) || owns(reload.overrideControlledPaths)) throw new RuntimeError('RESTART_REQUIRED');
+    return 'applied';
+  } catch {
+    // Saved and written, but the running daemon did not take it: a stop and start applies it.
+    updateState({ phase: 'restart_required', lastError: { code: 'RESTART_REQUIRED', at: new Date().toISOString() } });
+    return 'restart-required';
+  }
+}
 async function writeConfig(port, launchers) {
   const loc = locations(); const file = path.join(loc.paseoHome, 'config.json');
   let config = {};
@@ -133,7 +165,7 @@ async function writeConfig(port, launchers) {
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
   config = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
-    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: { ...config.daemon?.mcp, enabled: true } },
+    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, connectionPreferences(loc).agentCollaboration) },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
@@ -345,7 +377,8 @@ export async function pair() {
 
 export async function saveConnectionSettings(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid settings');
-  if (Object.keys(input).some(key => !['name', 'target'].includes(key))) throw new Error('Unsupported setting');
+  if (Object.keys(input).some(key => !['name', 'target', 'agentCollaboration'].includes(key))) throw new Error('Unsupported setting');
+  if (input.agentCollaboration !== undefined && typeof input.agentCollaboration !== 'boolean') throw new RuntimeError('INVALID_SETTING');
   if (input.name !== undefined && typeof input.name !== 'string') throw new Error('Invalid name');
   const name = input.name?.trim();
   if (name !== undefined && (name.length > 100 || /[\x00-\x1f\x7f]/.test(name))) throw new Error('Invalid name');
@@ -366,8 +399,17 @@ export async function saveConnectionSettings(input) {
       updateState({ configurationPending: true, relayVerification: null, pairingCreatedAt: null });
       fs.rmSync(pairingFile, { force: true });
     }
-    writeRecord(file, { ...previous, name: name === undefined ? previous.name || 'Pi Agent' : name || 'Pi Agent', connection: 'relay', target });
-    return { saved: true, target, configurationPending: readState().configurationPending === true };
+    const previousCollaboration = previous.agentCollaboration === true;
+    const agentCollaboration = input.agentCollaboration === undefined ? previousCollaboration : input.agentCollaboration;
+    writeRecord(file, { ...previous, name: name === undefined ? previous.name || 'Pi Agent' : name || 'Pi Agent', connection: 'relay', target,
+      ...(input.agentCollaboration === undefined && previous.agentCollaboration === undefined ? {} : { agentCollaboration }) });
+    if (input.agentCollaboration === undefined) return { saved: true, target, configurationPending: readState().configurationPending === true };
+    let applied = 'unchanged';
+    if (agentCollaboration !== previousCollaboration) {
+      try { applied = await applyAgentCollaboration(agentCollaboration); }
+      catch { applied = 'next-start'; }
+    }
+    return { saved: true, target, agentCollaboration, agentCollaborationApplied: applied, configurationPending: readState().configurationPending === true };
   }, { timeoutMs: 30000 });
 }
 /** Runs exactly two tiny turns per selected provider. Call only after user authorization. */
