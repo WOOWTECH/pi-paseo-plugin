@@ -18,7 +18,9 @@ export function connectionTarget(id = 'paseo') {
 
 export function connectionPreferences(loc) {
   const preferences = readRecord(path.join(loc.stateDir, 'preferences.json'));
-  return { ...preferences, name: typeof preferences.name === 'string' ? preferences.name : 'Pi Agent', target: connectionTarget(preferences.target).id };
+  return { ...preferences, name: typeof preferences.name === 'string' ? preferences.name : 'Pi Agent', target: connectionTarget(preferences.target).id,
+    // Off unless the user turned it on in Agent Connect settings (Paseo's own default is off too).
+    agentCollaboration: preferences.agentCollaboration === true };
 }
 
 export function targetEnvironment(target) {
