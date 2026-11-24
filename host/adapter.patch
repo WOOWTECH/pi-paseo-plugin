@@ -1,9 +1,9 @@
 diff --git a/app/api/plugin-paseo/route.test.mjs b/app/api/plugin-paseo/route.test.mjs
 new file mode 100644
-index 0000000..643223a
+index 0000000..e62d251
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.test.mjs
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,450 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import os from "node:os";
@@ -442,12 +442,24 @@ index 0000000..643223a
 +  }
 +  assert.equal(f.calls.length, before);
 +});
++
++test("connection API returns only a validated agent-collaboration outcome", async t => {
++  const f = fixture(t);
++  for (const [returned, expected] of [["applied", "applied"], ["next-start", "next-start"], ["restart-required", "restart-required"], ["unchanged", "unchanged"], ["/secret/path", undefined], [undefined, undefined]]) {
++    f.api.saveConfig = async (config) => { f.calls.push("config"); f.snapshot.settings = config; return { saved: true, ...(returned === undefined ? {} : { agentCollaborationApplied: returned }) }; };
++    const saved = await f.dispatch(f.request({ action: "config", config: { agentCollaboration: true } }));
++    assert.equal(saved.status, 200);
++    const body = await saved.json();
++    assert.equal(body.agentCollaborationApplied, expected, String(returned));
++    assert.doesNotMatch(JSON.stringify(body), /secret/);
++  }
++});
 diff --git a/app/api/plugin-paseo/route.ts b/app/api/plugin-paseo/route.ts
 new file mode 100644
-index 0000000..b02b8b9
+index 0000000..222e5a5
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.ts
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,110 @@
 +import { NextResponse } from "next/server";
 +import { readJsonObject, RequestBodyError } from "@/lib/json-request";
 +import { homedir } from "node:os";
@@ -458,7 +470,7 @@ index 0000000..b02b8b9
 +import { configuredPaseoPackages, loadPaseoHostApi } from "@/lib/paseo-plugin";
 +import { paseoLifecycleResult } from "@/lib/paseo-plugin-lifecycle";
 +import { serializePluginPackageOperation } from "@/lib/plugin-package-lock";
-+import { isConnectionTarget, paseoDiagnosticChecks, paseoModelCatalog, paseoPublicStatus, readPaseoConfig, safePaseoPairUrl } from "@/lib/paseo-ui";
++import { agentCollaborationResult, isConnectionTarget, paseoDiagnosticChecks, paseoModelCatalog, paseoPublicStatus, readPaseoConfig, safePaseoPairUrl } from "@/lib/paseo-ui";
 +
 +export const dynamic = "force-dynamic";
 +export const runtime = "nodejs";
@@ -540,8 +552,10 @@ index 0000000..b02b8b9
 +        return response({ url, target: pairTarget, ...(typeof result.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(result.expiresAt) ? { expiresAt: result.expiresAt } : {}) });
 +      }
 +      if (body.action === "config") {
-+        await api.saveConfig(config!);
-+        return response(await publicStatus());
++        const saved = await api.saveConfig(config!);
++        // Only the validated outcome of a collaboration change crosses the boundary.
++        const applied = agentCollaborationResult(saved?.agentCollaborationApplied);
++        return response({ ...await publicStatus(), ...(applied ? { agentCollaborationApplied: applied } : {}) });
 +      }
 +      if (body.action === "activate" && target.disabled) return response({ error: "請先在插件設定啟用 Agent Connect。" }, 409);
 +      const result = await api.lifecycle({ action: body.action === "disable" ? "disable" : "enable", cwd, source: target.source, scope: target.scope, packages: body.action === "disable" ? [] : packages });
@@ -1019,10 +1033,10 @@ index c50b18f..1abc647 100644
  
 diff --git a/components/PaseoPluginPanel.behavior.test.mjs b/components/PaseoPluginPanel.behavior.test.mjs
 new file mode 100644
-index 0000000..25b2580
+index 0000000..d14e779
 --- /dev/null
 +++ b/components/PaseoPluginPanel.behavior.test.mjs
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,405 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import { fileURLToPath } from "node:url";
@@ -1357,32 +1371,61 @@ index 0000000..25b2580
 +  let saved = false;
 +  const bodies = [];
 +  const f = fixture(t, { fetch: async (_url, options) => {
++    let applied;
 +    if (options?.method === "POST") {
 +      const body = JSON.parse(options.body);
 +      bodies.push(body);
-+      if (body.action === "config") saved = body.config.agentCollaboration;
++      if (body.action === "config" && body.config.agentCollaboration !== undefined) { saved = body.config.agentCollaboration; applied = "applied"; }
 +    }
-+    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: saved }, daemon: { healthy: true } });
++    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: saved }, daemon: { healthy: true }, ...(applied ? { agentCollaborationApplied: applied } : {}) });
 +  } });
 +  await f.settle();
 +  const toggle = () => f.elements().find(node => node.type === "ConfigSwitch");
 +  assert.equal(toggle().props.checked, false);
 +  assert.equal(toggle().props.label, "允許代理彼此協作");
 +  assert.equal(toggle().props.describedBy, "paseo-agent-collaboration-risk");
-+  const risk = f.elements().find(node => node.props?.id === "paseo-agent-collaboration-risk");
-+  assert.ok(risk, "the risk text is the switch description");
-+  for (const phrase of [/建立其他代理/, /切換它們的權限模式/, /批准權限請求/, /新開或重新開啟的對話/]) assert.match(f.text(), phrase);
++  assert.ok(f.elements().find(node => node.props?.id === "paseo-agent-collaboration-risk"), "the risk text is the switch description");
++  for (const phrase of [/建立代理、終端機和排程/, /任何代理/, /替它批准權限請求/, /終端機可以直接執行指令，不經權限確認/, /已建立的排程不會自動停止/]) assert.match(f.text(), phrase);
 +  toggle().props.onChange(true); f.render();
 +  for (const poll of f.timers.values()) poll();
 +  await f.settle();
 +  assert.equal(toggle().props.checked, true, "a poll keeps the unsaved draft");
 +  assert.match(f.text(), /代理協作設定尚未儲存/);
 +  f.button("儲存設定").props.onClick(); await f.settle();
-+  const config = bodies.find(body => body.action === "config").config;
-+  assert.deepEqual(config, { name: "Pi", target: "paseo", agentCollaboration: true });
++  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Pi", target: "paseo", agentCollaboration: true });
 +  assert.equal(toggle().props.checked, true);
 +  assert.doesNotMatch(f.text(), /尚未儲存/);
-+  assert.match(f.text(), /代理協作的變更只套用到之後新開或重新開啟的對話/);
++  assert.match(f.text(), /代理協作已開啟：之後新開的對話才有協作工具/);
++  toggle().props.onChange(false); f.render();
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.equal(saved, false);
++  assert.match(f.text(), /代理協作已關閉/);
++  assert.match(f.text(), /請停止再啟動 Agent Connect 服務，並檢查 Paseo 裡的排程/);
++});
++
++test("a stale tab saving its name never sends the collaboration value it last saw", async t => {
++  const bodies = [];
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") bodies.push(JSON.parse(options.body));
++    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: true }, daemon: { healthy: true } });
++  } });
++  await f.settle();
++  const input = f.elements().find(node => node.type === "input" && node.props.maxLength === 100);
++  input.props.onChange({ target: { value: "Renamed" } }); f.render();
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Renamed", target: "paseo" });
++  assert.equal(f.elements().find(node => node.type === "ConfigSwitch")?.props.checked, true, "the switch still shows the daemon value");
++  assert.doesNotMatch(f.text(), /代理協作已(開啟|關閉)/);
++});
++
++test("collaboration outcomes that did not reach the running daemon say what to do", async t => {
++  for (const [applied, message] of [["next-start", /下次啟動服務時套用/], ["restart-required", /服務沒有即時套用代理協作的變更；請停止再啟動/]]) {
++    const f = fixture(t, { fetch: async (_url, options) => Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: options?.method === "POST" }, daemon: { healthy: true }, ...(options?.method === "POST" ? { agentCollaborationApplied: applied } : {}) }) });
++    await f.settle();
++    f.elements().find(node => node.type === "ConfigSwitch").props.onChange(true); f.render();
++    f.button("儲存設定").props.onClick(); await f.settle();
++    assert.match(f.text(), message, applied);
++  }
 +});
 +
 +test("a runtime that does not report agent collaboration gets no switch and saves name and target only", async t => {
@@ -1397,19 +1440,19 @@ index 0000000..25b2580
 +  f.button("儲存設定").props.onClick(); await f.settle();
 +  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Pi", target: "paseo" });
 +  assert.match(f.text(), /設定已儲存。/);
-+  assert.doesNotMatch(f.text(), /代理協作的變更/);
++  assert.doesNotMatch(f.text(), /代理協作已/);
 +});
 diff --git a/components/PaseoPluginPanel.tsx b/components/PaseoPluginPanel.tsx
 new file mode 100644
-index 0000000..e81c1fe
+index 0000000..e103da9
 --- /dev/null
 +++ b/components/PaseoPluginPanel.tsx
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,251 @@
 +"use client";
 +
 +import { useCallback, useEffect, useRef, useState } from "react";
 +import { ConfigButton, ConfigDetailActions, ConfigDetailGrid, ConfigDetailGridRow, ConfigFooterStatus, ConfigSectionTitle, ConfigSwitch } from "./SettingsUi";
-+import { PASEO_APP_URL, PASEO_PROVIDERS, CONNECTION_TARGETS, connectionTarget, isConnectionTarget, type ConnectionTarget, paseoModelCatalog, paseoProviderLabel, paseoPublicStatus, safePaseoPairUrl, type PaseoConfigInput, type PaseoModelCatalog, type PaseoPublicStatus } from "@/lib/paseo-ui";
++import { PASEO_APP_URL, PASEO_PROVIDERS, CONNECTION_TARGETS, connectionTarget, isConnectionTarget, type ConnectionTarget, paseoModelCatalog, paseoProviderLabel, paseoPublicStatus, safePaseoPairUrl, agentCollaborationResult, type PaseoConfigInput, type PaseoModelCatalog, type PaseoPublicStatus } from "@/lib/paseo-ui";
 +
 +const STATUS_FRESH_MS = 15_000;
 +
@@ -1524,8 +1567,9 @@ index 0000000..e81c1fe
 +    setError("");
 +    setNotice("");
 +    try {
-+      const config = kind === "config" ? { name: name.trim(), target, ...(collaborationSupported ? { agentCollaboration: collaboration } : {}) } : undefined;
-+      const collaborationChanged = kind === "config" && collaborationDirty;
++      // Sent only after the user touched the switch: a stale tab saving its name must not flip the daemon.
++      const sendCollaboration = kind === "config" && collaborationSupported && collaborationEdited.current;
++      const config = kind === "config" ? { name: name.trim(), target, ...(sendCollaboration ? { agentCollaboration: collaboration } : {}) } : undefined;
 +      const result = await request(cwd, kind, config, provider);
 +      if (!current()) return;
 +      if (kind === "pair") {
@@ -1549,9 +1593,15 @@ index 0000000..e81c1fe
 +        setNotice("診斷已更新。提供者仍需各自完成登入與實際對話驗證。");
 +      } else {
 +        if (kind === "config") { nameEdited.current = false; targetEdited.current = false; collaborationEdited.current = false; }
-+        setNotice(kind === "config"
-+          ? collaborationChanged ? "設定已儲存。代理協作的變更只套用到之後新開或重新開啟的對話。" : "設定已儲存。"
-+          : kind === "disable" ? "已要求停止 Agent Connect 服務。" : "Agent Connect 服務已排入背景啟動；可在此頁查看狀態並配對。" );
++        const applied = agentCollaborationResult(result.agentCollaborationApplied);
++        const turnedOn = paseoPublicStatus(result).configuration?.agentCollaboration === true;
++        setNotice(kind !== "config" ? (kind === "disable" ? "已要求停止 Agent Connect 服務。" : "Agent Connect 服務已排入背景啟動；可在此頁查看狀態並配對。")
++          : applied === "applied" ? (turnedOn
++            ? "設定已儲存。代理協作已開啟：之後新開的對話才有協作工具，已開著的對話維持原樣。"
++            : "設定已儲存。代理協作已關閉：之後新開的對話不再有協作工具。已在執行的代理和已建立的排程不受影響；要立即全部停用，請停止再啟動 Agent Connect 服務，並檢查 Paseo 裡的排程。")
++          : applied === "next-start" ? "設定已儲存。代理協作的變更會在下次啟動服務時套用。"
++          : applied === "restart-required" ? "設定已儲存，但服務沒有即時套用代理協作的變更；請停止再啟動 Agent Connect 服務。"
++          : "設定已儲存。");
 +      }
 +      versions.mutation = false;
 +      await refresh();
@@ -1614,7 +1664,7 @@ index 0000000..e81c1fe
 +                <span>允許代理彼此協作（預設關閉）</span>
 +              </div>
 +              <p id="paseo-agent-collaboration-risk" style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.7, margin: 0 }}>
-+                開啟後，透過 Agent Connect 執行的代理可以使用協作工具：建立其他代理、傳訊息給它們、切換它們的權限模式，並替它們批准權限請求。只要有一段對話被惡意內容誘導，就可能藉此繞過權限確認，所以只在信任這台主機上所有對話內容時開啟。變更只套用到之後新開或重新開啟的對話。
++                開啟後，透過 Agent Connect 執行的代理可以使用 Paseo 的管理工具：建立代理、終端機和排程，對這台主機上任何代理傳訊息、切換它的權限模式、替它批准權限請求。終端機可以直接執行指令，不經權限確認。只要有一段對話被惡意內容誘導，就可能藉此控制這台主機上的其他對話，所以只在信任這台主機上所有對話內容時開啟。變更只影響之後新開的對話；關閉時，已在執行的代理和已建立的排程不會自動停止。
 +              </p>
 +              {collaborationDirty && <p role="status" style={{ fontSize: 12, margin: 0 }}>代理協作設定尚未儲存。</p>}
 +            </div>}
@@ -1689,7 +1739,7 @@ index 83fddc9..53252fc 100644
                                {updateStatuses[packageKey(pkg)]?.state === "update-available" && (
                                  <span title={t("i18n.updateAvailable")} className="skill-update-indicator">
 diff --git a/docs/agents/settings-ui.md b/docs/agents/settings-ui.md
-index 274b438..222e442 100644
+index 274b438..8e3a406 100644
 --- a/docs/agents/settings-ui.md
 +++ b/docs/agents/settings-ui.md
 @@ -2,6 +2,7 @@
@@ -1709,7 +1759,7 @@ index 274b438..222e442 100644
 +
 +- Settings > Plugins uses its existing `.config-detail` scroller for Paseo. Keep the Paseo panel in that detail area without a nested vertical scroller. Verify physical touch/wheel access to bottom controls, expanded catalogs and back to the heading with the mobile scroll regression against a deployed Settings > Plugins panel.
 +
-+- Agent Connect is the display name of the existing `@woowtech/pi-paseo` package. Keep package identity, routes, tool IDs, and persisted keys compatible. Its selector accepts only `paseo`, `woowtech`, and `apporo`; absent legacy settings mean Paseo. Draft selection must not change the saved platform's app link or permit pairing. A target change clears visible pairing/model results; `configurationPending` blocks pairing until the user stops and starts the service. Keep the selected target intact across polls and failed saves. Validate pairing against the receipt's target on the server and the saved target in the browser, using fixed origins and strict offer entry paths. Never project runtime state, secrets, or arbitrary target URLs into public status. The 允許代理彼此協作 switch (`agentCollaboration`, a strict boolean saved with the other connection settings) gives agents Paseo's agent-management tools: creating agents, messaging them, switching their permission modes and approving their permission requests. It stays off by default, its visible risk text is the switch's description, and it appears only when the runtime reports the setting, so an older runtime keeps the exact name/target save.
++- Agent Connect is the display name of the existing `@woowtech/pi-paseo` package. Keep package identity, routes, tool IDs, and persisted keys compatible. Its selector accepts only `paseo`, `woowtech`, and `apporo`; absent legacy settings mean Paseo. Draft selection must not change the saved platform's app link or permit pairing. A target change clears visible pairing/model results; `configurationPending` blocks pairing until the user stops and starts the service. Keep the selected target intact across polls and failed saves. Validate pairing against the receipt's target on the server and the saved target in the browser, using fixed origins and strict offer entry paths. Never project runtime state, secrets, or arbitrary target URLs into public status. The 允許代理彼此協作 switch (`agentCollaboration`, a strict boolean) gives agents Paseo's management tools: agents, terminals and schedules, and messaging, mode changes and permission approvals for any agent on the host; terminals run commands without permission prompts. It stays off by default and its visible risk text is the switch's description. The status shows the daemon's actual value (a Paseo client can change it too). A save sends the field only after the user touched the switch, so a stale tab saving a name cannot flip it, and the notice follows the runtime's validated `agentCollaborationApplied` outcome. Turning it off reaches newly opened conversations only; say that running agents and existing schedules need a service stop and start and a schedule check. The switch appears only when the runtime reports the setting, so an older runtime keeps the exact name/target save.
 diff --git a/e2e/paseo-mobile-scroll-runner.mjs b/e2e/paseo-mobile-scroll-runner.mjs
 new file mode 100644
 index 0000000..342a54b
@@ -2745,10 +2795,10 @@ index 0000000..bb0ac2c
 +});
 diff --git a/lib/paseo-ui.ts b/lib/paseo-ui.ts
 new file mode 100644
-index 0000000..195f9a5
+index 0000000..65b8a97
 --- /dev/null
 +++ b/lib/paseo-ui.ts
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,172 @@
 +/** Fixed local client; no caller-provided origins receive pairing material. */
 +export const PASEO_APP_URL = "/paseo-web";
 +export const PASEO_PROVIDERS = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }, { id: "pi", label: "Pi" }] as const;
@@ -2879,6 +2929,12 @@ index 0000000..195f9a5
 +}
 +
 +export type PaseoConfigInput = { name?: string; target?: ConnectionTarget; agentCollaboration?: boolean };
++/** How a saved agent-collaboration change reached the daemon, as the runtime reports it. */
++export const AGENT_COLLABORATION_RESULTS = ["applied", "unchanged", "next-start", "restart-required"] as const;
++export type AgentCollaborationResult = typeof AGENT_COLLABORATION_RESULTS[number];
++export function agentCollaborationResult(value: unknown): AgentCollaborationResult | undefined {
++  return (AGENT_COLLABORATION_RESULTS as readonly unknown[]).includes(value) ? value as AgentCollaborationResult : undefined;
++}
 +
 +export function readPaseoConfig(input: unknown): PaseoConfigInput | null {
 +  if (!input || typeof input !== "object" || Array.isArray(input)) return null;

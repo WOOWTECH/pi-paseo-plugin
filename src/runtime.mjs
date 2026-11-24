@@ -121,17 +121,32 @@ async function choosePort(preferred) {
 async function detectLaunchers({ installMissing = false } = {}) {
   return resolveProviderLaunchers(locations(), { installMissing, env: inheritedEnv() });
 }
-// Paseo 0.11.2 hands its agents the Paseo MCP tools (create_agent,
-// send_agent_prompt, set_agent_mode, respond_to_permission, ...) only when
-// daemon.mcp.injectIntoAgents is true, and leaves it false by default. The
-// Agent Connect "agent collaboration" setting owns that value; the daemon
-// reloads it without a restart.
+// Paseo 0.11.2 hands its agents the Paseo MCP tools (create_agent, create_terminal,
+// send_agent_prompt, set_agent_mode, respond_to_permission, create_schedule, ...)
+// only when daemon.mcp.injectIntoAgents is true, and leaves it false by default.
+// The daemon's config.json is the one source of truth: the Agent Connect switch
+// writes it, and a Paseo client's host setting writes the same key. Before the
+// first start there is no config.json, so the choice waits in preferences.json.
+// The daemon reloads the key without a restart.
 const COLLABORATION_PATH = 'daemon.mcp.injectIntoAgents';
 function collaborationMcp(mcp, enabled) { return { ...mcp, enabled: true, injectIntoAgents: enabled === true }; }
+function daemonCollaboration() {
+  const file = path.join(locations().paseoHome, 'config.json');
+  if (!ownsHome() || !fs.existsSync(file)) return undefined;
+  try { const value = JSON.parse(fs.readFileSync(file, 'utf8')).daemon?.mcp?.injectIntoAgents; return typeof value === 'boolean' ? value : undefined; }
+  catch { return undefined; }
+}
+/** What agents get now (the daemon config), else the choice waiting for the first start. Never throws: status relies on it. */
+export function agentCollaborationEnabled() {
+  try {
+    const value = daemonCollaboration();
+    return value === undefined ? connectionPreferences(locations()).agentCollaboration === true : value;
+  } catch { return false; }
+}
 async function applyAgentCollaboration(enabled) {
   const loc = locations(), file = path.join(loc.paseoHome, 'config.json');
-  // No config yet: the next start writes it from the saved preference.
-  if (!fs.existsSync(file)) return 'next-start';
+  // Not this installation's daemon home, or no config yet: the next start applies the saved choice.
+  if (!ownsHome() || !fs.existsSync(file)) return 'next-start';
   let config;
   try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); }
   if (config.daemon?.mcp?.injectIntoAgents === enabled && config.daemon?.mcp?.enabled === true) return 'unchanged';
@@ -148,7 +163,7 @@ async function applyAgentCollaboration(enabled) {
     if (!Array.isArray(reload?.restartRequiredPaths) || !Array.isArray(reload?.overrideControlledPaths) || owns(reload.restartRequiredPaths) || owns(reload.overrideControlledPaths)) throw new RuntimeError('RESTART_REQUIRED');
     return 'applied';
   } catch {
-    // Saved and written, but the running daemon did not take it: a stop and start applies it.
+    // Written, but the running daemon did not take it: a stop and start applies it.
     updateState({ phase: 'restart_required', lastError: { code: 'RESTART_REQUIRED', at: new Date().toISOString() } });
     return 'restart-required';
   }
@@ -165,7 +180,7 @@ async function writeConfig(port, launchers) {
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
   config = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
-    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, connectionPreferences(loc).agentCollaboration) },
+    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, typeof config.daemon?.mcp?.injectIntoAgents === 'boolean' ? config.daemon.mcp.injectIntoAgents : connectionPreferences(loc).agentCollaboration) },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
@@ -317,7 +332,7 @@ async function readStatus() {
     } catch (error) { diagnosticCode = safeCode(error); }
   }
   const phase = state.phase === 'running' && !daemon.running ? 'stopped' : state.phase || 'not_installed';
-  return { installed, version: installed ? PASEO_VERSION : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), diagnosticCode, state };
+  return { installed, version: installed ? PASEO_VERSION : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), agentCollaboration: agentCollaborationEnabled(), diagnosticCode, state };
 }
 export async function diagnose() {
   const snapshot = await status(); const launchers = await detectLaunchers();
@@ -399,17 +414,13 @@ export async function saveConnectionSettings(input) {
       updateState({ configurationPending: true, relayVerification: null, pairingCreatedAt: null });
       fs.rmSync(pairingFile, { force: true });
     }
-    const previousCollaboration = previous.agentCollaboration === true;
-    const agentCollaboration = input.agentCollaboration === undefined ? previousCollaboration : input.agentCollaboration;
+    const collaboration = input.agentCollaboration;
     writeRecord(file, { ...previous, name: name === undefined ? previous.name || 'Pi Agent' : name || 'Pi Agent', connection: 'relay', target,
-      ...(input.agentCollaboration === undefined && previous.agentCollaboration === undefined ? {} : { agentCollaboration }) });
-    if (input.agentCollaboration === undefined) return { saved: true, target, configurationPending: readState().configurationPending === true };
-    let applied = 'unchanged';
-    if (agentCollaboration !== previousCollaboration) {
-      try { applied = await applyAgentCollaboration(agentCollaboration); }
-      catch { applied = 'next-start'; }
-    }
-    return { saved: true, target, agentCollaboration, agentCollaborationApplied: applied, configurationPending: readState().configurationPending === true };
+      ...(collaboration === undefined ? {} : { agentCollaboration: collaboration }) });
+    if (collaboration === undefined) return { saved: true, target, configurationPending: readState().configurationPending === true };
+    // Compared with the daemon config, not the old preference: a Paseo client may have changed it.
+    const applied = await applyAgentCollaboration(collaboration);
+    return { saved: true, target, agentCollaboration: agentCollaborationEnabled(), agentCollaborationApplied: applied, configurationPending: readState().configurationPending === true };
   }, { timeoutMs: 30000 });
 }
 /** Runs exactly two tiny turns per selected provider. Call only after user authorization. */

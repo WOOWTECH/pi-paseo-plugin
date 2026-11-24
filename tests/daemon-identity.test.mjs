@@ -284,7 +284,7 @@ test('agent collaboration defaults off and reloads the running daemon without a 
  const configFile=path.join(f.loc.paseoHome,'config.json');
  const mcp=()=>JSON.parse(fs.readFileSync(configFile)).daemon.mcp;
  assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:false});
- assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false);
+ assert.equal(f.runtime.agentCollaborationEnabled(),false);
  const pid=fs.readFileSync(f.pidFile),reloads=f.reloads();
  const on=await f.runtime.saveConnectionSettings({agentCollaboration:true});
  assert.equal(on.agentCollaboration,true);assert.equal(on.agentCollaborationApplied,'applied');
@@ -301,8 +301,38 @@ test('agent collaboration defaults off and reloads the running daemon without a 
  assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:false})).agentCollaborationApplied,'applied');
  assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:false});
  await f.runtime.saveConnectionSettings({name:'Renamed'});
- assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false,'other saves keep the choice');
+ assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:false},'other saves leave it alone');
  f.keep();
+});
+
+test('a Paseo client turning collaboration on is what Pi Web shows, keeps, and can turn off', async t => {
+ const f=fixture(t);await f.runtime.activate();
+ const configFile=path.join(f.loc.paseoHome,'config.json');
+ const config=JSON.parse(fs.readFileSync(configFile));
+ // A Paseo client host setting patches the same key in the daemon config.
+ config.daemon.mcp.injectIntoAgents=true;fs.writeFileSync(configFile,JSON.stringify(config),{mode:0o600});
+ assert.equal(f.runtime.agentCollaborationEnabled(),true,'status reports the daemon value, not the old preference');
+ await f.runtime.activate();
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.mcp.injectIntoAgents,true,'activation does not overwrite the client choice');
+ const reloads=f.reloads();
+ const off=await f.runtime.saveConnectionSettings({agentCollaboration:false});
+ assert.equal(off.agentCollaborationApplied,'applied','compared with the daemon config, so it is not "unchanged"');
+ assert.equal(off.agentCollaboration,false);
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.mcp.injectIntoAgents,false);
+ assert.equal(f.reloads(),reloads+1);
+});
+
+test('a daemon home this installation does not own is never written for collaboration', async t => {
+ const f=fixture(t);await f.runtime.activate();
+ const configFile=path.join(f.loc.paseoHome,'config.json'),before=fs.readFileSync(configFile);
+ const marker=path.join(f.loc.paseoHome,'.pi-paseo-owner.json'),owner=JSON.parse(fs.readFileSync(marker));
+ fs.writeFileSync(marker,JSON.stringify({...owner,installationId:'someone-else'}));
+ const reloads=f.reloads();
+ const saved=await f.runtime.saveConnectionSettings({agentCollaboration:true});
+ assert.equal(saved.agentCollaborationApplied,'next-start');
+ assert.deepEqual(fs.readFileSync(configFile),before);
+ assert.equal(f.reloads(),reloads);
+ assert.equal(f.runtime.agentCollaborationEnabled(),true,'only the waiting choice is reported for a foreign home');
 });
 
 test('a daemon that cannot take the collaboration setting live asks for a restart', async t => {
@@ -316,5 +346,5 @@ test('a daemon that cannot take the collaboration setting live asks for a restar
  f.setReload({appliedPaths:[],restartRequiredPaths:[],overrideControlledPaths:['daemon.mcp.injectIntoAgents']});
  assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:false})).agentCollaborationApplied,'restart-required');
  await assert.rejects(f.runtime.saveConnectionSettings({agentCollaboration:'yes'}),{code:'INVALID_SETTING'});
- assert.equal(connectionTargets.connectionPreferences(f.loc).agentCollaboration,false);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,'config.json'))).daemon.mcp.injectIntoAgents,false);
 });

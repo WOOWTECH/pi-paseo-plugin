@@ -9,7 +9,10 @@ import { CONNECTION_TARGETS, connectionPreferences, connectionTarget } from './c
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
 export async function status() {
   const result=await runtime.status();
-  const settings = connectionPreferences(runtime.locations());
+  // The switch shows what agents get: the daemon config (a Paseo client can change it too),
+  // reported by the runtime status; a runtime without it leaves the saved preference.
+  const preferences = connectionPreferences(runtime.locations());
+  const settings = { ...preferences, agentCollaboration: typeof result.agentCollaboration === 'boolean' ? result.agentCollaboration : preferences.agentCollaboration === true };
   const activeTarget = result.daemon?.running ? result.state?.activeTarget || 'paseo' : null;
   const configurationPending = result.state?.configurationPending === true || (activeTarget !== null && activeTarget !== settings.target);
   return {...result,
