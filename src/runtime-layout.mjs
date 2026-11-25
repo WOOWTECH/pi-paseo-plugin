@@ -84,13 +84,17 @@ export function markRuntimeReady(loc) {const root=runtimeDirectory(loc);applyPid
 
 // ---- Pruning ----
 // Every release is a full install (about 0.6-0.7 GB), and each upgrade leaves the previous one for a rollback and
-// for controlling a daemon that still runs it. pruneRuntimeReleases removes the ones nothing needs any more.
+// for controlling a daemon that still runs it. Pruning removes the ones nothing needs any more.
 // It only ever touches a plugin-owned release: a directory directly under <runtimeDir>/releases that is named like
 // a revision (<paseo version>-r<n>-<12 hex of its lockfile hash>), is a real directory (never a link) and holds a
 // receipt that says the same: .pi-paseo-runtime.json with revision equal to the name and a lockSha256 that begins
 // with the name's hash. Anything else under releases/ (other names, plain files, links, half-installed
 // directories without a receipt, copies someone else made) and everything outside it, including the legacy
 // <runtimeDir>/node_modules that earlier plugin versions installed, stays as it is.
+//
+// Three steps, so that the slow one never needs the caller's lock: prunePlan reads, claimReleases renames each
+// release to .pruning-<revision>-<uuid> (one step: it is no longer a release), removeTombs deletes the tombs. A
+// tomb that a crash left behind is a plain leftover: the next plan lists it and the next removal finishes it.
 const RELEASE_NAME=/^(\d+)\.(\d+)\.(\d+)-r(\d+)-([0-9a-f]{12})$/;
 const TOMB_NAME=/^\.pruning-(\d+\.\d+\.\d+-r\d+-[0-9a-f]{12})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RECEIPT='.pi-paseo-runtime.json';
@@ -121,37 +125,61 @@ export function ownedReleases(loc) {
    .sort((a,b)=>compareOrder(b.order,a.order)||b.receiptMtimeMs-a.receiptMtimeMs||(a.name<b.name?1:-1));
  } catch {return [];}
 }
-// The release stops being one at once (the rename is a single step), then its files go. Removal does not follow
-// links: a link inside the tree is unlinked, never its target.
-async function removeDirectory(releases,name,tomb) {
- const root=path.join(releases,name);
- if(!fs.lstatSync(root).isDirectory())throw new RuntimeError('RUNTIME_NOT_OWNED');
- fs.renameSync(root,tomb);
- await fs.promises.rm(tomb,{recursive:true,force:true});
+/** What an earlier removal renamed away and did not finish deleting: [{name: the revision it was, tomb: its directory name}]. */
+function leftoverTombs(releases) {
+ try {
+  return fs.readdirSync(releases).filter(entry=>TOMB_NAME.test(entry)).filter(entry=>{try{return fs.lstatSync(path.join(releases,entry)).isDirectory();}catch{return false;}})
+   .map(tomb=>({name:TOMB_NAME.exec(tomb)[1],tomb}));
+ } catch {return [];}
 }
-/** Removes old plugin-owned releases and returns their names only: {removed, kept, failed, skipped?}.
- * Kept: this release; the one newest earlier release (a rollback); every name in `keep`, which the caller fills
- * with the releases a running process still uses or needs for control. Best effort: a release that cannot be
- * removed is reported in `failed`, never thrown. Without a valid current release it removes nothing. */
-export async function pruneRuntimeReleases(loc,{keep=[]}={}) {
- const result={removed:[],kept:[],failed:[]},releases=path.join(loc.runtimeDir,'releases');
- try {assertSafePath(releases);if(!fs.lstatSync(releases).isDirectory())return {...result,skipped:'RELEASES_NOT_A_DIRECTORY'};}
- catch(error) {return error?.code==='ENOENT'?result:{...result,skipped:'RELEASES_UNSAFE'};}
+/** Reads only. {candidates: releases that may go, kept: releases that stay, tombs: leftovers to finish, skipped?: why nothing is planned}.
+ * Stay: this release; the one newest earlier release (a rollback); every release newer than this one (a downgrade
+ * is followed by an upgrade, and that is 0.7 GB to download again); every name in `keep`, which the caller fills
+ * with the releases a running process still uses or needs for control. Without a valid current release nothing is planned. */
+export function prunePlan(loc,{keep=[]}={}) {
+ const releases=path.join(loc.runtimeDir,'releases'),plan={candidates:[],kept:[],tombs:[]};
+ try {assertSafePath(releases);if(!fs.lstatSync(releases).isDirectory())return {...plan,skipped:'RELEASES_NOT_A_DIRECTORY'};}
+ catch(error) {return error?.code==='ENOENT'?plan:{...plan,skipped:'RELEASES_UNSAFE'};}
  const owned=ownedReleases(loc),current=owned.find(release=>release.name===RUNTIME_REVISION);
- if(!current)return {...result,skipped:'CURRENT_RELEASE_NOT_FOUND'};
+ if(!current)return {...plan,skipped:'CURRENT_RELEASE_NOT_FOUND'};
  const stay=new Set([RUNTIME_REVISION,...keep]);
  const rollback=owned.find(release=>release.name!==current.name&&compareOrder(release.order,current.order)<0);
  if(rollback)stay.add(rollback.name);
- // What an earlier removal renamed away and could not finish deleting.
- let leftovers=[];try {leftovers=fs.readdirSync(releases).filter(name=>TOMB_NAME.test(name));} catch {}
- for(const name of leftovers) {
-  try {if(fs.lstatSync(path.join(releases,name)).isDirectory()){await fs.promises.rm(path.join(releases,name),{recursive:true,force:true});result.removed.push(TOMB_NAME.exec(name)[1]);}}
-  catch {result.failed.push(TOMB_NAME.exec(name)[1]);}
+ for(const release of owned)(stay.has(release.name)||compareOrder(release.order,current.order)>0?plan.kept:plan.candidates).push(release.name);
+ plan.tombs=leftoverTombs(releases);
+ return plan;
+}
+/** Renames each named release to a tomb (one step each, no deleting). Cheap: it is the part to do under a lock.
+ * {claimed: [{name, tomb}], failed: [names]}. */
+export function claimReleases(loc,names) {
+ const releases=path.join(loc.runtimeDir,'releases'),claimed=[],failed=[];
+ for(const name of names) {
+  const tomb=`.pruning-${name}-${randomUUID()}`;
+  try {
+   if(!ownedRelease(releases,name)||name===RUNTIME_REVISION)throw new RuntimeError('RUNTIME_NOT_OWNED');
+   fs.renameSync(path.join(releases,name),path.join(releases,tomb));claimed.push({name,tomb});
+  } catch {failed.push(name);}
  }
- for(const release of owned) {
-  if(stay.has(release.name)){result.kept.push(release.name);continue;}
-  try {await removeDirectory(releases,release.name,path.join(releases,`.pruning-${release.name}-${randomUUID()}`));result.removed.push(release.name);}
-  catch {result.failed.push(release.name);}
+ return {claimed,failed};
+}
+/** Deletes tombs (the slow part: it takes no lock and does not follow links). A tomb is only ever a real directory
+ * whose name this code made. {removed: [names], failed: [names]}; `rm` is where a caller puts its own file system. */
+export async function removeTombs(loc,items,{rm=(target,options)=>fs.promises.rm(target,options)}={}) {
+ const releases=path.join(loc.runtimeDir,'releases'),removed=[],failed=[];
+ for(const {name,tomb} of items) {
+  try {
+   if(!TOMB_NAME.test(tomb))throw new RuntimeError('RUNTIME_NOT_OWNED');
+   if(!fs.lstatSync(path.join(releases,tomb)).isDirectory())throw new RuntimeError('RUNTIME_NOT_OWNED');
+   await rm(path.join(releases,tomb),{recursive:true,force:true});removed.push(name);
+  } catch(error) {(error?.code==='ENOENT'?removed:failed).push(name);} // gone already: someone else finished it
  }
- return result;
+ return {removed,failed};
+}
+/** All three steps in a row: {removed, kept, failed, skipped?}, names only. Best effort: what cannot be removed is
+ * reported in `failed`, never thrown. */
+export async function pruneRuntimeReleases(loc,{keep=[],rm}={}) {
+ const plan=prunePlan(loc,{keep});
+ if(plan.skipped)return {removed:[],kept:[],failed:[],skipped:plan.skipped};
+ const claim=claimReleases(loc,plan.candidates),done=await removeTombs(loc,[...plan.tombs,...claim.claimed],{rm});
+ return {removed:done.removed,kept:plan.kept,failed:[...claim.failed,...done.failed]};
 }

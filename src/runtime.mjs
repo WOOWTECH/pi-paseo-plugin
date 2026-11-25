@@ -13,7 +13,7 @@ import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
-import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,ownedReleases,pruneRuntimeReleases,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,prunePlan,claimReleases,removeTombs,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -97,21 +97,34 @@ async function daemonRelease(loc) {
  return {pid:lock.pid,revision:revision||null};
 }
 // The releases that live processes of this user pin in their environment, for pruning. Linux only (elsewhere the
-// release a daemon uses is only recorded for this home's own daemon, see daemonRelease). `unknown`: a process of this
-// home that pins none (or /proc cannot be read), so what it runs cannot be told: nothing is pruned then.
+// release a daemon uses is only recorded for this home's own daemon, see daemonRelease). Fails closed: `unknown`
+// means something this scan cannot see through, and nothing is pruned then. That is a process of this user whose
+// environment cannot be read (the owner is told by /proc/<pid>/status, which a non-dumpable process of ours still
+// shows although /proc/<pid> itself is then root's), or a process of this home that pins no release. This process
+// and its ancestors are not daemons, so an ambient PASEO_HOME in their environment does not count.
 function runningRevisions(loc) {
  const found=new Set();
  if(process.platform!=='linux')return {found,unknown:false};
+ const gone=error=>error?.code==='ENOENT'||error?.code==='ESRCH';
  let names;try {names=fs.readdirSync('/proc');}catch {return {found,unknown:true};}
+ const own=new Set([process.pid]);
+ for(let pid=process.pid,hops=0;hops<64;hops++){
+  let ppid;try {const stat=fs.readFileSync(`/proc/${pid}/stat`,'utf8');ppid=Number(stat.slice(stat.lastIndexOf(')')+2).split(' ')[1]);}catch {break;}
+  if(!Number.isInteger(ppid)||ppid<=1||own.has(ppid))break;
+  own.add(ppid);pid=ppid;
+ }
  let unknown=false;
  for(const name of names){
   if(!/^\d+$/.test(name))continue;
-  try {
-   if(fs.statSync('/proc/'+name).uid!==process.getuid())continue;
-   const env=fs.readFileSync(`/proc/${name}/environ`,'utf8').split('\0');
-   const revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
-   if(revision)found.add(revision);else if(env.includes(`PASEO_HOME=${loc.paseoHome}`))unknown=true;
-  } catch { /* gone, or not readable: not a process of this user */ }
+  let uid;
+  try {uid=Number(/^Uid:\s+(\d+)/m.exec(fs.readFileSync(`/proc/${name}/status`,'utf8'))?.[1]);}
+  catch(error) {if(!gone(error))unknown=true;continue;}
+  if(uid!==process.getuid())continue;
+  let env;
+  try {env=fs.readFileSync(`/proc/${name}/environ`,'utf8').split('\0');}
+  catch(error) {if(!gone(error))unknown=true;continue;}
+  const revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
+  if(revision)found.add(revision);else if(env.includes(`PASEO_HOME=${loc.paseoHome}`)&&!own.has(Number(name)))unknown=true;
  }
  return {found,unknown};
 }
@@ -197,22 +210,50 @@ function verifyInstanceOwnership(instance, control) {
     } catch { throw new RuntimeError('DAEMON_NOT_OWNED'); }
   }
 }
-/** Behind a healthy daemon of this release, removes the older releases nothing needs (runtime-layout.mjs
- * pruneRuntimeReleases: it keeps this release, the newest earlier one for a rollback, and what is passed in).
- * Nothing is removed unless this release's daemon is the one control resolves to, and a release that any live
- * process of this user pins in its environment stays, whichever home it serves. Records names only.
- * Best effort: it never throws, so a failed removal cannot fail an activation or a status. */
-async function pruneOldReleases(loc) {
+/** Behind a healthy daemon of this release, the older releases nothing needs are removed (runtime-layout.mjs: it keeps
+ * this release, the newest earlier one for a rollback, every newer one, and what a live process still pins).
+ * Nothing is claimed unless this release's daemon is the one control resolves to; leftovers of an earlier removal
+ * are finished whatever else is running, they are no release any more.
+ * Under the runtime lock only the cheap part happens: reading, deciding, renaming. It returns what is left to delete,
+ * and removeInBackground deletes it after the lock is released: a 0.7 GB tree takes long on an SD card, and a
+ * pairing or a stop must not wait for it. Best effort throughout: it never throws, so a failed removal cannot fail an
+ * activation or a status, and what a crash leaves is finished by the next activation. */
+async function claimOldReleases(loc) {
   try {
-    // This release and the one before it are all there is in the steady state: nothing to look at then.
-    if (ownedReleases(loc).length <= 2) return;
-    const control = await resolveControl(loc);
-    if (control.root !== runtimeDirectory(loc)) return;
-    const running = runningRevisions(loc);
-    const prune = running.unknown ? { removed: [], kept: [], failed: [], skipped: 'RELEASE_IN_USE_UNKNOWN' } : await pruneRuntimeReleases(loc, { keep: [...running.found] });
-    if (prune.removed.length || prune.failed.length || prune.skipped) updateState({ lastPrune: { at: new Date().toISOString(), ...prune } });
-  } catch { /* old releases are only disk space */ }
+    const plan = prunePlan(loc);
+    // This release and the one before it are all there is in the steady state: nothing to do.
+    if (plan.skipped || (!plan.candidates.length && !plan.tombs.length)) return null;
+    const prune = { loc, work: [...plan.tombs], kept: plan.kept, failed: [], skipped: null };
+    if (plan.candidates.length && (await resolveControl(loc)).root === runtimeDirectory(loc)) {
+      const running = runningRevisions(loc);
+      if (running.unknown) prune.skipped = 'RELEASE_IN_USE_UNKNOWN';
+      else {
+        const next = prunePlan(loc, { keep: [...running.found] }), claim = claimReleases(loc, next.candidates);
+        prune.work.push(...claim.claimed); prune.failed.push(...claim.failed); prune.kept = next.kept;
+      }
+    }
+    return prune;
+  } catch { return null; }
 }
+const removing = new Set(), removals = new Set();
+/** Deletes what claimOldReleases renamed, then records the outcome in state.lastPrune (names only, no lock needed). */
+function removeInBackground(prune) {
+  if (!prune) return;
+  const items = prune.work.filter(item => !removing.has(item.tomb));
+  for (const item of items) removing.add(item.tomb);
+  const task = (async () => {
+    const done = items.length ? await removeTombs(prune.loc, items, { rm: (target, options) => fs.promises.rm(target, options) }) : { removed: [], failed: [] };
+    const failed = [...prune.failed, ...done.failed];
+    if (!done.removed.length && !failed.length && !prune.skipped) return;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try { updateState({ lastPrune: { at: new Date().toISOString(), removed: done.removed, kept: prune.kept, failed, ...(prune.skipped ? { skipped: prune.skipped } : {}) } }); return; }
+      catch { await delay(250 * attempt); }
+    }
+  })().catch(() => {}).finally(() => { for (const item of items) removing.delete(item.tomb); removals.delete(task); });
+  removals.add(task);
+}
+/** Resolves once every removal this process started has finished and recorded its outcome. */
+export async function pruneSettled() { while (removals.size) await Promise.allSettled([...removals]); }
 async function installRuntime() {
   privateDirectory(locations().runtimeDir);
   if (!runtimeReady(locations())) {
@@ -359,6 +400,11 @@ async function recordProcessTable() {
   } catch { /* a diagnostic that cannot be recorded is not worth a failed start */ }
 }
 export async function activate(options = {}) {
+  let pruning = null;
+  // The removal of old releases starts once the lock is released, whichever way the activation ends.
+  try { return await activateLocked(options, claimed => { pruning = claimed; }); } finally { removeInBackground(pruning); }
+}
+async function activateLocked(options, claimedReleases) {
   return withRuntimeLock(async () => {
     ensureOwnedHome(); updateState({ desiredEnabled: true, phase: 'installing', lastError: null });
     try {
@@ -417,7 +463,7 @@ export async function activate(options = {}) {
       if (!healthy || healthy.pid !== result.daemon.pid) throw new RuntimeError('DAEMON_STATE_CHANGED');
       await rememberOwnedInstance(locations(), healthy, verify, observation);
       updateState({ lastDiagnostic: { checkedAt: new Date().toISOString(), daemonReachable: true, providers: result.providers.map(row => ({ provider: row.provider, status: row.status })) } });
-      await pruneOldReleases(locations());
+      claimedReleases(await claimOldReleases(locations()));
       return status();
     } catch (error) { updateState({ phase: error.code === 'RESTART_REQUIRED' ? 'restart_required' : 'error', lastError: { code: safeCode(error), at: new Date().toISOString() } }); throw new RuntimeError(safeCode(error)); }
   }, { timeoutMs: options.lockTimeoutMs || 360000 });

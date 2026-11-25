@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {RUNTIME_REVISION,ownedReleases,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
+import {RUNTIME_REVISION,ownedReleases,prunePlan,claimReleases,removeTombs,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
 
 // Revisions of the releases Agent Connect 0.1.4-0.1.23 shipped (see runtime-layout.mjs), and this one.
 const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479',R1='0.11.2-r1-0123456789ab';
@@ -29,13 +29,54 @@ function fixture(t){
   names:()=>fs.readdirSync(releases).sort()};
 }
 
-test('this release and exactly the newest earlier one stay; the other plugin-owned releases go',async t=>{
+const NEWER='0.99.0-r1-bbbbbbbbbbbb';
+test('this release, exactly the newest earlier one and every newer one stay; the other plugin-owned releases go',async t=>{
  const f=fixture(t);
- for(const revision of [RUNTIME_REVISION,R4,R3A,R3B,R2,R1,'0.99.0-r1-bbbbbbbbbbbb'])f.release(revision);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R3B,R2,R1,NEWER])f.release(revision);
  const result=await pruneRuntimeReleases(f.loc);
- assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort(),'a newer release is not a rollback target either');
- assert.deepEqual(result.kept,[RUNTIME_REVISION,R4]);
- assert.deepEqual(result.removed.sort(),[R1,R2,R3A,R3B,'0.99.0-r1-bbbbbbbbbbbb'].sort());assert.deepEqual(result.failed,[]);assert.equal(result.skipped,undefined);
+ // A newer release (a plugin downgrade left it) is no rollback target, and costs 0.7 GB to download again: it stays.
+ assert.deepEqual(f.names(),[NEWER,R4,RUNTIME_REVISION].sort());
+ assert.deepEqual(result.kept,[NEWER,RUNTIME_REVISION,R4]);
+ assert.deepEqual(result.removed.sort(),[R1,R2,R3A,R3B].sort());assert.deepEqual(result.failed,[]);assert.equal(result.skipped,undefined);
+});
+
+test('with only newer releases besides this one, the rollback is still the newest earlier release',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,NEWER,'0.98.0-r2-cccccccccccc',R3A,R2])f.release(revision);
+ await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(f.names(),[NEWER,'0.98.0-r2-cccccccccccc',R3A,RUNTIME_REVISION].sort());
+});
+
+test('planning reads only, claiming only renames, removing deletes: the lock is needed for the second step alone',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);
+ const before=f.names(),plan=prunePlan(f.loc);
+ assert.deepEqual(plan,{candidates:[R3A,R2],kept:[RUNTIME_REVISION,R4],tombs:[]});assert.deepEqual(f.names(),before,'planning changes nothing');
+ const claim=claimReleases(f.loc,plan.candidates);
+ assert.deepEqual(claim.failed,[]);assert.deepEqual(claim.claimed.map(row=>row.name),[R3A,R2]);
+ assert.ok(claim.claimed.every(row=>row.tomb.startsWith('.pruning-'+row.name+'-')&&fs.existsSync(path.join(f.releases,row.tomb,'package.json'))),'renamed whole, nothing deleted yet');
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),[RUNTIME_REVISION,R4],'a claimed release is no release any more');
+ assert.deepEqual(prunePlan(f.loc).tombs.map(row=>row.name).sort(),[R2,R3A].sort(),'and the next plan lists it as a leftover');
+ const calls=[],done=await removeTombs(f.loc,claim.claimed,{rm:async(target,options)=>{calls.push([path.basename(target),options]);return fs.promises.rm(target,options);}});
+ assert.deepEqual(done.removed.sort(),[R2,R3A].sort());assert.deepEqual(done.failed,[]);assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort());
+ assert.deepEqual(calls.map(call=>call[1]),[{recursive:true,force:true},{recursive:true,force:true}]);
+});
+
+test('claiming refuses this release and whatever is not an owned release; removing touches tombs only',async t=>{
+ const f=fixture(t);
+ f.release(RUNTIME_REVISION);f.release(R4);f.release(R3A,{withReceipt:false});fs.mkdirSync(path.join(f.releases,'custom'));
+ const claim=claimReleases(f.loc,[RUNTIME_REVISION,R3A,'custom','0.1.0-r1-aaaaaaaaaaaa']);
+ assert.deepEqual(claim.claimed,[]);assert.deepEqual(claim.failed,[RUNTIME_REVISION,R3A,'custom','0.1.0-r1-aaaaaaaaaaaa']);
+ assert.deepEqual(f.names(),[R3A,R4,RUNTIME_REVISION,'custom'].sort());
+ const tomb='.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';fs.mkdirSync(path.join(f.releases,tomb));
+ const calls=[];
+ const done=await removeTombs(f.loc,[{name:R4,tomb:R4},{name:'x',tomb:'custom'},{name:R2,tomb},{name:R1,tomb:'.pruning-'+R1+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{rm:async target=>{calls.push(path.basename(target));await fs.promises.rm(target,{recursive:true,force:true});}});
+ assert.deepEqual(calls,[tomb],'only the tomb that exists was removed');assert.deepEqual(done.failed.sort(),[R4,'x'].sort());assert.deepEqual(done.removed.sort(),[R1,R2].sort(),'a tomb that is already gone counts as done');
+ assert.ok(fs.existsSync(path.join(f.releases,R4,'package.json'))&&fs.existsSync(path.join(f.releases,'custom')));
+ const failing=await removeTombs(f.loc,[{name:R2,tomb:'.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{rm:async()=>{throw Object.assign(new Error('EIO'),{code:'EIO'});}});
+ assert.deepEqual(failing,{removed:[R2],failed:[]},'a missing tomb is done whatever rm would say');
+ fs.mkdirSync(path.join(f.releases,tomb));
+ assert.deepEqual(await removeTombs(f.loc,[{name:R2,tomb}],{rm:async()=>{throw Object.assign(new Error('EIO'),{code:'EIO'});}}),{removed:[],failed:[R2]});
 });
 
 test('earlier means an older Paseo version, then an older revision number, whatever the directory times say',async t=>{
