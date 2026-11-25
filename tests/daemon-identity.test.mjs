@@ -41,7 +41,7 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:layout.PASEO_VERSION}));
  fs.mkdirSync(path.join(server,'dist/server/web-ui'),{recursive:true});fs.writeFileSync(path.join(server,'dist/server/web-ui/index.html'),'fixture');seedPidFiles(loc);layout.markRuntimeReady(loc);
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),proofFile=path.join(loc.stateDir,'daemon-instance.private.json');
- const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false;
+ const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false,protectedOffers=false;
  // Which release supplied each upstream module or CLI call: <runtimeDir>/releases/<revision>.
  const releaseOf=file=>String(fileURLToPath(new URL(String(file),'file:///'))).split('/node_modules/@getpaseo/')[0];
  const used={modules:[],cli:[],stoppedVia:null};
@@ -70,7 +70,7 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
-  if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version'){assert.equal(releaseOf(args[0]),root);return layout.PASEO_VERSION;}used.cli.push({release:releaseOf(args[0]),command:args.slice(4).join(' ')});if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true}})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
+  if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version'){assert.equal(releaseOf(args[0]),root);return layout.PASEO_VERSION;}used.cli.push({release:releaseOf(args[0]),command:args.slice(4).join(' ')});if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true},...(protectedOffers?{minimumSecurityMode:'protected'}:{})})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
@@ -79,7 +79,7 @@ function fixture(t, { platform = process.platform } = {}) {
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},used,
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},protectedOffers:value=>{protectedOffers=value;},used,
  // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
  // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
  prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
@@ -387,6 +387,20 @@ test('changing a running target defers all daemon mutation until an explicit sto
  assert.equal(pairing.target,'woowtech');
  assert.match(pairing.url,/^https:\/\/smart\.woowtech\.io\/#offer=/);
  assert.equal(fs.readFileSync(path.join(f.loc.paseoHome,'agents.db'),'utf8'),'retain-data');
+});
+
+test('protected relay security stays the Paseo clients\' choice, is off after a Smart target start, and its offers are refused there', async t => {
+ const f=fixture(t);await f.runtime.activate();
+ const configFile=path.join(f.loc.paseoHome,'config.json'),pairing=path.join(f.loc.stateDir,'pairing.private.json');
+ // An official Paseo client turned it on while Paseo was the target: activation keeps that choice.
+ const edited=JSON.parse(fs.readFileSync(configFile));edited.daemon.relay.requireProtectedSecurity=true;fs.writeFileSync(configFile,JSON.stringify(edited),{mode:0o600});
+ await f.runtime.activate();assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.relay.requireProtectedSecurity,true);
+ f.protectedOffers(true);assert.match((await f.runtime.pair()).url,/^https:\/\/app\.paseo\.sh\/#offer=/);
+ await f.runtime.saveConnectionSettings({target:'woowtech'});f.permitStop();await f.runtime.deactivate();await f.runtime.activate();
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.relay.requireProtectedSecurity,false);
+ // Turned on again while the daemon serves the Smart target: no link the app cannot use is handed out.
+ await assert.rejects(f.runtime.pair(),{code:'PAIRING_SECURITY_UNSUPPORTED'});assert.equal(fs.existsSync(pairing),false);
+ f.protectedOffers(false);assert.match((await f.runtime.pair()).url,/^https:\/\/smart\.woowtech\.io\/#offer=/);
 });
 
 test('an older running process without the pinned connection environment requires restart without being stopped', async t => {

@@ -24,3 +24,9 @@ test('CLI rejects arbitrary error names codes and stage strings',async()=>{
  const r=await run('status',{status:async()=>{throw {name:'PRIVATE_SECRET_NAME',code:'PRIVATE_SECRET_CODE',stage:'PRIVATE_SECRET_STAGE'};}});
  assert.doesNotMatch(r.stderr,/PRIVATE_SECRET/);assert.equal(JSON.parse(r.stderr).code,'OPERATION_FAILED');
 });
+test('CLI names the upgrade config and Smart pairing security codes',async()=>{
+ for(const code of ['CONFIG_INCOMPATIBLE','PAIRING_SECURITY_UNSUPPORTED']){
+  const r=await run('status',{status:async()=>{throw Object.assign(Error('private detail'),{name:'RuntimeError',code});}});
+  assert.equal(r.exitCode,1);assert.equal(JSON.parse(r.stderr).code,code);assert.doesNotMatch(r.stderr,/private detail/);
+ }
+});
