@@ -25,8 +25,9 @@
 //          before the terminal opens: upstream does not record the terminal, the stop passes without the warning.
 //
 // It prints only facts that are not secret (never an offer, a key, a server id or an environment value).
-// SIGINT, SIGTERM, SIGHUP and SIGQUIT (a second one too) end the running phase and let the cleanup run first; only
-// SIGKILL of the orchestrator leaves the temporary directory (pi-paseo-upgrade-smoke-*) and its processes behind.
+// SIGINT, SIGTERM, SIGHUP and SIGQUIT (a second one too) end the running phase and let the cleanup run first, and so does
+// a terminal that closes while output is flowing (the failed writes to it are ignored); only SIGKILL of the orchestrator
+// leaves the temporary directory (pi-paseo-upgrade-smoke-*) and its processes behind.
 // The phases (--phase) are internal: they refuse to run unless this script started them.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -339,7 +340,13 @@ let running=null,interrupted=false;
 // handled for the whole run: a second Ctrl-C must not end this process before that cleanup, or detached daemons and
 // about 1.3 GB stay behind.
 const interrupt=()=>{interrupted=true;running?.kill('SIGKILL');};
-function handleInterrupts() {for(const signal of ['SIGINT','SIGTERM','SIGHUP','SIGQUIT'])process.on(signal,interrupt);}
+function handleInterrupts() {
+ for(const signal of ['SIGINT','SIGTERM','SIGHUP','SIGQUIT'])process.on(signal,interrupt);
+ // A terminal that closes makes the next write to it fail (EIO; EPIPE on a closed pipe) while the phase's output is still
+ // being forwarded. A stream 'error' nobody listens to is an uncaught exception, and it would end this process before the
+ // cleanup ran. The output is a report: losing it is not a reason to leave daemons and a temporary directory behind.
+ for(const stream of [process.stdout,process.stderr])stream.on('error',()=>{});
+}
 function runPhase(args,env,{timeoutMs=1500000}={}) {
  return new Promise(resolve=>{
   if(interrupted){resolve({code:130,err:'INTERRUPTED'});return;}
