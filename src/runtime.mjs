@@ -14,7 +14,6 @@ import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION} from './runtime-layout.mjs';
-import { ensureWebClient, webClientStatus } from './web-client.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -203,13 +202,21 @@ async function withClient(fn, timeoutMs = 30000) {
   } catch (error) { throw new RuntimeError(safeCode(error)); }
   finally { clearTimeout(timer); await client.close().catch(() => {}); }
 }
+// 0.1.9-0.1.22 downloaded a patched Paseo web build into <stateDir>/web-client for the
+// Paseo target. The target now opens the official app, so drop that copy. Only a real
+// directory is removed (never through a symlink); a failure here never blocks activation.
+function removeRetiredWebClient(loc) {
+  const dir = path.join(loc.stateDir, 'web-client');
+  try { if (fs.lstatSync(dir).isDirectory()) fs.rmSync(dir, { recursive: true, force: true }); }
+  catch { /* absent, or removable on the next activation */ }
+}
 export async function activate(options = {}) {
   return withRuntimeLock(async () => {
     ensureOwnedHome(); updateState({ desiredEnabled: true, phase: 'installing', lastError: null });
     try {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
       await installRuntime();
-      if (connectionPreferences(locations()).target === 'paseo') await ensureWebClient(locations());
+      removeRetiredWebClient(locations());
       let existing = await currentInstance();
       if (existing) {
         try { verifyInstanceOwnership(existing); }
@@ -379,7 +386,6 @@ export async function pair() {
   return withRuntimeLock(async () => {
     const target = connectionPreferences(locations()).target;
     if (readState().configurationPending === true || (readState().activeTarget || 'paseo') !== target) throw new RuntimeError('CONFIGURATION_PENDING');
-    if (target === 'paseo' && !webClientStatus(locations()).ready) throw new RuntimeError('WEB_CLIENT_NOT_READY');
     const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
     const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
     if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');

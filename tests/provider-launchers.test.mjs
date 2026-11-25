@@ -269,7 +269,6 @@ test('runtime applies new private commands with the official reload API and repo
     // This test models a non-Linux provider reload; Linux birth/transition
     // behavior is exercised with the actual identity module in daemon-identity.
     if (spec === './daemon-identity.mjs') return { observeOwnedInstance: async () => null, rememberOwnedInstance: async () => {}, recoverStaleInstance: () => assert.fail('no recovery on healthy provider reload') };
-    if (spec === './web-client.mjs') return { ensureWebClient: async () => {} };
     if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };

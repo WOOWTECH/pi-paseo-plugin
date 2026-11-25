@@ -8,16 +8,16 @@ Changing the target saves its app URL and relay together. If the daemon is runni
 | --- | --- | --- |
 | Woowtech Smart | https://smart.woowtech.io | relay.woowtech.io:443 |
 | Apporo Smart | https://smart.apporo.ai | relay.apporo.ai:443 |
-| Paseo | bundled `/paseo-web` client | relay.paseo.sh:443 |
+| Paseo | https://app.paseo.sh | relay.paseo.sh:443 |
 
 The connector uses upstream Paseo 0.11.2 and its V2 pairing format. Smart mobile push notifications use a fork-specific FCM protocol and are not supported by this configuration-only integration; desktop/mobile production pairing still needs live acceptance. The branded app source currently identifies itself as 0.10.1.
 
 
 Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。使用者在 **Pi Web 設定 → 插件 → Agent Connect** 選擇連線標的並開始配對。
 
-各標的使用自己的加密 relay；從 Pi Web 的受保護設定頁產生配對連結，再開啟所選標的。Paseo 的內建網頁由 Pi Web 既有登入保護；品牌網頁會在各自官方網站開啟。
+各標的使用自己的加密 relay；從 Pi Web 的受保護設定頁產生配對連結，再開啟所選標的的官方網站。
 
-`v0.1.9` 由插件下載並管理已修補的 Paseo Web 0.13.0，透過 Pi Web 同一網址的 `/paseo-web` 開啟。固定發布包須通過 SHA-256 與來源版本驗證，完成後才切換；登入保護、provider 登入及官方加密 relay 沿用現有設定。修補包含回覆途中重新整理的重複顯示與長回覆截斷；官方 `app.paseo.sh` 的部署進度另見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
+`0.1.23` 起不再附內建網頁：Paseo 選項跟兩個 Smart 一樣開啟官方網站 `https://app.paseo.sh`，並在那裡配對。Pi Web 的 `/paseo-web` 路由與網頁包下載（約 11 MB）一併移除；啟動服務時會刪掉舊版留在插件狀態目錄 `web-client` 的網頁檔（只刪真正的目錄，不跟隨符號連結）。用 `/paseo-web` 配對過的瀏覽器要在官方網站重新配對一次；主機身分、登入與對話不變。0.1.9–0.1.22 內建的修正版（Paseo Web 0.13.0-woow.1）帶有兩項顯示修補：回覆途中重新整理時重複顯示，以及長回覆重連後只剩中間一段。上游 [PR #7908](https://github.com/getpaseo/paseo/pull/7908) 合併並部署前，官方網站可能仍會出現這兩個情況；後端對話不受影響。背景見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 
 ## 0.1.10 PID 復原修補
 
@@ -35,7 +35,6 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
 - Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
-- 受管理的網頁包另需 `tar`；下載約 11 MB，固定版本與校驗值記錄於 `runtime/web-client.json`。
 - 登入在執行 Pi Web 的同一使用者 HOME。插件沿用現有 provider CLI；缺少時下載固定版本到插件的獨立目錄。既有帳號資料用於官方 CLI 登入。
 
 啟用本機聽寫或語音模式時，服務的 PATH 還需要 `tar` 與 `bzip2`，並預留語音模型下載、解壓縮與執行所需空間。Paseo 會自動下載缺少的模型；精簡容器沒有 `bzip2` 時，可能已下載完整壓縮檔卻回報 `tar exited with code 2`。容器映像應安裝此相依套件，或使用服務啟動時可找到的持久化工具；只在暫時容器層安裝，重建後會消失。本插件不會替容器安裝 OS 套件。Pi4 的實測與恢復紀錄見 [儲存復原驗證](docs/pi4-storage-recovery-2026-10-25.md)。
@@ -82,7 +81,7 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 1. 到 **設定 → 插件 → Agent Connect**，選擇 **Woowtech Smart／Apporo Smart／Paseo** 並儲存。若服務正在執行，先結束使用中的回合，再停止並啟動服務，確認新標的已套用。每台主機一次連接一個標的。主機握手會同步宣告所選品牌，供 Smart 網頁確認連線身份；切換後須重新啟動才能套用。
 2. 缺少或過期的登入，使用 `claude auth login`、`codex login` 或 Pi 的 `/login`。密碼、API Key 與 OAuth 資訊只在官方登入介面或 Pi Web 模型設定輸入。
-3. 確認服務已就緒，按 **產生配對連結**，再用顯示所選平台名稱的按鈕開啟網站並確認配對。Paseo 選項使用同一 Pi Web 網址的 `/paseo-web/`，另需內建網頁準備完成；兩個 Smart 選項開啟各自官方網站。切換網站需在新網站配對，Claude／Codex／Pi 的主機登入沿用。
+3. 確認服務已就緒，按 **產生配對連結**，再用顯示所選平台名稱的按鈕開啟該平台的官方網站並確認配對。切換網站需在新網站配對，Claude／Codex／Pi 的主機登入沿用。
 4. 在所選網站選擇這台主機、Claude Code／Codex／Pi、可用模型、模式及思考等級，再建立對話。
 
 模型目錄由 Paseo 動態取得，插件不硬編模型、不強制完整權限。設定頁分別顯示程序啟動、服務可達、relay 歷史驗證與真正對話驗證；帳號額度耗盡會顯示對話限制。
@@ -229,3 +228,5 @@ Paseo 安裝器會優先使用已登記在全域設定的 GitHub 版 Omnigent（
 **升級映像內建的副本：** Pi Agent 映像把 Omnigent、Paseo 以 `/opt/woow/...` 路徑登記在設定裡。從設定頁或 `pi install` 裝上新版只會「另外多一筆」，不會取代內建項目；重啟時映像啟動腳本挑第一筆同名套件，仍載入內建舊版，Omnigent 設定頁會一直顯示舊版本號。兩個新版都裝好後，請到 **設定 → 插件** 移除 `/opt/woow/pi-omnigent-plugin` 與 `/opt/woow/pi-paseo-plugin` 這兩筆，再重啟 Pi Web。這個流程已在 `pi-agent:20261026.2019`（內建 Omnigent 0.3.21、Paseo 0.1.10）的隔離 Pod 驗證：移除並重啟後，設定頁顯示 Omnigent 0.3.27，Paseo 服務正常，兩者各只剩一筆。
 
 2026-10-26：Pi4 已部署修正版 `/paseo-web`，完成 Claude 串流中重新整理及三引擎續聊驗收，詳見[正式部署報告](docs/pi4-managed-web-2026-10-26.md)。
+
+2026-11-25：0.1.23 移除內建 `/paseo-web`，Paseo 選項改開官方 `app.paseo.sh`。

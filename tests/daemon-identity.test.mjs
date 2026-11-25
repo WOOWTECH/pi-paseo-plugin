@@ -34,7 +34,7 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:'0.11.2'}));
  fs.mkdirSync(path.join(server,'dist/server/web-ui'),{recursive:true});fs.writeFileSync(path.join(server,'dist/server/web-ui/index.html'),'fixture');seedPidFiles(loc);layout.markRuntimeReady(loc);
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),proofFile=path.join(loc.stateDir,'daemon-instance.private.json');
- const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,webBuilds=0,allowStop=false;
+ const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false;
  function publish(mode=0o644){const pid=++nextPid;const birth={bootId,startTicks:String(pid),uid:process.getuid()};processes.set(pid,{...birth,role:'owned',home:loc.paseoHome});const lock={pid,startedAt:new Date().toISOString(),uid:process.getuid(),bootId,heartbeat:true,piPaseoProtocol:'linux-flock-v1',listen:'127.0.0.1:27669',hostname:'fixture'};fs.writeFileSync(pidFile,JSON.stringify(lock),{mode});return lock;}
  const initial=publish();const initialBytes=fs.readFileSync(pidFile);
  fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify({custom:'preserve',auth:{fixture:'retain'}}),{mode:0o600});
@@ -59,7 +59,6 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./runtime-layout.mjs')return layout;
   if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
-  if(spec==='./web-client.mjs')return {ensureWebClient:async()=>{webBuilds++;return {ready:true};},webClientStatus:()=>({ready:true}),managedPairUrl:()=>'/paseo-web/welcome#fixture'};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
   if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version')return '0.11.2';if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true}})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>loadInstance(),stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
@@ -69,7 +68,7 @@ function fixture(t, { platform = process.platform } = {}) {
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -172,7 +171,25 @@ test('status cannot recover or enable a disabled installation',async t=>{
 
 test('pair uses reachable daemon and preserves proof without entering lifecycle recovery',async t=>{
  const f=fixture(t);await f.runtime.activate();const proof=fs.readFileSync(f.proofFile);
- const result=await f.runtime.pair();assert.match(result.url,/^\/paseo-web\/welcome#offer=/);assert.equal(result.target,'paseo');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
+ const result=await f.runtime.pair();assert.match(result.url,/^https:\/\/app\.paseo\.sh\/#offer=/);assert.equal(result.target,'paseo');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
+});
+
+test('activation removes the bundled web copy that 0.1.9-0.1.22 downloaded and keeps private state',async t=>{
+ const f=fixture(t),retired=path.join(f.loc.stateDir,'web-client','a'.repeat(64));
+ fs.mkdirSync(path.join(retired,'_expo/static'),{recursive:true});fs.writeFileSync(path.join(retired,'index.html'),'retired');fs.writeFileSync(path.join(retired,'_expo/static/app.js'),'retired');
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(path.join(f.loc.stateDir,'web-client')),false);
+ assert.equal(fs.readFileSync(path.join(f.loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');
+ assert.equal(fs.readFileSync(path.join(f.loc.paseoHome,'agents.db'),'utf8'),'retain-data');
+});
+
+test('removing the retired web copy never follows a symlink',async t=>{
+ const f=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-web-outside-'));
+ t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(outside,'keep.txt'),'keep');fs.symlinkSync(outside,path.join(f.loc.stateDir,'web-client'));
+ await f.runtime.activate();
+ assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'keep');
+ assert.equal(fs.lstatSync(path.join(f.loc.stateDir,'web-client')).isSymbolicLink(),true);
 });
 
 for(const copy of ['dist/server/server','dist/src/server'])test('unpatched runtime '+copy+' refuses reclaim even with old valid proof',async t=>{
@@ -213,7 +230,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  const f=fixture(t);await f.runtime.activate();
  const configFile=path.join(f.loc.paseoHome,'config.json');
  const original=fs.readFileSync(configFile),pid=fs.readFileSync(f.pidFile);
- const webBuilds=f.webBuilds();
  await f.runtime.saveConnectionSettings({target:'woowtech'});
  const pending=await f.runtime.activate();
  assert.equal(pending.phase,'restart_required');
@@ -221,7 +237,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  assert.deepEqual(fs.readFileSync(configFile),original);
  assert.deepEqual(fs.readFileSync(f.pidFile),pid);
  assert.equal(f.starts(),0);assert.equal(f.stops(),0);
- assert.equal(f.webBuilds(),webBuilds,'branded activation never fetches the Paseo web client');
  await assert.rejects(f.runtime.pair(),{code:'CONFIGURATION_PENDING'});
  f.permitStop();await f.runtime.deactivate();await f.runtime.activate();
  assert.equal(f.starts(),1);assert.equal(f.stops(),1);
@@ -230,7 +245,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  const configured=JSON.parse(fs.readFileSync(configFile));
  assert.equal(configured.app.baseUrl,'https://smart.woowtech.io');
  assert.equal(configured.daemon.relay.endpoint,'relay.woowtech.io:443');
- assert.equal(f.webBuilds(),webBuilds);
  const pairing=await f.runtime.pair();
  assert.equal(pairing.target,'woowtech');
  assert.match(pairing.url,/^https:\/\/smart\.woowtech\.io\/#offer=/);

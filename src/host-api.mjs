@@ -3,7 +3,6 @@ import {fileURLToPath} from 'node:url';
 import * as runtime from './runtime.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 import { startSupervisor, stopSupervisor, packageEnabled } from './supervisor.mjs';
-import { serveWebClient, webClientStatus } from './web-client.mjs';
 import { CONNECTION_TARGETS, connectionPreferences, connectionTarget } from './connection-targets.mjs';
 
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
@@ -16,11 +15,10 @@ export async function status() {
   const activeTarget = result.daemon?.running ? result.state?.activeTarget || 'paseo' : null;
   const configurationPending = result.state?.configurationPending === true || (activeTarget !== null && activeTarget !== settings.target);
   return {...result,
-    openUrl:connectionTarget(settings.target).openUrl,webClient:webClientStatus(runtime.locations()),setupUrl:'/paseo/setup',settings,
+    openUrl:connectionTarget(settings.target).openUrl,setupUrl:'/paseo/setup',settings,
     selectedTarget:settings.target,activeTarget,configurationPending,
     connectionTargets:CONNECTION_TARGETS.map(({id,label,appUrl})=>({id,label,appUrl}))};
 }
-export function web(request) { return serveWebClient(request, runtime.locations()); }
 export async function lifecycle(input={}) {
   const loc=runtime.locations();
   return withLock(path.join(loc.stateDir,'host-lifecycle.lock'),async()=>{

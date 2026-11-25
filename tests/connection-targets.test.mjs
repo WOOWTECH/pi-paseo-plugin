@@ -43,7 +43,7 @@ test('targets bind each trusted web app to its own TLS relay', () => {
 test('pair links preserve the offer exactly and reject wrong brand, relay or TLS', () => {
   for (const target of CONNECTION_TARGETS) {
     const hash = fragmentFor(offerFor(target));
-    assert.equal(targetPairUrl(target.appUrl + '/' + hash, target.id), target.id === 'paseo' ? '/paseo-web/welcome' + hash : target.appUrl + '/' + hash);
+    assert.equal(targetPairUrl(target.appUrl + '/' + hash, target.id), target.appUrl + '/' + hash);
     for (const url of [target.appUrl + '.evil/' + hash, target.appUrl + '/welcome' + hash, target.appUrl + '/?redirect=evil' + hash, target.appUrl.replace('https:', 'http:') + '/' + hash, target.appUrl + '/#opaque']) assert.throws(() => targetPairUrl(url, target.id), { code: 'PAIRING_ORIGIN_INVALID' });
     for (const relay of [{ endpoint: 'other.example:443', useTls: true }, { endpoint: target.relayEndpoint, useTls: false }]) assert.throws(() => targetPairUrl(target.appUrl + '/' + fragmentFor({ ...offerFor(target), relay }), target.id), { code: 'PAIRING_TARGET_MISMATCH' });
     assert.throws(() => targetPairUrl(target.appUrl + '/#offer=e30', target.id), { code: 'PAIRING_TARGET_MISMATCH' });
