@@ -1,6 +1,7 @@
 import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles,seedPriorRelease} from './helpers/runtime-pid-files.mjs';
+import {loadPersistedConfig} from './helpers/paseo-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,6 +18,12 @@ import * as layout from '../src/runtime-layout.mjs';
 import * as lifecycleTimeouts from '../src/lifecycle-timeouts.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 const require=createRequire(import.meta.url);
+// The real persisted-config modules (read path, normalization, strict schema) of both releases.
+const config0174=await loadPersistedConfig(layout.PASEO_VERSION),config0112=await loadPersistedConfig(layout.LEGACY_PASEO_VERSION);
+// A config.json as 0.11.2 accepted it. 0.17.4's schema rejects these speech shapes as written; only its
+// read path folds them (providers.openai into the OpenAI speech site, missing providers to local).
+const LEGACY_CONFIG={version:1,daemon:{appendSystemPrompt:'retain'},providers:{openai:{apiKey:'fixture-not-a-key',stt:{baseUrl:'https://stt.invalid'}}},
+ features:{dictation:{stt:{provider:'openai',language:'zh'}},voiceMode:{stt:{language:'zh'},tts:{provider:'local',voice:'alloy',speakerId:1}}}};
 let identityModule={};
 try {identityModule=await import('../src/daemon-identity.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 
@@ -40,7 +47,7 @@ function fixture(t, { platform = process.platform } = {}) {
  const used={modules:[],cli:[],stoppedVia:null};
  function publish(mode=0o644){const pid=++nextPid;const birth={bootId,startTicks:String(pid),uid:process.getuid()};processes.set(pid,{...birth,role:'owned',home:loc.paseoHome});const lock={pid,startedAt:new Date().toISOString(),uid:process.getuid(),bootId,heartbeat:true,piPaseoProtocol:'linux-flock-v1',listen:'127.0.0.1:27669',hostname:'fixture'};fs.writeFileSync(pidFile,JSON.stringify(lock),{mode});return lock;}
  const initial=publish();const initialBytes=fs.readFileSync(pidFile);
- fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify({custom:'preserve',auth:{fixture:'retain'}}),{mode:0o600});
+ fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify(LEGACY_CONFIG),{mode:0o600});
  fs.writeFileSync(path.join(loc.paseoHome,'agents.db'),'retain-data',{mode:0o600});
  fs.writeFileSync(path.join(loc.stateDir,'pairing.private.json'),'retain-pairing',{mode:0o600});
  const verifyProc=()=>{for(const [pid,p]of processes)if(p.role==='owned'&&p.home===loc.paseoHome)throw new state.RuntimeError('DAEMON_ALREADY_RUNNING');};
@@ -67,7 +74,7 @@ function fixture(t, { platform = process.platform } = {}) {
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
-  if(spec.endsWith('/server/config.js'))return {savePersistedConfig:(_home,config)=>fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify(config))};
+  if(spec.endsWith('/server/persisted-config.js'))return releaseOf(spec)===root?config0174:config0112;
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
@@ -75,7 +82,7 @@ function fixture(t, { platform = process.platform } = {}) {
  return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},used,
  // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
  // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
- prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -260,11 +267,13 @@ test(`0.11.2 ${generation} fallback still verifies ownership before stop and nev
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);assert.equal(fs.existsSync(f.proofFile),false);
 });
 test(`prepared 0.17.4 with a healthy 0.11.2 ${generation} daemon requires an explicit restart, cannot mint a proof, and keeps using the daemon's own release`,async t=>{
- const f=fixture(t);const old=f.prior({generation,prepared:true});const before=fs.readFileSync(f.pidFile);
+ const f=fixture(t);const old=f.prior({generation,prepared:true});const before=fs.readFileSync(f.pidFile),config=fs.readFileSync(path.join(f.loc.paseoHome,'config.json'));
  const result=await f.runtime.activate();assert.equal(result.phase,'restart_required');assert.equal(result.daemon.reachable,true);assert.equal(result.diagnosticCode,'RESTART_REQUIRED');
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);assert.equal(fs.existsSync(f.proofFile),false);
- // Reading, verifying and querying the old daemon never loaded a 0.17.4 module.
- assert.ok(f.used.modules.length>0);assert.deepEqual(f.used.modules.filter(m=>m.release!==old),[]);
+ // Reading, verifying and querying the old daemon never loaded a 0.17.4 module. Only the check of the
+ // config the next start will write did, and it wrote nothing.
+ assert.ok(f.used.modules.length>0);assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['persisted-config.js']);
+ assert.deepEqual(fs.readFileSync(path.join(f.loc.paseoHome,'config.json')),config);
  const pairing=await f.runtime.pair();assert.match(pairing.url,/^https:\/\/app\.paseo\.sh\/#offer=/);
  assert.deepEqual(f.used.cli.map(c=>c.release),[old]);assert.equal(f.starts(),0);
 });
@@ -289,19 +298,66 @@ test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to 0.17.4 on t
  assert.equal(layout.previousRuntimeDirectory(f.loc),old);assert.equal(JSON.parse(fs.readFileSync(path.join(old,'.pi-paseo-runtime.json'))).revision,path.basename(old));
  assert.equal((await f.runtime.status()).diagnosticCode,null);await f.runtime.activate();assert.equal(f.starts(),1);
 });
+test('the start after an upgrade loads 0.11.2 speech shapes through 0.17.4 read-path normalization and keeps the other settings',async t=>{
+ const f=fixture(t);f.prior({generation:'r4',prepared:true});
+ const configFile=path.join(f.loc.paseoHome,'config.json');
+ // What 0.11.2 loaded, and what 0.17.4's strict schema rejects when the file is merged without that read path.
+ assert.deepEqual(config0112.readPersistedConfig(f.loc.paseoHome).providers,LEGACY_CONFIG.providers);
+ assert.equal(config0174.PersistedConfigSchema.safeParse(LEGACY_CONFIG).success,false);
+ assert.equal((await f.runtime.activate()).phase,'restart_required');
+ f.permitStop();await f.runtime.deactivate();
+ assert.equal((await f.runtime.activate()).phase,'running');assert.equal(f.starts(),1);
+ const saved=JSON.parse(fs.readFileSync(configFile));
+ assert.equal(config0174.PersistedConfigSchema.safeParse(saved).success,true);
+ assert.equal(saved.providers?.openai,undefined);
+ assert.deepEqual(saved.features.dictation.stt,{provider:'openai',apiKey:'fixture-not-a-key',baseUrl:'https://stt.invalid',language:'zh'});
+ assert.deepEqual(saved.features.voiceMode,{stt:{provider:'local',language:'zh'},tts:{provider:'local',speakerId:1}});
+ assert.equal(saved.daemon.appendSystemPrompt,'retain');
+ // The rollback caveat in the README: 0.11.2 does not load the key 0.17.4 folded into the dictation site.
+ assert.throws(()=>config0112.readPersistedConfig(f.loc.paseoHome),/Invalid config/);
+ f.keep();
+});
+test('while a 0.11.2 daemon serves, a config the 0.17.4 start cannot load is reported instead of RESTART_REQUIRED',async t=>{
+ const f=fixture(t);f.prior({generation:'r4',prepared:true});
+ const configFile=path.join(f.loc.paseoHome,'config.json');
+ // Edited after the old daemon loaded it. Stopping now would leave Paseo down, the supervisor retrying.
+ fs.writeFileSync(configFile,JSON.stringify({...LEGACY_CONFIG,features:{dictation:{stt:{provider:'whisper',language:'zh'}}}}),{mode:0o600});
+ const before=fs.readFileSync(configFile);
+ await assert.rejects(f.runtime.activate(),{code:'CONFIG_INCOMPATIBLE'});
+ const reported=await f.runtime.status();
+ assert.equal(reported.phase,'error');assert.equal(reported.diagnosticCode,'CONFIG_INCOMPATIBLE');assert.equal(reported.daemon.reachable,true);
+ assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(configFile),before);
+ fs.writeFileSync(configFile,'{"version":1,',{mode:0o600});
+ await assert.rejects(f.runtime.activate(),{code:'CONFIG_CORRUPT'});assert.equal((await f.runtime.status()).diagnosticCode,'CONFIG_CORRUPT');
+ // Once corrected, the usual restart request comes back.
+ fs.writeFileSync(configFile,JSON.stringify(LEGACY_CONFIG),{mode:0o600});
+ const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.diagnosticCode,'RESTART_REQUIRED');
+ assert.equal(f.stops(),0);assert.equal(f.starts(),0);f.keep();
+});
+test('while a 0.11.2 daemon serves, the collaboration switch writes config.json through 0.11.2 for that daemon to reload',async t=>{
+ const f=fixture(t);const old=f.prior({generation:'r4',prepared:true});
+ const saved=await f.runtime.saveConnectionSettings({agentCollaboration:true});
+ assert.equal(saved.agentCollaborationApplied,'applied');
+ const config=JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,'config.json')));
+ assert.deepEqual(config.daemon.mcp,{enabled:true,injectIntoAgents:true});
+ assert.deepEqual(config.providers,LEGACY_CONFIG.providers,'0.11.2 keeps its own shapes; the 0.17.4 start folds them later');
+ assert.deepEqual(f.used.modules.filter(m=>m.module==='persisted-config.js').map(m=>m.release),[old]);
+ assert.equal(f.stops(),0);assert.equal(f.starts(),0);f.keep();
+});
 test('darwin: a stale 0.11.2-r4 PID record never starts the old release',async t=>{
  const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
  f.processes.delete(f.initial.pid); // died without releasing paseo.pid; state still records it
  const result=await f.runtime.activate();assert.equal(result.phase,'running');assert.equal(f.starts(),1);
  const root=layout.runtimeDirectory(f.loc);
  assert.deepEqual(f.used.cli.map(c=>c.release),[root]);
- assert.deepEqual(f.used.modules.filter(m=>m.module==='config.js').map(m=>m.release),[root]);
+ assert.deepEqual(f.used.modules.filter(m=>m.module==='persisted-config.js').map(m=>m.release),[root]);
  assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);assert.equal(layout.previousRuntimeDirectory(f.loc),old);f.keep();
 });
 test('darwin: a 0.11.2-r4 daemon recorded by the earlier release is controlled and stopped by that release',async t=>{
  const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
  const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.daemon.reachable,true);
- assert.deepEqual(f.used.modules.filter(m=>m.release!==old),[]);
+ // 0.17.4 only checked the config its next start writes.
+ assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['persisted-config.js']);
  await f.runtime.deactivate();assert.equal(f.used.stoppedVia,old);
  await f.runtime.activate();assert.equal(f.starts(),1);assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
  assert.equal((await f.runtime.status()).diagnosticCode,null);f.keep();
@@ -368,7 +424,9 @@ test('umask 002: a group-writable official PID file in the private home is adopt
 test('group write is accepted only inside a verified private home; other write never',async t=>{
  const f=fixture(t);await f.runtime.activate();
  fs.chmodSync(f.pidFile,0o664);fs.chmodSync(f.loc.paseoHome,0o750);
- await assert.rejects(f.runtime.activate(),{code:'DAEMON_IDENTITY_UNSAFE'});
+ // Paseo's own config writer re-applies 0700 to its home whenever activation writes config.json, so the
+ // identity check is probed where it decides alone (stale-PID recovery also runs it before any write).
+ await assert.rejects(state.withRuntimeLock(()=>f.identity.observeOwnedInstance(f.loc,f.initial,()=>{})),{code:'DAEMON_IDENTITY_UNSAFE'});
  fs.chmodSync(f.loc.paseoHome,0o700);fs.chmodSync(f.pidFile,0o662);
  await assert.rejects(f.runtime.activate(),{code:'DAEMON_IDENTITY_UNSAFE'});
  fs.chmodSync(f.pidFile,0o664);assert.equal((await f.runtime.activate()).daemon.reachable,true);
@@ -389,7 +447,7 @@ test('agent collaboration defaults off and reloads the running daemon without a 
  assert.equal(f.reloads(),reloads+1,'one live reload');
  assert.deepEqual(fs.readFileSync(f.pidFile),pid);assert.equal(f.starts(),0);assert.equal(f.stops(),0);
  assert.notEqual(state.readState().configurationPending,true,'collaboration is not a pending target change');
- assert.equal(JSON.parse(fs.readFileSync(configFile)).custom,'preserve');
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.appendSystemPrompt,'retain');
  await f.runtime.activate();assert.deepEqual(mcp(),{enabled:true,injectIntoAgents:true},'activation keeps the saved choice');
  const before=f.reloads();
  assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:true})).agentCollaborationApplied,'unchanged');

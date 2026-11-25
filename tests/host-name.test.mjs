@@ -8,15 +8,17 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { readRecord, writeRecord } from '../src/onboarding.mjs';
-import { RuntimeError, assertSafePath } from '../src/state.mjs';
+import { RuntimeError, assertSafePath, atomicJson } from '../src/state.mjs';
 import * as targets from '../src/connection-targets.mjs';
+import { PASEO_VERSION } from '../src/runtime-layout.mjs';
+import { loadPersistedConfig } from './helpers/paseo-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
-// Optional installed-runtime integration; normal CI still asserts the strict
-// daemon contract at the actual runtime writeConfig seam.
+// The vendored 0.17.4 persisted-config module, or an installed runtime's (PI_PASEO_TEST_PERSISTED_CONFIG
+// names its dist/server/server/persisted-config.js): its read path and strict schema run for real.
 const actualConfig = process.env.PI_PASEO_TEST_PERSISTED_CONFIG
-  ? await import(pathToFileURL(path.resolve(process.env.PI_PASEO_TEST_PERSISTED_CONFIG)).href) : null;
+  ? await import(pathToFileURL(path.resolve(process.env.PI_PASEO_TEST_PERSISTED_CONFIG)).href) : await loadPersistedConfig(PASEO_VERSION);
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'paseo-host-name-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -41,18 +43,16 @@ function fixture(t) {
     const scopedRequire = spec => {
       if (spec === './runtime.mjs') return configRuntime;
       if (spec === './onboarding.mjs') return { readRecord, writeRecord, onboardingStatus: () => ({}) };
-      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, assertSafePath, readState: () => state, updateState: patch => (state = { ...state, ...patch }), withRuntimeLock: fn => fn() };
+      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, assertSafePath, atomicJson, readState: () => state, updateState: patch => (state = { ...state, ...patch }), withRuntimeLock: fn => fn() };
       if (spec === './connection-targets.mjs') return targets;
       if (spec === './provider-launchers.mjs') return { configureProviders: () => providers };
       if (spec === './runtime-layout.mjs') return { runtimeDirectory: () => loc.runtimeDir, runtimeReady: () => true, RUNTIME_REVISION: 'fixture' };
-      if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => {
-        // Paseo 0.11.2's daemon schema is strict and has no name/displayName key.
-        // Exercise the actual writeConfig path, not a mock that accepts any JSON.
+      if (spec.endsWith('/persisted-config.js')) return { ...actualConfig, savePersistedConfig: (_home, config) => {
+        // Paseo's daemon schema is strict and has no name/displayName key; the actual module rejects them too.
         assert.equal(Object.hasOwn(config.daemon, 'name'), false);
         assert.equal(Object.hasOwn(config.daemon, 'displayName'), false);
         calls.saves++;
-        if (actualConfig) actualConfig.savePersistedConfig(_home, config);
-        else writeRecord(configFile, config);
+        actualConfig.savePersistedConfig(_home, config);
       } };
       if (spec.startsWith('./')) return {};
       return require(spec);

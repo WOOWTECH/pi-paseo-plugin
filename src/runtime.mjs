@@ -97,6 +97,29 @@ function controlRuntimeDirectory() {
 }
 async function serverModule(relative, root = controlRuntimeDirectory() || runtimeDirectory(locations())) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
 async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
+// config.json goes through the persisted-config module of the release that reads it next, the same read
+// path its daemon loads with: readPersistedConfig applies that release's compatibility normalization
+// (0.17.4 folds providers.openai into the speech settings that use it, gives speech settings without a
+// provider "local", and drops what that provider cannot take), then its strict schema. The plugin merges
+// its keys into that result; it never drops or rewrites user settings beyond what upstream does there.
+async function persistedConfig(root) { return serverModule('dist/server/server/persisted-config.js', root); }
+// Agent Connect never got daemon.name past Paseo's strict schema, but such a key is removed (see
+// writeConfig): that one key is taken out of a private copy, which then goes through the same read path.
+function readDaemonConfig(config, loc = locations()) {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(path.join(loc.paseoHome, 'config.json'), 'utf8').replace(/^\uFEFF/, '')); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw new RuntimeError('CONFIG_CORRUPT'); }
+  const legacyName = !!raw?.daemon && typeof raw.daemon === 'object' && Object.hasOwn(raw.daemon, 'name');
+  try {
+    if (!legacyName) return config.readPersistedConfig(loc.paseoHome);
+    const { name: _name, ...daemon } = raw.daemon, copy = path.join(loc.stateDir, `.config-read-${randomUUID()}`);
+    try { atomicJson(path.join(copy, 'config.json'), { ...raw, daemon }); return config.readPersistedConfig(copy); }
+    finally { fs.rmSync(copy, { recursive: true, force: true }); }
+  } catch {
+    // Valid JSON the release cannot load even after its own normalization.
+    throw new RuntimeError('CONFIG_INCOMPATIBLE');
+  }
+}
 async function currentInstance() { if (!controlRuntimeDirectory() || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
 function instanceNeedsRuntimeRestart(instance) {
  if(process.platform!=='linux'){
@@ -174,11 +197,11 @@ async function applyAgentCollaboration(enabled) {
   const loc = locations(), file = path.join(loc.paseoHome, 'config.json');
   // Not this installation's daemon home, or no config yet: the next start applies the saved choice.
   if (!ownsHome() || !fs.existsSync(file)) return 'next-start';
-  let config;
-  try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); }
+  // Written for the daemon that reloads it: through the persisted-config module of its own release.
+  const module = await persistedConfig(controlRuntimeDirectory() || runtimeDirectory(loc));
+  const config = readDaemonConfig(module, loc);
   if (config.daemon?.mcp?.injectIntoAgents === enabled && config.daemon?.mcp?.enabled === true) return 'unchanged';
-  const { savePersistedConfig } = await serverModule('dist/server/server/config.js');
-  try { savePersistedConfig(loc.paseoHome, { ...config, daemon: { ...config.daemon, mcp: collaborationMcp(config.daemon?.mcp, enabled) } }); fs.chmodSync(file, 0o600); }
+  try { module.savePersistedConfig(loc.paseoHome, { ...config, daemon: { ...config.daemon, mcp: collaborationMcp(config.daemon?.mcp, enabled) } }); fs.chmodSync(file, 0o600); }
   catch { throw new RuntimeError('CONFIG_INVALID'); }
   let instance = null;
   try { instance = await currentInstance(); if (instance) verifyInstanceOwnership(instance); }
@@ -195,29 +218,40 @@ async function applyAgentCollaboration(enabled) {
     return 'restart-required';
   }
 }
-async function writeConfig(port, launchers) {
-  const loc = locations(); const file = path.join(loc.paseoHome, 'config.json');
-  let config = {};
-  if (fs.existsSync(file)) { try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); } }
+/** The plugin's keys merged into a config as its release's readPersistedConfig returned it. */
+function managedConfig(config, port, launchers) {
+  const loc = locations();
   const providers = configureProviders(config.agents?.providers, launchers, loc, inheritedEnv());
   // Paseo's strict daemon schema (0.11.2 and 0.17.4) rejects daemon.name. Display preferences
   // belong to the host plugin; remove any legacy injected name while retaining other fields.
   const daemon = { ...config.daemon };
   delete daemon.name;
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
-  config = {
+  const merged = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
     daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, typeof config.daemon?.mcp?.injectIntoAgents === 'boolean' ? config.daemon.mcp.injectIntoAgents : connectionPreferences(loc).agentCollaboration) },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
   };
-  config = targetConfiguration(config, connectionPreferences(loc).target);
+  return { config: targetConfiguration(merged, connectionPreferences(loc).target), providersChanged };
+}
+async function writeConfig(port, launchers) {
+  const loc = locations(); const file = path.join(loc.paseoHome, 'config.json');
   // Written for this release's daemon: the one about to start, or a running one of this revision.
-  const { savePersistedConfig } = await serverModule('dist/server/server/config.js', runtimeDirectory(loc));
-  try { savePersistedConfig(loc.paseoHome, config); fs.chmodSync(file, 0o600); } catch { throw new RuntimeError('CONFIG_INVALID'); }
+  const module = await persistedConfig(runtimeDirectory(loc));
+  const { config, providersChanged } = managedConfig(readDaemonConfig(module, loc), port, launchers);
+  try { module.savePersistedConfig(loc.paseoHome, config); fs.chmodSync(file, 0o600); } catch { throw new RuntimeError('CONFIG_INVALID'); }
   updateState({ port, providerLaunchers: launchers });
   return providersChanged;
+}
+/** While an older daemon still serves: would the start after an explicit stop accept the config it writes?
+ * Nothing is written. A config this release cannot load would otherwise surface only after that stop,
+ * leaving Paseo down while the supervisor retried the start. */
+async function checkNextStartConfig(launchers) {
+  const loc = locations(), module = await persistedConfig(runtimeDirectory(loc));
+  const { config } = managedConfig(readDaemonConfig(module, loc), loc.port, launchers);
+  if (!module.PersistedConfigSchema.safeParse(config).success) throw new RuntimeError('CONFIG_INVALID');
 }
 function safeProvider(entry) {
   return { provider: entry.provider, label: entry.label || entry.provider, status: entry.status || (entry.available === true ? 'ready' : entry.available === false ? 'unavailable' : 'unknown'), enabled: entry.enabled !== false, defaultModeId: entry.defaultModeId || null, modes: (entry.modes || []).map(mode => ({ id: mode.id, label: mode.label || mode.id })), chatVerified: readState().acceptance?.providers?.some(row => row.provider === entry.provider && row.passed) || false };
@@ -266,12 +300,13 @@ export async function activate(options = {}) {
       const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
         await verifyInstanceOwnership(existing);
-        if (readState().configurationPending === true) {
-          updateState({ phase: 'restart_required', lastError: { code: 'CONFIGURATION_PENDING', at: new Date().toISOString() } });
-          return status();
-        }
-        if(instanceNeedsRuntimeRestart(existing)) {
-          updateState({phase:'restart_required',lastError:{code:'RESTART_REQUIRED',at:new Date().toISOString()}});
+        const configurationPending = readState().configurationPending === true;
+        if (configurationPending || instanceNeedsRuntimeRestart(existing)) {
+          // Only an explicit stop and start applies this, and that start writes this release's config:
+          // check it now, while the running daemon still serves, so the user is not told to stop it in
+          // vain. A failure is reported as itself (CONFIG_INCOMPATIBLE...) with phase 'error'.
+          await checkNextStartConfig(launchers);
+          updateState({ phase: 'restart_required', lastError: { code: configurationPending ? 'CONFIGURATION_PENDING' : 'RESTART_REQUIRED', at: new Date().toISOString() } });
           return status();
         }
         const pending = readState().providerReloadPending;
@@ -355,16 +390,19 @@ export async function refreshPiCatalogIfChanged() {
     return true;
   } catch { return false; }
 }
+const CONFIG_BLOCKERS = new Set(['CONFIG_CORRUPT', 'CONFIG_INCOMPATIBLE', 'CONFIG_INVALID']);
 async function readStatus() {
   const state = readState(); const installed = !!controlRuntimeDirectory(); const owned = ownsHome();
   const daemon = { running: false, reachable: false, owned, pid: null, listen: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
-  let providers = [], diagnosticCode = state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null;
+  // A config the next start cannot write outranks RESTART_REQUIRED: stopping would only take Paseo down.
+  const configBlocker = state.phase === 'error' && CONFIG_BLOCKERS.has(state.lastError?.code) ? state.lastError.code : null;
+  let providers = [], diagnosticCode = configBlocker || (state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null);
   if (installed && owned) {
     try {
       const instance = await currentInstance();
       if (instance) {
         await verifyInstanceOwnership(instance); daemon.running = true; daemon.pid = instance.pid; daemon.listen = instance.listen;
-        if(instanceNeedsRuntimeRestart(instance))diagnosticCode='RESTART_REQUIRED';
+        if(instanceNeedsRuntimeRestart(instance))diagnosticCode=configBlocker||'RESTART_REQUIRED';
         const key=JSON.stringify([locations().paseoHome,instance.pid,instance.startedAt,state.updatedAt]);
         const sample = await daemonStatusWindow(key,()=>withClient(client => client.getDaemonStatus({ timeout: 5000 }), 8000));
         const result=sample.value;

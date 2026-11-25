@@ -15,6 +15,8 @@ import { privateDirectory, RuntimeError } from '../src/state.mjs';
 import { PROVIDER_PACKAGES, providersPrefix, resolveProviderLaunchers, configureProviders } from '../src/provider-launchers.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 import * as runtimeLayout from '../src/runtime-layout.mjs';
+import { loadPersistedConfig } from './helpers/paseo-config.mjs';
+const config0174 = await loadPersistedConfig(runtimeLayout.PASEO_VERSION);
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-launchers-'));
@@ -272,7 +274,7 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };
-    if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => fs.writeFileSync(configFile, JSON.stringify(config)) };
+    if (spec.endsWith('/persisted-config.js')) return config0174;
     if (spec === 'node:net') return { createServer: () => assert.fail('no live sockets') };
     return require(spec);
   };
