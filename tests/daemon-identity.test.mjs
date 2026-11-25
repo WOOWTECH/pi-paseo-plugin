@@ -766,8 +766,10 @@ test('a healthy start from this release removes the older releases nothing needs
  f.keep();
 });
 
-test('nothing is pruned while an older daemon serves; the release it needs for control stays until the upgrade is done',async t=>{
+test('nothing is pruned while an older daemon serves, and no leftover is finished either; the release it needs for control stays until the upgrade is done',async t=>{
  const f=fixture(t);seedOlder(f,['r3a','r2']);const old=f.prior({generation:'r4',prepared:true});
+ // What an earlier deletion left: a leftover is no release, but the activation that ends in RESTART_REQUIRED returns before the pruning step.
+ fs.mkdirSync(path.join(f.loc.runtimeDir,'releases','.pruning-'+R3B+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'));
  const all=releaseNames(f);
  assert.equal((await activated(f)).phase,'restart_required');
  assert.deepEqual(releaseNames(f),all);assert.equal(state.readState().lastPrune,undefined);
@@ -775,7 +777,7 @@ test('nothing is pruned while an older daemon serves; the release it needs for c
  const started=await activated(f);
  assert.equal(started.phase,'running');assert.equal(f.starts(),1);
  assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());assert.equal(layout.previousRuntimeDirectory(f.loc),old);
- assert.deepEqual(plain(state.readState().lastPrune.removed).sort(),[R2,R3A].sort());
+ assert.deepEqual(plain(state.readState().lastPrune.removed).sort(),[R2,R3A,R3B].sort(),'the start that ends healthy removes the old releases and finishes the leftover');
 });
 
 test('a release that a live process pins stays, whichever home it serves; a process of this home that pins none stops the pruning',async t=>{
@@ -957,7 +959,7 @@ test('a leftover of an earlier deletion is finished at the next activation, even
  await activated(f);
  assert.deepEqual(releaseNames(f),['.pruning-custom',R4,layout.RUNTIME_REVISION].sort());
  const prune=plain(state.readState().lastPrune);assert.deepEqual(prune.removed,[R3A]);assert.deepEqual(prune.failed,[]);assert.deepEqual(prune.kept,[layout.RUNTIME_REVISION,R4]);
- // Also while an older daemon serves and nothing else may be pruned: a leftover is no release.
+ // Also when a process of this home that pins no release makes the scan inconclusive, so that nothing new may be claimed: a leftover is no release.
  fs.mkdirSync(path.join(f.loc.runtimeDir,'releases/.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4e'));
  f.process({home:f.loc.paseoHome,noRevision:true,noConnectionProfile:true});
  await activated(f);assert.equal(releaseNames(f).some(name=>name.includes(R2)),false);

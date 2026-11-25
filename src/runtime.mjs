@@ -226,8 +226,11 @@ function verifyInstanceOwnership(instance, control) {
 }
 /** Behind a healthy daemon of this release, the older releases nothing needs are removed (runtime-layout.mjs: it keeps
  * this release, the newest earlier one for a rollback, every newer one, and what a live process still pins).
- * Nothing is claimed unless this release's daemon is the one control resolves to; leftovers of an earlier removal
- * are finished whatever else is running, they are no release any more.
+ * Nothing new is claimed unless this release's daemon is the one control resolves to, the releases that live processes
+ * pin stay, and a process the scan cannot see through (runningRevisions) stops the claiming for this time. Leftovers of an
+ * earlier removal are no release any more, so they are finished even then. This runs at the end of an activation that
+ * ends healthy. One that returns RESTART_REQUIRED (an older daemon still serves) returns before it: it claims nothing and
+ * finishes no leftover either.
  * Under the runtime lock only the cheap part happens: reading, deciding, renaming. It returns what is left to delete,
  * and removeInBackground deletes it after the lock is released: a 0.7 GB tree takes long on an SD card, and a
  * pairing or a stop must not wait for it. Best effort throughout: it never throws, so a failed removal cannot fail an
