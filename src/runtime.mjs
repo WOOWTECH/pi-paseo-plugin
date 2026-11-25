@@ -14,7 +14,6 @@ import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
 import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION} from './runtime-layout.mjs';
-import { ensureWebClient, webClientStatus } from './web-client.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -203,13 +202,28 @@ async function withClient(fn, timeoutMs = 30000) {
   } catch (error) { throw new RuntimeError(safeCode(error)); }
   finally { clearTimeout(timer); await client.close().catch(() => {}); }
 }
+// 0.1.9-0.1.22 downloaded a patched Paseo web build into <stateDir>/web-client for the
+// Paseo target. The target now opens the official app, so drop that copy: only the
+// release (<sha256>) and staging (.stage-<uuid>) entries those versions created, then the
+// directory if nothing else is left. A symlinked web-client is left alone, rmSync never
+// follows links, and a failure never blocks activation; the next activation tries again.
+const RETIRED_WEB_ENTRY = /^(?:[a-f0-9]{64}|\.stage-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+function removeRetiredWebClient(loc) {
+  const dir = path.join(loc.stateDir, 'web-client');
+  try {
+    if (!fs.lstatSync(dir).isDirectory()) return;
+    for (const name of fs.readdirSync(dir)) if (RETIRED_WEB_ENTRY.test(name)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    fs.rmdirSync(dir);
+  } catch { /* absent, holds other entries, or not removable now */ }
+}
 export async function activate(options = {}) {
   return withRuntimeLock(async () => {
     ensureOwnedHome(); updateState({ desiredEnabled: true, phase: 'installing', lastError: null });
     try {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
+      // Before the runtime install, so a host short of disk gets the retired copy's space back first.
+      removeRetiredWebClient(locations());
       await installRuntime();
-      if (connectionPreferences(locations()).target === 'paseo') await ensureWebClient(locations());
       let existing = await currentInstance();
       if (existing) {
         try { verifyInstanceOwnership(existing); }
@@ -379,7 +393,6 @@ export async function pair() {
   return withRuntimeLock(async () => {
     const target = connectionPreferences(locations()).target;
     if (readState().configurationPending === true || (readState().activeTarget || 'paseo') !== target) throw new RuntimeError('CONFIGURATION_PENDING');
-    if (target === 'paseo' && !webClientStatus(locations()).ready) throw new RuntimeError('WEB_CLIENT_NOT_READY');
     const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
     const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
     if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');

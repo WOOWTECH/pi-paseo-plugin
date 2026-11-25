@@ -5,7 +5,7 @@ import { RuntimeError } from './state.mjs';
 // Verified against WOOWTECH/woowtech-smart 9214c6ea87 brand manifests.
 // These are connection profiles, not replacements for the branded push sender.
 export const CONNECTION_TARGETS = Object.freeze([
-  Object.freeze({ id: 'paseo', label: 'Paseo', appUrl: 'https://app.paseo.sh', relayEndpoint: 'relay.paseo.sh:443', openUrl: '/paseo-web' }),
+  Object.freeze({ id: 'paseo', label: 'Paseo', appUrl: 'https://app.paseo.sh', relayEndpoint: 'relay.paseo.sh:443', openUrl: 'https://app.paseo.sh/' }),
   Object.freeze({ id: 'woowtech', label: 'Woowtech Smart', appUrl: 'https://smart.woowtech.io', relayEndpoint: 'relay.woowtech.io:443', openUrl: 'https://smart.woowtech.io/' }),
   Object.freeze({ id: 'apporo', label: 'Apporo Smart', appUrl: 'https://smart.apporo.ai', relayEndpoint: 'relay.apporo.ai:443', openUrl: 'https://smart.apporo.ai/' }),
 ]);
@@ -62,5 +62,5 @@ export function targetPairUrl(official, target = 'paseo') {
   try { offer = JSON.parse(Buffer.from(url.hash.slice(7), 'base64url').toString('utf8')); }
   catch { throw new RuntimeError('PAIRING_OFFER_INVALID'); }
   if (offer?.v !== 2 || typeof offer.serverId !== 'string' || !offer.serverId || typeof offer.daemonPublicKeyB64 !== 'string' || !offer.daemonPublicKeyB64 || offer.relay?.endpoint !== profile.relayEndpoint || offer.relay?.useTls !== true) throw new RuntimeError('PAIRING_TARGET_MISMATCH');
-  return target === 'paseo' ? `/paseo-web/welcome${url.hash}` : `${profile.appUrl}/${url.hash}`;
+  return `${profile.appUrl}/${url.hash}`;
 }

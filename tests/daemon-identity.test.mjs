@@ -34,7 +34,7 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:'0.11.2'}));
  fs.mkdirSync(path.join(server,'dist/server/web-ui'),{recursive:true});fs.writeFileSync(path.join(server,'dist/server/web-ui/index.html'),'fixture');seedPidFiles(loc);layout.markRuntimeReady(loc);
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),proofFile=path.join(loc.stateDir,'daemon-instance.private.json');
- const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,webBuilds=0,allowStop=false;
+ const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false;
  function publish(mode=0o644){const pid=++nextPid;const birth={bootId,startTicks:String(pid),uid:process.getuid()};processes.set(pid,{...birth,role:'owned',home:loc.paseoHome});const lock={pid,startedAt:new Date().toISOString(),uid:process.getuid(),bootId,heartbeat:true,piPaseoProtocol:'linux-flock-v1',listen:'127.0.0.1:27669',hostname:'fixture'};fs.writeFileSync(pidFile,JSON.stringify(lock),{mode});return lock;}
  const initial=publish();const initialBytes=fs.readFileSync(pidFile);
  fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify({custom:'preserve',auth:{fixture:'retain'}}),{mode:0o600});
@@ -59,7 +59,6 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./runtime-layout.mjs')return layout;
   if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
-  if(spec==='./web-client.mjs')return {ensureWebClient:async()=>{webBuilds++;return {ready:true};},webClientStatus:()=>({ready:true}),managedPairUrl:()=>'/paseo-web/welcome#fixture'};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
   if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version')return '0.11.2';if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true}})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>loadInstance(),stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
@@ -69,7 +68,7 @@ function fixture(t, { platform = process.platform } = {}) {
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,webBuilds:()=>webBuilds,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -172,7 +171,57 @@ test('status cannot recover or enable a disabled installation',async t=>{
 
 test('pair uses reachable daemon and preserves proof without entering lifecycle recovery',async t=>{
  const f=fixture(t);await f.runtime.activate();const proof=fs.readFileSync(f.proofFile);
- const result=await f.runtime.pair();assert.match(result.url,/^\/paseo-web\/welcome#offer=/);assert.equal(result.target,'paseo');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
+ const result=await f.runtime.pair();assert.match(result.url,/^https:\/\/app\.paseo\.sh\/#offer=/);assert.equal(result.target,'paseo');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
+});
+
+const RELEASE='a'.repeat(64),STAGE='.stage-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+test('activation removes the bundled web copy that 0.1.9-0.1.22 downloaded and keeps private state',async t=>{
+ const f=fixture(t),web=path.join(f.loc.stateDir,'web-client'),retired=path.join(web,RELEASE);
+ fs.mkdirSync(path.join(retired,'_expo/static'),{recursive:true});fs.writeFileSync(path.join(retired,'index.html'),'retired');fs.writeFileSync(path.join(retired,'_expo/static/app.js'),'retired');
+ fs.mkdirSync(path.join(web,STAGE,'content'),{recursive:true});fs.writeFileSync(path.join(web,STAGE,'client.tar.gz'),'partial');
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(web),false);
+ assert.equal(fs.readFileSync(path.join(f.loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');
+ assert.equal(fs.readFileSync(path.join(f.loc.paseoHome,'agents.db'),'utf8'),'retain-data');
+});
+
+test('only the entries the bundled client created are removed from web-client',async t=>{
+ const f=fixture(t),web=path.join(f.loc.stateDir,'web-client');
+ fs.mkdirSync(path.join(web,RELEASE),{recursive:true});fs.writeFileSync(path.join(web,RELEASE,'index.html'),'retired');
+ fs.writeFileSync(path.join(web,'notes.txt'),'unrelated');fs.mkdirSync(path.join(web,'b'.repeat(63)));
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(path.join(web,RELEASE)),false);
+ assert.equal(fs.readFileSync(path.join(web,'notes.txt'),'utf8'),'unrelated');
+ assert.equal(fs.statSync(path.join(web,'b'.repeat(63))).isDirectory(),true);
+});
+
+test('a symlinked web-client is left in place',async t=>{
+ const f=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-web-outside-'));
+ t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(outside,RELEASE));fs.writeFileSync(path.join(outside,RELEASE,'keep.txt'),'keep');fs.symlinkSync(outside,path.join(f.loc.stateDir,'web-client'));
+ await f.runtime.activate();
+ assert.equal(fs.lstatSync(path.join(f.loc.stateDir,'web-client')).isSymbolicLink(),true);
+ assert.equal(fs.readFileSync(path.join(outside,RELEASE,'keep.txt'),'utf8'),'keep');
+});
+
+test('a symlink inside the retired copy is removed without touching its target',async t=>{
+ const f=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-web-outside-')),retired=path.join(f.loc.stateDir,'web-client',RELEASE);
+ t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(outside,'keep.txt'),'keep');fs.mkdirSync(retired,{recursive:true});fs.symlinkSync(outside,path.join(retired,'assets'));
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(path.join(f.loc.stateDir,'web-client')),false);
+ assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'keep');
+});
+
+test('a retired copy that cannot be removed does not block activation',{skip:process.getuid?.()===0&&'root bypasses directory permissions'},async t=>{
+ const f=fixture(t),locked=path.join(f.loc.stateDir,'web-client',RELEASE,'locked');
+ fs.mkdirSync(locked,{recursive:true});fs.writeFileSync(path.join(locked,'file'),'retired');fs.chmodSync(locked,0o500);
+ // Restore inside the test: the fixture's own cleanup hook runs first and needs to delete the tree.
+ try {
+  await f.runtime.activate();
+  assert.equal(fs.readFileSync(path.join(locked,'file'),'utf8'),'retired');
+  const result=await f.runtime.pair();assert.match(result.url,/^https:\/\/app\.paseo\.sh\/#offer=/);
+ } finally { fs.chmodSync(locked,0o700); }
 });
 
 for(const copy of ['dist/server/server','dist/src/server'])test('unpatched runtime '+copy+' refuses reclaim even with old valid proof',async t=>{
@@ -213,7 +262,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  const f=fixture(t);await f.runtime.activate();
  const configFile=path.join(f.loc.paseoHome,'config.json');
  const original=fs.readFileSync(configFile),pid=fs.readFileSync(f.pidFile);
- const webBuilds=f.webBuilds();
  await f.runtime.saveConnectionSettings({target:'woowtech'});
  const pending=await f.runtime.activate();
  assert.equal(pending.phase,'restart_required');
@@ -221,7 +269,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  assert.deepEqual(fs.readFileSync(configFile),original);
  assert.deepEqual(fs.readFileSync(f.pidFile),pid);
  assert.equal(f.starts(),0);assert.equal(f.stops(),0);
- assert.equal(f.webBuilds(),webBuilds,'branded activation never fetches the Paseo web client');
  await assert.rejects(f.runtime.pair(),{code:'CONFIGURATION_PENDING'});
  f.permitStop();await f.runtime.deactivate();await f.runtime.activate();
  assert.equal(f.starts(),1);assert.equal(f.stops(),1);
@@ -230,7 +277,6 @@ test('changing a running target defers all daemon mutation until an explicit sto
  const configured=JSON.parse(fs.readFileSync(configFile));
  assert.equal(configured.app.baseUrl,'https://smart.woowtech.io');
  assert.equal(configured.daemon.relay.endpoint,'relay.woowtech.io:443');
- assert.equal(f.webBuilds(),webBuilds);
  const pairing=await f.runtime.pair();
  assert.equal(pairing.target,'woowtech');
  assert.match(pairing.url,/^https:\/\/smart\.woowtech\.io\/#offer=/);
