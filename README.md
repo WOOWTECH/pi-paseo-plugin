@@ -19,11 +19,36 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 
 `0.1.23` 起不再附內建網頁：Paseo 選項跟兩個 Smart 一樣開啟官方網站 `https://app.paseo.sh`，並在那裡配對。Pi Web 的 `/paseo-web` 路由與網頁包下載（約 11 MB）一併移除；啟動服務時會刪掉舊版留在插件狀態目錄 `web-client` 的網頁檔（只刪舊版建立的項目，不跟隨符號連結，刪不掉也不影響啟動）。升級後要重新啟動 Pi Web（原生與容器的升級流程都會重啟）；重啟前，仍在執行的舊版 Pi Web 無法為 Paseo 產生配對連結，開著的 `/paseo-web` 分頁也會失效。用 `/paseo-web` 配對過的瀏覽器要在官方網站重新配對一次；主機身分、登入與對話不變。0.1.9–0.1.22 內建的修正版（Paseo Web 0.13.0-woow.1）帶有兩項顯示修補：回覆途中重新整理時重複顯示，以及長回覆重連後只剩中間一段。上游 [PR #7908](https://github.com/getpaseo/paseo/pull/7908) 合併並部署前，官方網站可能仍會出現這兩個情況；後端對話不受影響。背景見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 
-`0.1.24` 起管理的 Paseo daemon 從 0.11.2 升到 0.17.4（managed runtime revision `0.17.4-r1-a651f42711da`）。升級後第一次啟用只在新的版本目錄安裝 0.17.4，不會停掉執行中的 0.11.2 daemon：它繼續服務並回報 `RESTART_REQUIRED`，這段期間的狀態、配對、設定重新載入與停止都交給它自己的 0.11.2 版本處理。在設定頁停止再啟動服務後，同一個 `PASEO_HOME` 改由 0.17.4 執行；設定、對話資料、server ID 與 daemon 金鑰（配對連結裡的主機身分）都保留。舊版本目錄（0.1.18–0.1.23 的 `0.11.2-r4-4cf9d40940bf`）留著供退回，只用來控制舊 daemon，不會再被啟動。退回 0.1.23 也要停止再啟動一次；0.17.4 期間若有 Paseo 用戶端寫入 0.11.2 不認得的設定，舊版會以 `CONFIG_INVALID` 拒絕，須先移除該設定。0.17.4 啟動時搬進聽寫／語音設定的 OpenAI `apiKey`、`baseUrl` 也算這類，退回前要搬回 `providers.openai`。Smart App 的原始碼是 0.10.1 版，只會舊版 relay 加密。daemon 的 `daemon.relay.requireProtectedSecurity` 一開，配對連結就會要求新版加密，Smart App 用不了。所以選 Woowtech／Apporo Smart 時，插件每次啟動都把它設回 false。服務執行中若又被打開（Paseo 用戶端的主機設定或 `paseo daemon config` 都能改，而且立即生效），產生配對連結會回報 `PAIRING_SECURITY_UNSUPPORTED`，不會給出 Smart App 用不了的連結；停止再啟動服務即可。選 Paseo 時，這項設定由用戶端決定，插件不動。
+`0.1.24` 起管理的 Paseo daemon 從 0.11.2 升到 0.17.4（managed runtime revision `0.17.4-r1-a651f42711da`）。升級後第一次啟用只在新的版本目錄安裝 0.17.4，不會停掉執行中的 0.11.2 daemon：它繼續服務並回報 `RESTART_REQUIRED`，這段期間的狀態、配對、設定重新載入與停止都交給它自己的 0.11.2 版本處理。在設定頁停止再啟動服務後，同一個 `PASEO_HOME` 改由 0.17.4 執行；設定、對話資料、server ID 與 daemon 金鑰（配對連結裡的主機身分）都保留。舊版本目錄（0.1.18–0.1.23 的 `0.11.2-r4-4cf9d40940bf`）留著供退回，只用來控制舊 daemon，不會再被啟動；何時清理見下方「磁碟空間與舊版本目錄」。退回 0.1.23 也要停止再啟動一次；0.17.4 期間若有 Paseo 用戶端寫入 0.11.2 不認得的設定，舊版會以 `CONFIG_INVALID` 拒絕，須先移除該設定。0.17.4 啟動時搬進聽寫／語音設定的 OpenAI `apiKey`、`baseUrl` 也算這類，退回前要搬回 `providers.openai`。Smart App 的原始碼是 0.10.1 版，只會舊版 relay 加密。daemon 的 `daemon.relay.requireProtectedSecurity` 一開，配對連結就會要求新版加密，Smart App 用不了。所以選 Woowtech／Apporo Smart 時，插件每次啟動都把它設回 false。服務執行中若又被打開（Paseo 用戶端的主機設定或 `paseo daemon config` 都能改，而且立即生效），產生配對連結會回報 `PAIRING_SECURITY_UNSUPPORTED`，不會給出 Smart App 用不了的連結；停止再啟動服務即可。選 Paseo 時，這項設定由用戶端決定，插件不動。
 
 **無法核對的 daemon：** 狀態、配對、設定重新載入與停止，一律交給啟動該 daemon 的那個版本目錄處理，而且只認得 0.1.4–0.1.23 實際出過的四個 0.11.2 版本（`0.11.2-r4-4cf9d40940bf`、`0.11.2-r3-4cf9d40940bf`、`0.11.2-r3-6d8dbe515479`、`0.11.2-r2-6d8dbe515479`）。執行中的 daemon 若由其他版本啟動，例如較新版插件、0.1.1–0.1.3 的 r1，或版本目錄已刪除、驗證不過，插件回報 `DAEMON_RELEASE_UNAVAILABLE`，不會改用 0.17.4 的模組去控制或停止它，也不會另外啟動第二個。處理方式：裝回啟動它的插件版本並停止服務，或重新啟動容器／主機讓它結束，再啟用。macOS 上 0.1.4–0.1.17 啟動的 daemon 沒有記錄版本，由留著的 r3／r2 版本目錄處理。
 
 **升級時的設定轉換：** 0.17.4 第一次啟動前，插件先用 0.17.4 自己的讀取流程載入 `config.json`，再寫入插件管理的欄位。0.11.2 接受、但 0.17.4 嚴格格式不收的語音設定，照上游規則改寫：`providers.openai` 的金鑰與網址搬進選用 OpenAI 的聽寫／語音設定；沒寫 `provider` 的語音設定補成 `local`；`local` 用不到的欄位（`confidenceThreshold`、`voice` 等）移除。其他設定不動。舊 daemon 還在服務時，插件會先用 0.17.4 檢查下次啟動要寫入的設定。檢查不過時，回報 `CONFIG_INCOMPATIBLE`（`config.json` 有 0.17.4 無法載入的設定）或 `CONFIG_CORRUPT`（不是有效的 JSON），狀態顯示「需要處理」，不是「需要重新啟動」。這時先不要停止服務，舊 daemon 照常服務。要找出哪一項設定，執行 `node ~/.local/share/pi-paseo/runtime/releases/0.17.4-r1-a651f42711da/node_modules/@getpaseo/cli/bin/paseo daemon config get --home <插件狀態目錄>/daemon`，它會列出無法載入的設定路徑。修正或移除後，狀態回到 `RESTART_REQUIRED`，再停止並啟動。
+
+**退回 0.1.23 的限制：** 除了上面的設定，還有 agent 的選項。0.17.4 讀到舊的 agent 記錄時，把 `config.featureValues`（0.11.2 把輸入框裡設定的選項存在這裡）併入 `config.providerOptions`，並把 `features` 改成 `controls`；記錄之後被寫回（開啟、續聊、狀態更新）時就以新格式存檔，0.17.4 不再寫 `featureValues` 與 `features`。0.11.2 只從 `config.featureValues` 和 `features` 讀這些選項，不認得 `controls`（讀取時略過），所以退回 0.1.23 後，已被 0.17.4 寫回的 agent 不會帶回在輸入框設定過的選項，需要重新設定。上面 OpenAI 金鑰搬移與 `CONFIG_INVALID` 的限制照舊。
+
+**0.17.4 的預設值：** 下面兩項在 0.17.4 預設開啟，升級後行為會變。兩項都能即時重新載入：在 `config.json`，或用 `daemon config set <路徑> false --home <插件狀態目錄>/daemon` 改成 `false`（`paseo` 指令用上方 `config get` 的路徑），不必重新啟動。
+- `agents.idleRuntimeCleanup`（0.11.2 沒有）：agent 閒置滿 60 分鐘（沒有進行中的工作，也沒有等待它的訊息或訂閱）時，daemon 關閉它的執行期程序；記錄與對話保留為已關閉，下次傳訊息時再開啟。daemon 每分鐘檢查一次。
+- `daemon.usage.enabled`（0.11.2 的用量查詢沒有開關，也是開著）：App 的用量標示向 daemon 查詢時，內建的 Claude／Codex 用量來源會讀這台主機的登入檔，拿裡面的憑證呼叫供應商的用量 API。讀的是 `~/.claude/.credentials.json`（或 `CLAUDE_CONFIG_DIR`）、Pi 的 `auth.json`，以及 `~/.codex/auth.json`（或 `CODEX_HOME`）；呼叫 `api.anthropic.com/api/oauth/usage` 與 `chatgpt.com/backend-api/wham/usage`，結果快取 5 分鐘。只在有用戶端查詢時才會執行；設成 `false` 後，用量查詢回報 `Usage is off on this host.`
+
+**`RESTART_REQUIRED` 與版本欄位：** `restart_required`（`diagnosticCode: RESTART_REQUIRED`）表示 daemon 仍健康地服務，但它現在執行的內容和插件下次啟動要用的不同；插件不會替你停止它，要在設定頁或用 `node bin/cli.mjs stop`、`start` 停止再啟動。原因有三種：daemon 由較舊的 runtime 版本目錄啟動（例如升級後的 0.11.2）；存了新的連線標的（狀態同時帶 `configurationPending: true`）；即時重新載入的設定，daemon 回報須重新啟動。`status` 的 `version` 是已安裝、下次啟動會用的 Paseo 版本，`daemon.version` 才是正在服務的版本：升級後第一次啟用，`version` 是 0.17.4，`daemon.version` 仍是 0.11.2，直到那次停止再啟動。Pi Web 設定頁只顯示階段，不顯示這兩個欄位；`node bin/cli.mjs status` 與 `paseo_status` 工具兩個都有。
+
+**終端機 worker 與 `ps`（Linux）：** 0.17.4 的終端機由獨立的 terminal worker 持有，不是 daemon 的子程序。行程是 `node <PASEO_HOME>/terminal-worker/<Paseo 版本>-<雜湊>/terminal-worker.mjs --paseo-terminal-worker <記錄 ID> --paseo-home <PASEO_HOME> …`，以 detached 方式啟動、由 init 接手，所以 daemon 重新啟動或當機時終端機還在，新 daemon 會接回。worker 的記錄在 `<PASEO_HOME>/terminal-worker/<pid>.json`，沒能確認完成的清理另存為同目錄的 `closing-<記錄 ID>.json`，日誌在 `<PASEO_HOME>/terminal-worker.log`。停止時，daemon 的 supervisor 與 Paseo 的停止流程各清理一次，關閉所有終端機及其程式；啟動時再處理上次沒能確認的記錄，並移除沒有記錄使用的 worker 副本。
+
+找出哪些程序屬於哪個終端機要靠 `ps`：Paseo 在執行停止或啟動的那個行程裡，以該行程 PATH 上的 `ps`，用 `LC_ALL=C` 執行 `ps -A -ww -o pid= -o ppid= -o sid= -o lstart=` 與 `ps -ww -p <pid> -o lstart= -o command=`，以出生時間比對終端機的程式。所以 Linux 主機要有 procps 的 `ps`；精簡映像、busybox／Alpine 的 `ps` 不一定接受這些參數。macOS 同樣從 PATH 找 `ps`，用不含 `sid` 欄的 `ps -A -ww -o pid= -o ppid= -o lstart=`；這是讀原始碼的結果，插件不檢查 macOS 的 `ps`，也沒有在 macOS 上實測。沒有可用的 `ps` 時：
+- 啟動與診斷時，插件用同樣的兩個指令檢查一次，回報 `PS_UNAVAILABLE`（跑不起來或逾時）或 `PS_INCOMPATIBLE`（不接受參數或輸出不對）警告。這只是警告，不擋啟動，也不影響 `health` 是否 ready。
+- 開過終端機的主機，停止時 Paseo 無法確認終端機程序已結束，丟出 `TERMINAL_CLEANUP_NOT_CONFIRMED`。這時 daemon 已經停止、PID 鎖已經釋放，插件就把這次停止視為完成：階段 `disabled`，並記下 `TERMINAL_CLEANUP_NOT_CONFIRMED` 警告。Paseo 對確認不了的程序不送任何訊號，保留 `closing-*.json`，終端機裡的 shell 和工作可能留成孤兒程序。裝好 procps 後，再啟動服務（啟動時 Paseo 會重試並關閉），或對那個 `PASEO_HOME` 執行 `paseo daemon stop`，清理就完成，警告隨之消失。daemon 還在執行、或 PID 鎖還在時，仍然是錯誤，與之前相同。
+- 警告出現在 `status`、`diagnose`、`health` 的 `warnings`（`status`、`diagnose` 每項是 `{code, at}`，`health` 只列代碼）與 `paseo_status`、`paseo_diagnose` 工具，停止指令的結果也帶 `warnings`（只列代碼）。Pi Web 設定頁只顯示白名單欄位，不顯示這些警告。
+
+**停止的時間：** 停止要等 supervisor 結束，最久 45 秒：daemon worker 的關閉最多 10 秒（逾時 Paseo 自己終止它的程序樹），每筆終端機 worker 記錄最多 13 秒（5 秒請它關閉、5 秒等待、終止後 3 秒確認），一個 daemon 最多 2 個 worker，再加緩衝。這之後 Paseo 還會在執行停止的行程裡再清理一次終端機，不算在 45 秒內；插件的 supervisor 等這整段做完才結束，上限 81 秒。逾時回報 `STOP_NOT_CONFIRMED`，狀態維持原樣，插件不強制終止任何程序（沒有 `--force`）：daemon 若還在，等它自己結束，或由你處理。0.11.2 沒有終端機清理，停止只等 supervisor 結束。
+
+**磁碟空間與舊版本目錄：** 每個 runtime 版本目錄裝好約 0.6–0.7 GB（實測 0.11.2 約 565 MB，0.17.4 約 713 MB），升級後新舊並存約 1.3 GB。目前版本的 daemon 健康啟動之後，插件移除用不到的舊版本目錄（舊 daemon 仍在服務的 `RESTART_REQUIRED` 期間，以及停止時，都不清理），並在 `state.json` 的 `lastPrune` 記下 `removed`、`kept`、`failed` 的版本名稱（只有名稱，沒有路徑）。保留：
+- 目前版本；
+- 比目前版本舊的版本裡最新的那一個，作為退回用（0.1.24 之後是 `0.11.2-r4-4cf9d40940bf`）。排序依 Paseo 版本、revision 號碼、收據時間；比目前版本新的目錄不算退回目標；
+- 還有程序在它的環境變數 `PI_PASEO_RUNTIME_REVISION` 指向的版本，不論那個程序服務哪個 home（Linux 掃描同一使用者的 `/proc`；其他系統只認這個 home 自己的 daemon）。這個 home 有程序在執行卻看不出它用哪個版本時，這次不清理（`lastPrune.skipped: RELEASE_IN_USE_UNKNOWN`），下次啟用再試；
+- 不能確認是插件建立的一切。要同時符合：目錄名是 `<Paseo 版本>-r<n>-<12 位雜湊>`；是真正的目錄（不跟隨符號連結）；`.pi-paseo-runtime.json` 是一般檔案，其 `revision` 等於目錄名，`lockSha256` 以目錄名的雜湊開頭。別的名稱、檔案、符號連結、沒有收據或收據對不上的目錄、舊版留下的 `<runtimeDir>/node_modules`（舊版控制用副本），以及 `releases/` 以外的東西，一律不動。
+
+版本目錄先改名成 `.pruning-<版本名>-<UUID>` 再刪，不會留下半個還像版本目錄的東西；刪到一半失敗，下次接著刪；刪除不跟隨符號連結。清理盡力而為，失敗只記在 `lastPrune.failed`，不影響啟用與狀態。代價是退回只到前一個版本：再經過一次升級，要退回更早的插件版本，須重新下載它的 runtime（需要網路）。
 
 ## 0.1.10 PID 復原修補
 
@@ -37,7 +62,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 
 ## 相容版本
 
-- Node.js 22.19.0+、npm、git。Linux（包含 Windows 既有 WSL2、Ubuntu、k3s/PaaS、HA add-on）需要 util-linux `flock`；macOS 使用 Node SQLite 交易鎖。原生 Windows 不在本次範圍。各平台的真實部署與 provider 驗收須分別記錄，不能由來源測試推定通過。
+- Node.js 22.19.0+、npm、git。Linux（包含 Windows 既有 WSL2、Ubuntu、k3s/PaaS、HA add-on）需要 util-linux `flock`，以及 procps 的 `ps`（Paseo 0.17.4 停止與啟動時用它確認終端機程序已結束；缺少的後果見上方「終端機 worker 與 `ps`」）；macOS 使用 Node SQLite 交易鎖。原生 Windows 不在本次範圍。各平台的真實部署與 provider 驗收須分別記錄，不能由來源測試推定通過。
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
 - Paseo `@getpaseo/cli` 0.17.4（managed runtime revision `0.17.4-r1-a651f42711da`），使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。0.1.18–0.1.23 安裝的 `0.11.2-r4-4cf9d40940bf` 等 0.11.2 版本目錄只保留給升級前仍在執行的 daemon 停止使用。
@@ -164,7 +189,7 @@ node bin/cli.mjs stop
 
 ## 資料與生命週期
 
-預設狀態放在 `$PI_CODING_AGENT_DIR/pi-paseo/`，未設定時使用 `~/.pi/agent/pi-paseo/`；Paseo 自有 home 位於該狀態目錄的 `daemon/`。runtime 使用 lockfile 雜湊識別獨立版本，不覆寫正在使用的舊依賴；更新後若 daemon 尚在使用舊版本，需停止後啟動或透過既有容器服務重啟。套件與整合層放在 `~/.local/share/pi-paseo/`。provider 的 HOME 和 Pi data directory 沿用原環境。
+預設狀態放在 `$PI_CODING_AGENT_DIR/pi-paseo/`，未設定時使用 `~/.pi/agent/pi-paseo/`；Paseo 自有 home 位於該狀態目錄的 `daemon/`。runtime 使用 lockfile 雜湊識別獨立版本，不覆寫正在使用的舊依賴；更新後若 daemon 尚在使用舊版本，需停止後啟動或透過既有容器服務重啟。新版本健康啟動後，不再需要的舊版本目錄依「磁碟空間與舊版本目錄」的規則清理。套件與整合層放在 `~/.local/share/pi-paseo/`。provider 的 HOME 和 Pi data directory 沿用原環境。
 
 daemon 預設只監聽 loopback 的 6769 埠，埠被占用時選擇其他可用埠。relay 配對不需要對外開啟容器埠。背景 supervisor 每 15 秒只讀 PID 鎖與 `/proc` 的程序 metadata，故障時恢復插件服務；它不向 daemon 查狀態，因為 Paseo 每回答一次狀態查詢，就對每個啟用的 provider 執行一次 `--version`（4 核 H618 上，原本的 15 秒輪詢約佔閒置 CPU 的六成）。這不會週期性呼叫模型。Pi 的 `models.json` 或 `settings.json` 在 daemon 建好 Pi 模型清單之後有變動時，supervisor 會請 daemon 重建一次 Pi 清單（每次變動只試一次，失敗也不重試）；`models pi` 讀取前也做同樣的檢查。Pi Web 整合層在重啟後恢復 supervisor。
 
@@ -180,6 +205,8 @@ npm run typecheck
 node scripts/check-package.mjs
 node scripts/verify-package-install.mjs
 node scripts/verify-host.mjs
+# 選用，不在 CI：真實 daemon 的升級實測（見「商業部署維護」）
+PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs
 npm audit --omit=dev
 npm audit --omit=dev --prefix runtime
 npm pack --ignore-scripts
@@ -192,6 +219,8 @@ npm pack --ignore-scripts
 ## 商業部署維護
 
 `health` 輸出不含秘密；只有已安裝、啟用、程序屬於本插件、服務可達且三種 provider 可啟動時才回傳 exit 0。真正對話及 relay 配對另外顯示驗證時間，不能以歷史成功取代目前連線健康。
+
+升級實測（選用，不在 CI）：`PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|fresh]` 用真實的 Paseo daemon 走一次升級。它會下載兩個 runtime（約 1.3 GB）、啟動真實 daemon，要幾分鐘；需要 Linux、tar、npm 與 npm registry 連線，以及含 0.1.23 的 git 歷史（commit `152e1c3`；`PI_PASEO_UPGRADE_OLD_REF` 可指定別的）。沒設 `PI_PASEO_UPGRADE_SMOKE=1`，或不在 Linux，就直接略過。全部在一個暫存目錄裡：獨立的 HOME、插件狀態與 runtime 目錄，PATH 前面放會失敗的 provider 指令，所以不會安裝或啟動任何 provider；結束時刪除暫存目錄與所有指向它的程序，包含終端機 worker。不會讀寫使用者自己的 Paseo；daemon 會像一般安裝那樣，以一次性的身分連 relay.paseo.sh。`upgrade`：0.1.23 安裝 0.11.2 並啟動 daemon，建立 workspace 與配對；接著用這個目錄的程式，確認回報 `RESTART_REQUIRED` 而舊 daemon 照常服務（載入的上游模組只有 0.11.2 的，加上檢查下次啟動設定的 `config.js`）；停止再啟動後，同一個 `PASEO_HOME` 由 0.17.4 執行，server ID、daemon 金鑰、配對記錄與 workspace 都在，舊版本目錄保留並仍可驗證，只有一個預先放好的過期版本目錄被清掉。`fresh`：空白主機的安裝、啟動、配對連結外觀與握手、一個終端機 worker；再讓 `ps` 在終端機開著時失效，確認停止以警告完成、沒有任何程序被送訊號（worker 仍在）、下一次啟動自己關掉這個孤兒。腳本只印非機密事實，不印配對連結、金鑰、server ID 或環境變數。
 
 狀態查詢合併並行請求，provider 狀態探測最多快取 3 秒；每次仍重新核對程序身分。Settings → Agent Connect 開著（分頁可見）時每 5 秒查一次狀態，每次都會讓 Paseo 執行各 provider 的 `--version`。UI 操作期間暫停輪詢，過期狀態不顯示為已就緒。診斷、模型查詢不占用安裝／啟停操作序列。
 
