@@ -99,6 +99,41 @@ test('two releases of one version and revision number (two lockfiles): the later
  assert.deepEqual(f.names(),[R3B,RUNTIME_REVISION].sort());
 });
 
+// Two lockfiles under one Paseo version and revision number (r3 shipped that way): by number they tie with this release,
+// so the receipt time that orders the list decides, and a tie is never a reason to remove one of them.
+const SIBLING_A='0.17.4-r1-aaaaaaaaaaaa',SIBLING_B='0.17.4-r1-bbbbbbbbbbbb';
+const stamp=(f,revision,iso)=>{const when=new Date(iso);fs.utimesSync(path.join(f.releases,revision,'.pi-paseo-runtime.json'),when,when);};
+test('a sibling of this release (same Paseo version and revision number, another lockfile) is never pruned for the tie: installed later it is newer, earlier it is the rollback',async t=>{
+ // Installed before this release: the rollback, and with it the one that decides which older release goes.
+ const earlier=fixture(t);
+ for(const revision of [RUNTIME_REVISION,SIBLING_A,R4])earlier.release(revision);
+ stamp(earlier,RUNTIME_REVISION,'2026-11-20T00:00:00Z');stamp(earlier,SIBLING_A,'2026-11-01T00:00:00Z');
+ assert.deepEqual(ownedReleases(earlier.loc).map(release=>release.name),[RUNTIME_REVISION,SIBLING_A,R4]);
+ assert.deepEqual(prunePlan(earlier.loc),{candidates:[R4],kept:[RUNTIME_REVISION,SIBLING_A],tombs:[]});
+ await pruneRuntimeReleases(earlier.loc);
+ assert.deepEqual(earlier.names(),[SIBLING_A,RUNTIME_REVISION].sort());
+ // Installed after this release: newer, kept like any newer release, and this release's rollback is the one after it.
+ const later=fixture(t);
+ for(const revision of [RUNTIME_REVISION,SIBLING_A,R4,R3A])later.release(revision);
+ stamp(later,RUNTIME_REVISION,'2026-11-01T00:00:00Z');stamp(later,SIBLING_A,'2026-11-20T00:00:00Z');
+ assert.deepEqual(ownedReleases(later.loc).map(release=>release.name),[SIBLING_A,RUNTIME_REVISION,R4,R3A]);
+ assert.deepEqual(prunePlan(later.loc),{candidates:[R3A],kept:[SIBLING_A,RUNTIME_REVISION,R4],tombs:[]});
+ await pruneRuntimeReleases(later.loc);
+ assert.deepEqual(later.names(),[SIBLING_A,R4,RUNTIME_REVISION].sort());
+});
+
+test('with two siblings of this release, the one installed right before it is the rollback and the other goes with the older releases',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,SIBLING_A,SIBLING_B,R4])f.release(revision);
+ stamp(f,RUNTIME_REVISION,'2026-11-20T00:00:00Z');stamp(f,SIBLING_A,'2026-11-10T00:00:00Z');stamp(f,SIBLING_B,'2026-11-01T00:00:00Z');
+ assert.deepEqual(prunePlan(f.loc),{candidates:[SIBLING_B,R4],kept:[RUNTIME_REVISION,SIBLING_A],tombs:[]});
+ // The same receipt time: the larger name counts as newer, whichever way the directory happens to list them.
+ for(const revision of [RUNTIME_REVISION,SIBLING_A,SIBLING_B])stamp(f,revision,'2026-11-01T00:00:00Z');
+ const list=[...[RUNTIME_REVISION,SIBLING_A,SIBLING_B].sort().reverse(),R4],index=list.indexOf(RUNTIME_REVISION);
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),list);
+ assert.deepEqual(prunePlan(f.loc),{candidates:list.slice(index+2),kept:list.slice(0,index+2),tombs:[]});
+});
+
 test('a release the caller names stays, however old',async t=>{
  const f=fixture(t);
  for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);

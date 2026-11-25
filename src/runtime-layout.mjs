@@ -115,7 +115,8 @@ function ownedRelease(releases,name) {
   return {name,order:match.slice(1,5).map(Number),receiptMtimeMs:stat.mtimeMs};
  } catch {return null;} finally {if(fd!==undefined)try{fs.closeSync(fd);}catch{}}
 }
-/** The plugin-owned releases under <runtimeDir>/releases, newest first (Paseo version, then revision number, then receipt time). */
+/** The plugin-owned releases under <runtimeDir>/releases, newest first: Paseo version, then revision number, then receipt time
+ * (when it was installed), then name for a tie. Releases of one version and revision number differ only in their lockfile hash. */
 export function ownedReleases(loc) {
  const releases=path.join(loc.runtimeDir,'releases');
  try {
@@ -135,17 +136,19 @@ function leftoverTombs(releases) {
 /** Reads only. {candidates: releases that may go, kept: releases that stay, tombs: leftovers to finish, skipped?: why nothing is planned}.
  * Stay: this release; the one newest earlier release (a rollback); every release newer than this one (a downgrade
  * is followed by an upgrade, and that is 0.7 GB to download again); every name in `keep`, which the caller fills
- * with the releases a running process still uses or needs for control. Without a valid current release nothing is planned. */
+ * with the releases a running process still uses or needs for control. Without a valid current release nothing is planned.
+ * Earlier and newer are positions in ownedReleases' order, not a comparison of version numbers: two releases of one
+ * Paseo version and revision number (two lockfiles; r3 shipped with two) tie by number, and the receipt time that orders
+ * them in the list decides which is newer and which is the rollback. A tie never makes a release a candidate by itself. */
 export function prunePlan(loc,{keep=[]}={}) {
  const releases=path.join(loc.runtimeDir,'releases'),plan={candidates:[],kept:[],tombs:[]};
  try {assertSafePath(releases);if(!fs.lstatSync(releases).isDirectory())return {...plan,skipped:'RELEASES_NOT_A_DIRECTORY'};}
  catch(error) {return error?.code==='ENOENT'?plan:{...plan,skipped:'RELEASES_UNSAFE'};}
- const owned=ownedReleases(loc),current=owned.find(release=>release.name===RUNTIME_REVISION);
- if(!current)return {...plan,skipped:'CURRENT_RELEASE_NOT_FOUND'};
+ const owned=ownedReleases(loc),index=owned.findIndex(release=>release.name===RUNTIME_REVISION);
+ if(index<0)return {...plan,skipped:'CURRENT_RELEASE_NOT_FOUND'};
  const stay=new Set([RUNTIME_REVISION,...keep]);
- const rollback=owned.find(release=>release.name!==current.name&&compareOrder(release.order,current.order)<0);
- if(rollback)stay.add(rollback.name);
- for(const release of owned)(stay.has(release.name)||compareOrder(release.order,current.order)>0?plan.kept:plan.candidates).push(release.name);
+ if(owned[index+1])stay.add(owned[index+1].name); // the rollback: the release right after this one, newest first
+ owned.forEach((release,position)=>(stay.has(release.name)||position<index?plan.kept:plan.candidates).push(release.name));
  plan.tombs=leftoverTombs(releases);
  return plan;
 }
