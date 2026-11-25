@@ -17,3 +17,9 @@ test('health outputs omit paths, arbitrary errors and pairing/account secrets',(
  const s=ready();s.secret='sentinel';s.state.pairingUrl='sentinel';s.diagnosticCode='https://sentinel';s.state.acceptance.checkedAt='sentinel';
  const r=healthReport(s);assert.doesNotMatch(JSON.stringify(r),/sentinel/);assert.equal(r.chatAcceptance.checkedAt,null);
 });
+test('warnings are listed beside the codes and never decide readiness',()=>{
+ const s={...ready(),warnings:[{code:'PS_UNAVAILABLE',at:'2026-11-25T00:00:00.000Z'},{code:'PS_UNAVAILABLE'},{code:'https://sentinel'},{code:'TERMINAL_CLEANUP_NOT_CONFIRMED'}]};
+ const r=healthReport(s);assert.equal(r.ready,true);assert.deepEqual(r.codes,[]);assert.deepEqual(r.warnings,['PS_UNAVAILABLE','TERMINAL_CLEANUP_NOT_CONFIRMED']);
+ assert.doesNotMatch(JSON.stringify(r),/sentinel/);assert.deepEqual(healthReport(ready()).warnings,[]);
+ assert.equal(healthReport({...s,diagnosticCode:'RESTART_REQUIRED'}).ready,false);
+});

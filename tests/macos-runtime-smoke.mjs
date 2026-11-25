@@ -16,6 +16,7 @@ for(const provider of ['claude','codex','pi'])fs.writeFileSync(path.join(bin,pro
 Object.assign(process.env,{HOME:home,PI_CODING_AGENT_DIR:agent,PI_AGENT_DATA_DIR:agent,PI_PASEO_STATE_DIR:state,PI_PASEO_RUNTIME_DIR:runtime,PATH:bin+path.delimiter+path.dirname(process.execPath)+path.delimiter+process.env.PATH,PI_PASEO_SKIP_POSTINSTALL:'1'});
 const service=await import('../src/runtime.mjs');
 const host=await import('../src/host-api.mjs');
+const timeouts=await import('../src/lifecycle-timeouts.mjs');
 const packageRoot=fileURLToPath(new URL('../',import.meta.url));
 fs.writeFileSync(path.join(agent,'settings.json'),JSON.stringify({packages:[packageRoot]}),{mode:0o600});
 const evidence={platform:process.platform,arch:process.arch,node:process.versions.node,realDaemon:true,providerTurns:0,credentialFilesCreated:0};
@@ -27,7 +28,7 @@ try{
  const identity=fs.readFileSync(path.join(state,'daemon/server-id'),'utf8');
  const keyHash=createHash('sha256').update(fs.readFileSync(path.join(state,'daemon/daemon-keypair.json'))).digest('hex');
  const supervisor=await host.lifecycle({action:'enable'});assert.equal(supervisor.scheduled,true);
- const cliStop=await promisify(execFile)(process.execPath,[path.join(packageRoot,'bin/cli.mjs'),'stop'],{env:process.env,timeout:45000});
+ const cliStop=await promisify(execFile)(process.execPath,[path.join(packageRoot,'bin/cli.mjs'),'stop'],{env:process.env,timeout:timeouts.SUPERVISOR_STOP_TIMEOUT_MS+timeouts.DAEMON_STOP_TIMEOUT_MS+timeouts.TERMINAL_CLEANUP_BUDGET_MS});
  assert.equal(JSON.parse(cliStop.stdout).phase,'disabled');
  assert.equal((await service.status()).daemon.running,false);stopped=true;
  evidence.firstStopViaCLI=true;evidence.pluginSupervisorStarted=true;

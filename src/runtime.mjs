@@ -17,6 +17,7 @@ import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,pr
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
+import { checkProcessTable } from './host-checks.mjs';
 export { locations, readState, updateState } from './state.mjs';
 export { PASEO_VERSION };
 const PROVIDERS = ['claude', 'codex', 'pi'];
@@ -314,11 +315,20 @@ function removeRetiredWebClient(loc) {
     fs.rmdirSync(dir);
   } catch { /* absent, holds other entries, or not removable now */ }
 }
+/** Records whether this host's `ps` can serve Paseo's terminal cleanup (host-checks.mjs). A diagnostic only:
+ * it never throws and never keeps Paseo from starting. Not checked off Linux. */
+async function recordProcessTable() {
+  try {
+    const check = await checkProcessTable();
+    if (check?.checked) updateState({ processTable: { ok: check.ok === true, ...(check.ok === true ? {} : { code: check.code }), checkedAt: new Date().toISOString() } });
+  } catch { /* a diagnostic that cannot be recorded is not worth a failed start */ }
+}
 export async function activate(options = {}) {
   return withRuntimeLock(async () => {
     ensureOwnedHome(); updateState({ desiredEnabled: true, phase: 'installing', lastError: null });
     try {
       if (Number(process.versions.node.split('.')[0]) < 22) throw new RuntimeError('NODE_VERSION_UNSUPPORTED');
+      await recordProcessTable();
       // Before the runtime install, so a host short of disk gets the retired copy's space back first.
       removeRetiredWebClient(locations());
       await installRuntime();
@@ -362,7 +372,8 @@ export async function activate(options = {}) {
         // The daemon this release just started is controlled by this release.
         control = { root: runtimeDirectory(locations()), version: PASEO_VERSION };
         const instance = await currentInstance(control); verifyInstanceOwnership(instance, control);
-        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
+        // A new daemon retries any cleanup the last stop left open and reports what it could not confirm itself.
+        updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false, terminalCleanup: null });
       }
       const healthy = await currentInstance(control), verify = instance => verifyInstanceOwnership(instance, control);
       const observation = await observeOwnedInstance(locations(), healthy, verify);
@@ -375,6 +386,39 @@ export async function activate(options = {}) {
     } catch (error) { updateState({ phase: error.code === 'RESTART_REQUIRED' ? 'restart_required' : 'error', lastError: { code: safeCode(error), at: new Date().toISOString() } }); throw new RuntimeError(safeCode(error)); }
   }, { timeoutMs: options.lockTimeoutMs || 360000 });
 }
+const TERMINAL_CLEANUP_NOT_CONFIRMED = 'TERMINAL_CLEANUP_NOT_CONFIRMED';
+// Is the daemon this stop signaled really gone? The supervisor process ended (a reused PID is some other
+// process, not that supervisor), no live daemon holds the PID lock, and the lock file itself was released.
+async function daemonStopped(lifecycle, loc, instance, identity) {
+  try {
+    const now = processIdentity(instance.pid);
+    if (now !== null && now === identity) return false;
+    if (await lifecycle.readDaemonInstance(loc.paseoHome)) return false;
+    return !fs.existsSync(path.join(loc.paseoHome, 'paseo.pid'));
+  } catch { return false; }
+}
+/** Stops the daemon `instance` through the release that reads it (`control`: one resolution per operation).
+ * Resolves to the non-fatal warning to record, or null. Every stop of a daemon goes through here.
+ *
+ * 0.17.4's stopDaemonInstance waits for the supervisor to exit, releases the PID lock, and only then closes the
+ * terminal workers once more (reapTerminalWorkers). Where that cannot confirm every terminal process gone (no
+ * usable `ps`, a process that outlives SIGKILL) it throws TERMINAL_CLEANUP_NOT_CONFIRMED and keeps a closing
+ * record that the next stop or start retries; nothing is signaled on a guess. By then the daemon is stopped, so
+ * the stop is done once that is verified here: the supervisor is gone and the PID lock is released. Any other
+ * outcome, including a daemon that is still there, stays an error. The stop is never forced. */
+async function stopOwnedDaemon(loc, control, instance) {
+  const lifecycle = await serverModule('dist/server/server/daemon-instance.js', control.root);
+  const identity = processIdentity(instance.pid);
+  try {
+    // The official lifecycle rechecks PID plus startedAt immediately before signaling.
+    await lifecycle.stopDaemonInstance(loc.paseoHome, { instance, timeoutMs: DAEMON_STOP_TIMEOUT_MS, force: false });
+    return null;
+  } catch (error) {
+    if (error?.code !== TERMINAL_CLEANUP_NOT_CONFIRMED) throw new RuntimeError(safeCode(error));
+    if (!(await daemonStopped(lifecycle, loc, instance, identity))) throw new RuntimeError(TERMINAL_CLEANUP_NOT_CONFIRMED);
+    return { code: TERMINAL_CLEANUP_NOT_CONFIRMED, at: new Date().toISOString() };
+  }
+}
 export async function deactivate() {
   return withRuntimeLock(async () => {
     updateState({ desiredEnabled: false });
@@ -382,12 +426,10 @@ export async function deactivate() {
     const control = await resolveControl(), instance = await currentInstance(control);
     if (instance) {
       verifyInstanceOwnership(instance, control);
-      const lifecycle = await serverModule('dist/server/server/daemon-instance.js', control.root);
-      // The official lifecycle rechecks PID plus startedAt immediately before signaling.
-      try { await lifecycle.stopDaemonInstance(locations().paseoHome, { instance, timeoutMs: DAEMON_STOP_TIMEOUT_MS, force: false }); }
-      catch (error) { throw new RuntimeError(safeCode(error)); }
-    }
-    updateState({ phase: 'disabled', daemonPid: null, daemonStartedAt: null });
+      const terminalCleanup = await stopOwnedDaemon(locations(), control, instance);
+      // A stop that confirmed its terminals also retried and settled what an earlier one left open.
+      updateState({ phase: 'disabled', daemonPid: null, daemonStartedAt: null, terminalCleanup });
+    } else updateState({ phase: 'disabled', daemonPid: null, daemonStartedAt: null });
     return status();
   });
 }
@@ -434,11 +476,24 @@ export async function refreshPiCatalogIfChanged() {
   } catch { return false; }
 }
 const CONFIG_BLOCKERS = new Set(['CONFIG_CORRUPT', 'CONFIG_INCOMPATIBLE', 'CONFIG_INVALID']);
+/** Conditions that do not stop Paseo from working, as { code, at? } (health lists them apart from its blocking codes).
+ * Terminal cleanup: a running 0.17.4 daemon says what its last cleanup could not confirm; a stopped one is covered
+ * by the record of the stop that finished with the cleanup unconfirmed. Host: the last check of `ps`. */
+function statusWarnings(state, daemon) {
+  const warnings = [], add = (code, at) => {
+    if (/^[A-Z][A-Z0-9_]{0,63}$/.test(code || '') && !warnings.some(row => row.code === code)) warnings.push({ code, ...(typeof at === 'string' ? { at } : {}) });
+  };
+  if (daemon.running) { if (daemon.terminalCleanupUnconfirmed > 0) add(TERMINAL_CLEANUP_NOT_CONFIRMED, daemon.statusCheckedAt); }
+  else if (state.terminalCleanup) add(state.terminalCleanup.code, state.terminalCleanup.at);
+  // The last check of the host's `ps` (start and diagnose): PS_UNAVAILABLE or PS_INCOMPATIBLE.
+  if (state.processTable?.ok === false) add(state.processTable.code, state.processTable.checkedAt);
+  return warnings;
+}
 async function readStatus() {
   const state = readState(), loc = locations(), control = await resolveControl(loc), owned = ownsHome();
   const installed = runtimeReady(loc) || !!control.root;
   // daemon.version: the Paseo release serving it (0.11.2 until an upgrade's explicit stop and start).
-  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, version: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
+  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, version: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null, terminalCleanupUnconfirmed: null };
   // A config the next start cannot write outranks RESTART_REQUIRED: stopping would only take Paseo down.
   const configBlocker = state.phase === 'error' && CONFIG_BLOCKERS.has(state.lastError?.code) ? state.lastError.code : null;
   let providers = [], diagnosticCode = configBlocker || (state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null);
@@ -453,6 +508,8 @@ async function readStatus() {
         const result=sample.value;
         daemon.statusCheckedAt=new Date(sample.checkedAt).toISOString();daemon.statusMaxAgeMs=3000;
         daemon.reachable = true; daemon.workerPid = result.pid; daemon.relayEnabled = result.relay?.enabled === true; daemon.relayConnected = typeof result.relay?.connected === 'boolean' ? result.relay.connected : null;
+        // 0.17.4 daemons name the terminal processes their last cleanup could not confirm gone; 0.11.2 has no such report.
+        daemon.terminalCleanupUnconfirmed = Array.isArray(result.terminalCleanupUnconfirmed) ? result.terminalCleanupUnconfirmed.length : 0;
         providers = (result.providers || []).filter(row => PROVIDERS.includes(row.provider)).map(safeProvider);
       }
     } catch (error) {
@@ -462,9 +519,10 @@ async function readStatus() {
   }
   const phase = state.phase === 'running' && !daemon.running ? 'stopped' : state.phase || 'not_installed';
   // version: the managed Paseo release installed for the next start (0.11.2 only before 0.17.4 is installed).
-  return { installed, version: runtimeReady(loc) ? PASEO_VERSION : control.root ? control.version : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), agentCollaboration: agentCollaborationEnabled(), diagnosticCode, state };
+  return { installed, version: runtimeReady(loc) ? PASEO_VERSION : control.root ? control.version : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), agentCollaboration: agentCollaborationEnabled(), diagnosticCode, warnings: statusWarnings(state, daemon), state };
 }
 export async function diagnose() {
+  await recordProcessTable();
   const snapshot = await status(); const launchers = await detectLaunchers();
   let providers = snapshot.providers;
   if (snapshot.daemon.reachable) {

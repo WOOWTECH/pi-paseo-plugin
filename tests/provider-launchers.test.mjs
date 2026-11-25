@@ -268,6 +268,8 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
     if (spec === './runtime-layout.mjs') return runtimeLayout;
     if (spec === './lifecycle-timeouts.mjs') return lifecycleTimeouts;
+    // This test models a non-Linux provider reload, where the host's ps is not checked.
+    if (spec === './host-checks.mjs') return { checkProcessTable: async () => ({ checked: false }) };
     // This test models a non-Linux provider reload; Linux birth/transition
     // behavior is exercised with the actual identity module in daemon-identity.
     if (spec === './daemon-identity.mjs') return { observeOwnedInstance: async () => null, rememberOwnedInstance: async () => {}, recoverStaleInstance: () => assert.fail('no recovery on healthy provider reload') };

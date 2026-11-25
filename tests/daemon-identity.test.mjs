@@ -2,6 +2,7 @@ import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles,seedPriorRelease} from './helpers/runtime-pid-files.mjs';
 import {loadPersistedConfig} from './helpers/paseo-config.mjs';
+import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError} from './helpers/upstream-stop.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,6 +17,7 @@ import ts from 'typescript';
 import * as state from '../src/state.mjs';
 import * as layout from '../src/runtime-layout.mjs';
 import * as lifecycleTimeouts from '../src/lifecycle-timeouts.mjs';
+import {healthReport} from '../src/health.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 const require=createRequire(import.meta.url);
 // The real persisted-config modules (read path, normalization, strict schema) of both releases.
@@ -45,6 +47,9 @@ function fixture(t, { platform = process.platform } = {}) {
  // Which release supplied each upstream module or CLI call: <runtimeDir>/releases/<revision>.
  const releaseOf=file=>String(fileURLToPath(new URL(String(file),'file:///'))).split('/node_modules/@getpaseo/')[0];
  const used={modules:[],cli:[],stoppedVia:null};
+ // Stops follow what Paseo 0.17.4 does (tests/helpers/upstream-stop.mjs): a fake clock, the PID lock released before
+ // the terminal cleanup, upstream's error classes. `stopScenario` says how the next stop goes; every signal is recorded.
+ const clock={now:1_000_000},signalsSent=[],pluginSignals=[];let scenario={},processTableResult={checked:false};
  function publish(mode=0o644){const pid=++nextPid;const birth={bootId,startTicks:String(pid),uid:process.getuid()};processes.set(pid,{...birth,role:'owned',home:loc.paseoHome});const lock={pid,startedAt:new Date().toISOString(),uid:process.getuid(),bootId,heartbeat:true,piPaseoProtocol:'linux-flock-v1',listen:'127.0.0.1:27669',hostname:'fixture'};fs.writeFileSync(pidFile,JSON.stringify(lock),{mode});return lock;}
  const initial=publish();const initialBytes=fs.readFileSync(pidFile);
  fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify(LEGACY_CONFIG),{mode:0o600});
@@ -57,8 +62,14 @@ function fixture(t, { platform = process.platform } = {}) {
   if(String(file)===pidFile&&emptyPidReads>0){emptyPidReads--;return '';}
   return fs.readFileSync(file,...args);},realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);}};
  const loadInstance=()=>fs.existsSync(pidFile)?JSON.parse(fs.readFileSync(pidFile)):null;
- let reloads=0,reloadResult={appliedPaths:['agents.providers'],restartRequiredPaths:[],overrideControlledPaths:[]};
- const client={reloadDaemonConfig:async()=>{reloads++;return reloadResult;},getDaemonStatus:async()=>({pid:loadInstance().pid+1,providers:[],relay:{enabled:true}}),close:async()=>{}};
+ const upstream=createUpstreamStop({clock,scenario:()=>scenario,readLock:loadInstance,
+  ownerRunning:lock=>!!(processes.has(lock.pid)||state.processIdentity(lock.pid)),
+  sameLock:(a,b)=>a.pid===b.pid&&a.startedAt===b.startedAt,
+  deliver:(pid,signal)=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(pid)?.role,'owned');signalsSent.push([pid,signal]);stops++;},
+  exit:pid=>{processes.delete(pid);},
+  releaseLock:lock=>{const current=loadInstance();if(current&&current.pid===lock.pid&&current.startedAt===lock.startedAt)fs.unlinkSync(pidFile);}});
+ let reloads=0,reloadResult={appliedPaths:['agents.providers'],restartRequiredPaths:[],overrideControlledPaths:[]},daemonStatusExtra={};
+ const client={reloadDaemonConfig:async()=>{reloads++;return reloadResult;},getDaemonStatus:async()=>({pid:loadInstance().pid+1,providers:[],relay:{enabled:true},...daemonStatusExtra}),close:async()=>{}};
  const source=new URL('../src/runtime.mjs',import.meta.url);
  const code=ts.transpileModule(fs.readFileSync(source,'utf8'),{fileName:source.pathname+'.ts',compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  const module={exports:{}};
@@ -71,18 +82,19 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./daemon-identity.mjs')return identity;
   if(spec==='./runtime-layout.mjs')return layout;
   if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
+  if(spec==='./host-checks.mjs')return {checkProcessTable:async()=>processTableResult};
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
   if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version'){assert.equal(releaseOf(args[0]),root);return layout.PASEO_VERSION;}used.cli.push({release:releaseOf(args[0]),command:args.slice(4).join(' ')});if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true},...(protectedOffers?{minimumSecurityMode:'protected'}:{})})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
-  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();hooks.read?.();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
+  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();hooks.read?.();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:(home,options)=>{used.stoppedVia=releaseOf(spec);return upstream.stopDaemonInstance(home,options);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
   if(spec.endsWith('/server/config.js'))return releaseOf(spec)===root?config0174:config0112;
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
- vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},protectedOffers:value=>{protectedOffers=value;},emptyPidReads:count=>{emptyPidReads=count;},hooks,used,
+ vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform,kill:(pid,signal)=>{pluginSignals.push([pid,signal]);throw Object.assign(new Error('The plugin signals no process'),{code:'EPERM'});}},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},protectedOffers:value=>{protectedOffers=value;},emptyPidReads:count=>{emptyPidReads=count;},hooks,used,clock,signalsSent,pluginSignals,upstream,stopScenario:value=>{scenario=value;},publish,daemonStatus:value=>{daemonStatusExtra=value;},processTable:value=>{processTableResult=value;},
  // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
  // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
  prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
@@ -562,4 +574,106 @@ test('a daemon that cannot take the collaboration setting live asks for a restar
  assert.equal((await f.runtime.saveConnectionSettings({agentCollaboration:false})).agentCollaborationApplied,'restart-required');
  await assert.rejects(f.runtime.saveConnectionSettings({agentCollaboration:'yes'}),{code:'INVALID_SETTING'});
  assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,'config.json'))).daemon.mcp.injectIntoAgents,false);
+});
+
+// ---- Stopping: what Paseo 0.17.4's stopDaemonInstance does (modeled in tests/helpers/upstream-stop.mjs) ----
+// It stops the supervisor, releases the PID lock, and only then closes terminal workers in the caller's process.
+const TERMINAL_CODE='TERMINAL_CLEANUP_NOT_CONFIRMED';
+// The runtime runs in its own vm realm: compare its arrays and objects by value.
+const plain=value=>JSON.parse(JSON.stringify(value));
+const {DAEMON_STOP_TIMEOUT_MS,SUPERVISOR_STOP_TIMEOUT_MS,TERMINAL_CLEANUP_BUDGET_MS}=lifecycleTimeouts;
+const unfinishedStop=(f,{recorded=false}={})=>{
+ assert.notEqual(state.readState().phase,'disabled','a failed stop leaves the phase alone');
+ assert.equal(!!state.readState().terminalCleanup,recorded);assert.deepEqual(f.pluginSignals,[],'the plugin signals no process');
+};
+
+test('a stop whose terminal cleanup cannot be confirmed has stopped the daemon: warning recorded, phase disabled',async t=>{
+ const f=fixture(t);f.stopScenario({records:['noPs']});f.permitStop();
+ const result=await f.runtime.deactivate();
+ assert.equal(result.phase,'disabled');assert.equal(result.enabled,false);assert.equal(result.daemon.running,false);
+ assert.equal(f.processes.has(f.initial.pid),false,'the supervisor is gone');assert.equal(fs.existsSync(f.pidFile),false,'the PID lock is released');
+ // Upstream's order: the lock is released before the cleanup that failed.
+ assert.deepEqual(f.upstream.events.map(row=>row.event),['sigterm','supervisor-exit','lock-released','terminal-cleanup']);
+ assert.deepEqual(plain(result.warnings).map(row=>row.code),[TERMINAL_CODE]);assert.match(result.warnings[0].at,/^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
+ assert.equal(state.readState().phase,'disabled');assert.equal(state.readState().terminalCleanup.code,TERMINAL_CODE);
+ assert.equal(state.readState().daemonPid,null);assert.equal(result.diagnosticCode,null,'a warning is not a diagnostic error');
+ assert.deepEqual(f.signalsSent,[[f.initial.pid,'SIGTERM']]);assert.deepEqual(f.pluginSignals,[]);
+ const health=healthReport(result);assert.deepEqual(health.warnings,[TERMINAL_CODE]);assert.equal(health.codes.includes(TERMINAL_CODE),false);
+ assert.equal(f.upstream.closing.length,1,'upstream keeps its closing record for the next stop or start');
+ f.keep();
+ // Another stop with nothing running reports nothing new and keeps the record.
+ assert.deepEqual(plain((await f.runtime.deactivate()).warnings).map(row=>row.code),[TERMINAL_CODE]);
+});
+
+for(const [name,scenario,remains]of [
+ ['the supervisor is still running',f=>({records:['noPs'],leaveSupervisor:true}),f=>assert.equal(f.processes.has(f.initial.pid),true)],
+ ['another daemon now holds the PID lock',f=>({records:['noPs'],afterRelease:()=>f.publish()}),f=>assert.notEqual(JSON.parse(fs.readFileSync(f.pidFile)).pid,f.initial.pid)],
+ ['a PID lock file is still there',f=>({records:['noPs'],afterRelease:()=>fs.writeFileSync(f.pidFile,JSON.stringify({pid:900999,startedAt:'stale',uid:process.getuid()}))}),f=>assert.equal(JSON.parse(fs.readFileSync(f.pidFile)).pid,900999)],
+])
+test(`an unconfirmed terminal cleanup stays an error when ${name}`,async t=>{
+ const f=fixture(t);f.stopScenario(scenario(f));f.permitStop();
+ await assert.rejects(f.runtime.deactivate(),{code:TERMINAL_CODE});
+ unfinishedStop(f);remains(f);assert.equal(f.signalsSent.length,1);
+});
+
+test('a supervisor that never exits fails at the stop budget: STOP_NOT_CONFIRMED, one SIGTERM, nothing killed',async t=>{
+ const f=fixture(t);f.stopScenario({supervisorHangs:true});f.permitStop();const start=f.clock.now;
+ await assert.rejects(f.runtime.deactivate(),{code:'STOP_NOT_CONFIRMED'});
+ assert.equal(f.clock.now-start,DAEMON_STOP_TIMEOUT_MS);
+ unfinishedStop(f);assert.equal(f.processes.has(f.initial.pid),true);assert.equal(fs.existsSync(f.pidFile),true);
+ assert.deepEqual(f.signalsSent,[[f.initial.pid,'SIGTERM']]);assert.deepEqual(f.upstream.events.map(row=>row.event),['sigterm']);
+});
+
+test('a slow daemon worker and two unresponsive terminal workers stop inside the budget, without a warning',async t=>{
+ const f=fixture(t);f.stopScenario({workerShutdownMs:60000,records:['unresponsive','unresponsive']});f.permitStop();const start=f.clock.now;
+ const result=await f.runtime.deactivate();
+ const elapsed=f.clock.now-start;
+ // 10 s of worker grace (the supervisor kills the worker's tree after that) and 13 s for each terminal worker record.
+ assert.ok(elapsed>=10000+2*13000,'the scenario is the worst case a daemon can have: '+elapsed);assert.ok(elapsed<=DAEMON_STOP_TIMEOUT_MS,'within the budget: '+elapsed);
+ assert.equal(result.phase,'disabled');assert.deepEqual(plain(result.warnings),[]);assert.equal(state.readState().terminalCleanup,null);
+ assert.deepEqual(f.signalsSent,[[f.initial.pid,'SIGTERM']]);assert.deepEqual(f.pluginSignals,[]);
+});
+
+test('more unresponsive terminal worker records than a daemon runs overrun the budget: a bounded failure that leaves the supervisor alone',async t=>{
+ const f=fixture(t);f.stopScenario({workerShutdownMs:60000,records:['unresponsive','unresponsive','unresponsive']});f.permitStop();const start=f.clock.now;
+ await assert.rejects(f.runtime.deactivate(),{code:'STOP_NOT_CONFIRMED'});
+ assert.equal(f.clock.now-start,DAEMON_STOP_TIMEOUT_MS);unfinishedStop(f);assert.equal(f.processes.has(f.initial.pid),true);
+});
+
+test('the stop budgets cover upstream\'s worst case with its own constants, and the old 20 s did not',()=>{
+ const worker=10000,record=13000,workers=2;
+ assert.equal(lifecycleTimeouts.WORKER_GRACE_MS,worker);assert.equal(lifecycleTimeouts.TERMINAL_RECORD_CLEANUP_MS,record);assert.equal(lifecycleTimeouts.TERMINAL_WORKER_LIMIT,workers);
+ const supervisorExit=worker+workers*record;
+ assert.ok(DAEMON_STOP_TIMEOUT_MS>supervisorExit,'the wait for the supervisor');assert.ok(20000<supervisorExit,'the previous budget was too short');
+ // The plugin supervisor stops the daemon and then runs upstream's second cleanup before it exits.
+ assert.ok(SUPERVISOR_STOP_TIMEOUT_MS>=DAEMON_STOP_TIMEOUT_MS+TERMINAL_CLEANUP_BUDGET_MS);
+});
+
+test('starting again clears the stop-time warning, and a running daemon is warned about only what it reports',async t=>{
+ const f=fixture(t);f.stopScenario({records:['noPs']});f.permitStop();await f.runtime.deactivate();
+ assert.equal(state.readState().terminalCleanup.code,TERMINAL_CODE);
+ const started=await f.runtime.activate();
+ assert.equal(started.phase,'running');assert.equal(state.readState().terminalCleanup,null);assert.deepEqual(plain(started.warnings),[]);assert.equal(started.daemon.terminalCleanupUnconfirmed,0);
+ f.daemonStatus({terminalCleanupUnconfirmed:[{pid:700000,role:'terminal program',reason:'inspection failed',detail:'spawn ps ENOENT'}]});state.updateState({observed:1});
+ const warned=await f.runtime.status();
+ assert.deepEqual(plain(warned.warnings).map(row=>row.code),[TERMINAL_CODE]);assert.equal(warned.daemon.terminalCleanupUnconfirmed,1);
+ assert.equal(warned.diagnosticCode,null);assert.equal(healthReport({...warned,providers:[]}).codes.includes(TERMINAL_CODE),false);
+});
+
+test('a ps that cannot serve terminal cleanup is a warning on every start and diagnosis, never a blocker',async t=>{
+ const f=fixture(t);
+ // Not checked (any platform but Linux): nothing is recorded.
+ assert.deepEqual(plain((await f.runtime.activate()).warnings),[]);assert.equal(state.readState().processTable,undefined);
+ f.processTable({checked:true,ok:false,code:'PS_UNAVAILABLE'});
+ const warned=await f.runtime.activate();
+ assert.equal(warned.phase,'running');assert.equal(warned.daemon.reachable,true,'Paseo starts and runs');assert.equal(warned.diagnosticCode,null);
+ assert.deepEqual(plain(warned.warnings).map(row=>row.code),['PS_UNAVAILABLE']);assert.match(warned.warnings[0].at,/^\d{4}-\d\d-\d\dT/);
+ assert.equal(state.readState().processTable.code,'PS_UNAVAILABLE');
+ const health=healthReport({...warned,providers:[]});assert.deepEqual(health.warnings,['PS_UNAVAILABLE']);assert.equal(health.codes.includes('PS_UNAVAILABLE'),false);
+ // The same host with both a stop that left terminals open and a bad ps: two warnings, each once.
+ f.stopScenario({records:['noPs']});f.permitStop();
+ assert.deepEqual(plain(await f.runtime.deactivate()).warnings.map(row=>row.code).sort(),['PS_UNAVAILABLE',TERMINAL_CODE]);
+ // procps is installed: the next check clears it.
+ f.processTable({checked:true,ok:true});
+ const fixed=await f.runtime.activate();assert.deepEqual(plain(fixed.warnings),[]);assert.equal(state.readState().processTable.ok,true);
 });

@@ -31,8 +31,10 @@ export async function lifecycle(input={}) {
     if (!active) {
       // A supervisor may still be finishing activate(). Deactivate only after it exits.
       await stopSupervisor();
-      await runtime.deactivate();
-      return {phase:'disabled'};
+      const stopped=await runtime.deactivate();
+      // The stop completed; a terminal cleanup it could not confirm is reported next to it, not instead of it.
+      const warnings=(Array.isArray(stopped?.warnings)?stopped.warnings:[]).map(row=>row?.code).filter(code=>typeof code==='string');
+      return {phase:'disabled',...(warnings.length?{warnings}:{})};
     }
     // npm may run before Pi writes the binding; the persisted pause still wins.
     if(input.prepareRuntime===true)await runtime.activate();

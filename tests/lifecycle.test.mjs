@@ -511,6 +511,7 @@ test('LOOP-DISABLE: the poll loop still deactivates when the host recorded a rea
   assert.equal(f.calls.some(c => c[0] === 'activate'), false);
 });
 
+const timeouts=await import(pathToFileURL(path.join(root,'src/lifecycle-timeouts.mjs')).href);
 test('first host stop waits through the full graceful daemon shutdown before reporting success',async t=>{
  const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);const pid=f.owned();
  f.setSignalHandler((owner,signal)=>{assert.equal(signal,'SIGTERM');f.processes.get(owner).exitAt=clock.now+21000;});
@@ -519,11 +520,28 @@ test('first host stop waits through the full graceful daemon shutdown before rep
  assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
  assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
 });
+test('a plugin supervisor that stops the daemon and closes its terminals slowly is still waited for, up to the stop budget',async t=>{
+ // The supervisor's own deactivate takes the daemon stop (up to 45 s) and then upstream's second terminal cleanup.
+ const exit=timeouts.DAEMON_STOP_TIMEOUT_MS+timeouts.TERMINAL_CLEANUP_BUDGET_MS-1000;
+ assert.ok(exit>timeouts.DAEMON_STOP_TIMEOUT_MS&&exit<timeouts.SUPERVISOR_STOP_TIMEOUT_MS);
+ const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);const pid=f.owned();
+ f.setSignalHandler((owner,signal)=>{assert.equal(signal,'SIGTERM');f.processes.get(owner).exitAt=clock.now+exit;});
+ const start=clock.now,result=await f.load('src/host-api.mjs').lifecycle({action:'disable'});
+ assert.equal(result.phase,'disabled');assert.equal(f.processes.has(pid),false);assert.ok(clock.now-start>=exit&&clock.now-start<timeouts.SUPERVISOR_STOP_TIMEOUT_MS);
+});
 test('default supervisor shutdown remains bounded and never force-kills a process that does not exit',async t=>{
  const clock={now:Date.now()},f=fixture(t,{clock}),pid=f.owned();f.setSignalHandler(()=>{});
  const start=clock.now;await assert.rejects(f.load('src/supervisor.mjs').stopSupervisor(),/still stopping/);
- assert.equal(clock.now-start,30000);assert.equal(f.processes.has(pid),true);
+ assert.equal(clock.now-start,timeouts.SUPERVISOR_STOP_TIMEOUT_MS);assert.equal(f.processes.has(pid),true);
  assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
+});
+test('a stop that completed with an unconfirmed terminal cleanup says so next to the disabled phase',async t=>{
+ const f=fixture(t);f.packages([root]);f.owned();
+ f.runtime.deactivate=async()=>{f.calls.push(['deactivate']);return {warnings:[{code:'TERMINAL_CLEANUP_NOT_CONFIRMED',at:'2026-11-25T00:00:00.000Z'}]};};
+ // host-api.mjs runs in its own vm realm: compare by value.
+ assert.deepEqual(JSON.parse(JSON.stringify(await f.load('src/host-api.mjs').lifecycle({action:'disable'}))),{phase:'disabled',warnings:['TERMINAL_CLEANUP_NOT_CONFIRMED']});
+ f.runtime.deactivate=async()=>{f.calls.push(['deactivate']);return {warnings:[]};};
+ assert.deepEqual(JSON.parse(JSON.stringify(await f.load('src/host-api.mjs').lifecycle({action:'disable'}))),{phase:'disabled'});
 });
 
 test('host status opens each target\'s official app and reports no bundled web client', async t => {
