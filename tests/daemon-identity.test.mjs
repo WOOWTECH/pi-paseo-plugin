@@ -77,7 +77,7 @@ function fixture(t, { platform = process.platform } = {}) {
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();hooks.read?.();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
-  if(spec.endsWith('/server/persisted-config.js'))return releaseOf(spec)===root?config0174:config0112;
+  if(spec.endsWith('/server/config.js'))return releaseOf(spec)===root?config0174:config0112;
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
@@ -275,7 +275,7 @@ test(`prepared 0.17.4 with a healthy 0.11.2 ${generation} daemon requires an exp
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);assert.equal(fs.existsSync(f.proofFile),false);
  // Reading, verifying and querying the old daemon never loaded a 0.17.4 module. Only the check of the
  // config the next start will write did, and it wrote nothing.
- assert.ok(f.used.modules.length>0);assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['persisted-config.js']);
+ assert.ok(f.used.modules.length>0);assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['config.js']);
  assert.deepEqual(fs.readFileSync(path.join(f.loc.paseoHome,'config.json')),config);
  const pairing=await f.runtime.pair();assert.match(pairing.url,/^https:\/\/app\.paseo\.sh\/#offer=/);
  assert.deepEqual(f.used.cli.map(c=>c.release),[old]);assert.equal(f.starts(),0);
@@ -344,7 +344,7 @@ test('while a 0.11.2 daemon serves, the collaboration switch writes config.json 
  const config=JSON.parse(fs.readFileSync(path.join(f.loc.paseoHome,'config.json')));
  assert.deepEqual(config.daemon.mcp,{enabled:true,injectIntoAgents:true});
  assert.deepEqual(config.providers,LEGACY_CONFIG.providers,'0.11.2 keeps its own shapes; the 0.17.4 start folds them later');
- assert.deepEqual(f.used.modules.filter(m=>m.module==='persisted-config.js').map(m=>m.release),[old]);
+ assert.deepEqual(f.used.modules.filter(m=>m.module==='config.js').map(m=>m.release),[old]);
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);f.keep();
 });
 for(const [name,change] of [
@@ -397,14 +397,14 @@ test('darwin: a stale 0.11.2-r4 PID record never starts the old release',async t
  const result=await f.runtime.activate();assert.equal(result.phase,'running');assert.equal(f.starts(),1);
  const root=layout.runtimeDirectory(f.loc);
  assert.deepEqual(f.used.cli.map(c=>c.release),[root]);
- assert.deepEqual(f.used.modules.filter(m=>m.module==='persisted-config.js').map(m=>m.release),[root]);
+ assert.deepEqual(f.used.modules.filter(m=>m.module==='config.js').map(m=>m.release),[root]);
  assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);assert.equal(layout.previousRuntimeDirectory(f.loc),old);f.keep();
 });
 test('darwin: a 0.11.2-r4 daemon recorded by the earlier release is controlled and stopped by that release',async t=>{
  const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
  const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.daemon.reachable,true);
  // 0.17.4 only checked the config its next start writes.
- assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['persisted-config.js']);
+ assert.deepEqual(f.used.modules.filter(m=>m.release!==old).map(m=>m.module),['config.js']);
  await f.runtime.deactivate();assert.equal(f.used.stoppedVia,old);
  await f.runtime.activate();assert.equal(f.starts(),1);assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
  assert.equal((await f.runtime.status()).diagnosticCode,null);f.keep();

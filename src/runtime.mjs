@@ -116,12 +116,18 @@ async function resolveControl(loc=locations()) {
  return root?{root,version:LEGACY_PASEO_VERSION}:{root:null,refused:'DAEMON_RELEASE_UNAVAILABLE',pid:daemon.pid};
 }
 async function serverModule(relative, root) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
-// config.json goes through the persisted-config module of the release that reads it next, the same read
-// path its daemon loads with: readPersistedConfig applies that release's compatibility normalization
-// (0.17.4 folds providers.openai into the speech settings that use it, gives speech settings without a
-// provider "local", and drops what that provider cannot take), then its strict schema. The plugin merges
-// its keys into that result; it never drops or rewrites user settings beyond what upstream does there.
-async function persistedConfig(root) { return serverModule('dist/server/server/persisted-config.js', root); }
+// config.json goes through the configuration module (@getpaseo/server/configuration, which re-exports
+// persisted-config.js) of the release that reads it next, the same read path its daemon loads with:
+// readPersistedConfig applies that release's compatibility normalization (0.17.4 folds providers.openai
+// into the speech settings that use it, gives speech settings without a provider "local", and drops what
+// that provider cannot take), then its strict schema. The plugin merges its keys into that result; it
+// never drops or rewrites user settings beyond what upstream does there.
+async function configModule(root) { return serverModule('dist/server/server/config.js', root); }
+/** A private directory for a config.json copy, removed afterwards. */
+function withScratchHome(loc, fn) {
+  const dir = path.join(loc.stateDir, `.config-scratch-${randomUUID()}`);
+  try { privateDirectory(dir); return fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
 // Agent Connect never got daemon.name past Paseo's strict schema, but such a key is removed (see
 // writeConfig): that one key is taken out of a private copy, which then goes through the same read path.
 function readDaemonConfig(config, loc = locations()) {
@@ -131,9 +137,8 @@ function readDaemonConfig(config, loc = locations()) {
   const legacyName = !!raw?.daemon && typeof raw.daemon === 'object' && Object.hasOwn(raw.daemon, 'name');
   try {
     if (!legacyName) return config.readPersistedConfig(loc.paseoHome);
-    const { name: _name, ...daemon } = raw.daemon, copy = path.join(loc.stateDir, `.config-read-${randomUUID()}`);
-    try { atomicJson(path.join(copy, 'config.json'), { ...raw, daemon }); return config.readPersistedConfig(copy); }
-    finally { fs.rmSync(copy, { recursive: true, force: true }); }
+    const { name: _name, ...daemon } = raw.daemon;
+    return withScratchHome(loc, home => { atomicJson(path.join(home, 'config.json'), { ...raw, daemon }); return config.readPersistedConfig(home); });
   } catch {
     // Valid JSON the release cannot load even after its own normalization.
     throw new RuntimeError('CONFIG_INCOMPATIBLE');
@@ -225,7 +230,7 @@ async function applyAgentCollaboration(enabled) {
   // with no daemon this release can control, for this release's next start.
   const control = await resolveControl(loc), root = control.root || (runtimeReady(loc) ? runtimeDirectory(loc) : null);
   if (!root) return 'next-start';
-  const module = await persistedConfig(root);
+  const module = await configModule(root);
   const config = readDaemonConfig(module, loc);
   if (config.daemon?.mcp?.injectIntoAgents === enabled && config.daemon?.mcp?.enabled === true) return 'unchanged';
   try { module.savePersistedConfig(loc.paseoHome, { ...config, daemon: { ...config.daemon, mcp: collaborationMcp(config.daemon?.mcp, enabled) } }); fs.chmodSync(file, 0o600); }
@@ -266,7 +271,7 @@ function managedConfig(config, port, launchers) {
 async function writeConfig(port, launchers) {
   const loc = locations(); const file = path.join(loc.paseoHome, 'config.json');
   // Written for this release's daemon: the one about to start, or a running one of this revision.
-  const module = await persistedConfig(runtimeDirectory(loc));
+  const module = await configModule(runtimeDirectory(loc));
   const { config, providersChanged } = managedConfig(readDaemonConfig(module, loc), port, launchers);
   try { module.savePersistedConfig(loc.paseoHome, config); fs.chmodSync(file, 0o600); } catch { throw new RuntimeError('CONFIG_INVALID'); }
   updateState({ port, providerLaunchers: launchers });
@@ -276,9 +281,10 @@ async function writeConfig(port, launchers) {
  * Nothing is written. A config this release cannot load would otherwise surface only after that stop,
  * leaving Paseo down while the supervisor retried the start. */
 async function checkNextStartConfig(launchers) {
-  const loc = locations(), module = await persistedConfig(runtimeDirectory(loc));
+  const loc = locations(), module = await configModule(runtimeDirectory(loc));
   const { config } = managedConfig(readDaemonConfig(module, loc), loc.port, launchers);
-  if (!module.PersistedConfigSchema.safeParse(config).success) throw new RuntimeError('CONFIG_INVALID');
+  // Upstream's own save is the schema check: into a private scratch home, never the daemon's.
+  try { withScratchHome(loc, home => module.savePersistedConfig(home, config)); } catch { throw new RuntimeError('CONFIG_INVALID'); }
 }
 function safeProvider(entry) {
   return { provider: entry.provider, label: entry.label || entry.provider, status: entry.status || (entry.available === true ? 'ready' : entry.available === false ? 'unavailable' : 'unknown'), enabled: entry.enabled !== false, defaultModeId: entry.defaultModeId || null, modes: (entry.modes || []).map(mode => ({ id: mode.id, label: mode.label || mode.id })), chatVerified: readState().acceptance?.providers?.some(row => row.provider === entry.provider && row.passed) || false };

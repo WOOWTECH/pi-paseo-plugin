@@ -274,7 +274,7 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };
-    if (spec.endsWith('/persisted-config.js')) return config0174;
+    if (spec.endsWith('/server/config.js')) return config0174;
     if (spec === 'node:net') return { createServer: () => assert.fail('no live sockets') };
     return require(spec);
   };

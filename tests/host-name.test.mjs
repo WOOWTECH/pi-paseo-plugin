@@ -8,15 +8,15 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { readRecord, writeRecord } from '../src/onboarding.mjs';
-import { RuntimeError, assertSafePath, atomicJson } from '../src/state.mjs';
+import { RuntimeError, assertSafePath, atomicJson, privateDirectory } from '../src/state.mjs';
 import * as targets from '../src/connection-targets.mjs';
 import { PASEO_VERSION } from '../src/runtime-layout.mjs';
 import { loadPersistedConfig } from './helpers/paseo-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
-// The vendored 0.17.4 persisted-config module, or an installed runtime's (PI_PASEO_TEST_PERSISTED_CONFIG
-// names its dist/server/server/persisted-config.js): its read path and strict schema run for real.
+// The vendored 0.17.4 persisted-config module (config.js re-exports its read and save), or an installed
+// runtime's config.js named by PI_PASEO_TEST_PERSISTED_CONFIG: its read path and strict schema run for real.
 const actualConfig = process.env.PI_PASEO_TEST_PERSISTED_CONFIG
   ? await import(pathToFileURL(path.resolve(process.env.PI_PASEO_TEST_PERSISTED_CONFIG)).href) : await loadPersistedConfig(PASEO_VERSION);
 function fixture(t) {
@@ -43,11 +43,11 @@ function fixture(t) {
     const scopedRequire = spec => {
       if (spec === './runtime.mjs') return configRuntime;
       if (spec === './onboarding.mjs') return { readRecord, writeRecord, onboardingStatus: () => ({}) };
-      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, assertSafePath, atomicJson, readState: () => state, updateState: patch => (state = { ...state, ...patch }), withRuntimeLock: fn => fn() };
+      if (spec === './state.mjs') return { locations: () => loc, RuntimeError, assertSafePath, atomicJson, privateDirectory, readState: () => state, updateState: patch => (state = { ...state, ...patch }), withRuntimeLock: fn => fn() };
       if (spec === './connection-targets.mjs') return targets;
       if (spec === './provider-launchers.mjs') return { configureProviders: () => providers };
       if (spec === './runtime-layout.mjs') return { runtimeDirectory: () => loc.runtimeDir, runtimeReady: () => true, RUNTIME_REVISION: 'fixture' };
-      if (spec.endsWith('/persisted-config.js')) return { ...actualConfig, savePersistedConfig: (_home, config) => {
+      if (spec.endsWith('/server/config.js')) return { ...actualConfig, savePersistedConfig: (_home, config) => {
         // Paseo's daemon schema is strict and has no name/displayName key; the actual module rejects them too.
         assert.equal(Object.hasOwn(config.daemon, 'name'), false);
         assert.equal(Object.hasOwn(config.daemon, 'displayName'), false);

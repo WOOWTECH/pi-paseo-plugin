@@ -5,6 +5,8 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 // The real persisted-config modules of pinned Paseo releases, from tests/fixtures/paseo-<version>/config
 // (see its provenance.json). Only modules config parsing never calls are stubbed, and they throw if called.
+// The runtime imports dist/server/server/config.js (@getpaseo/server/configuration), which in 0.11.2 and
+// 0.17.4 re-exports readPersistedConfig and savePersistedConfig from this module unchanged.
 const fixtures=path.join(path.dirname(fileURLToPath(import.meta.url)),'../fixtures');
 export const configFixture=version=>path.join(fixtures,'paseo-'+version,'config');
 export const configProvenance=version=>JSON.parse(fs.readFileSync(path.join(configFixture(version),'provenance.json'),'utf8'));
