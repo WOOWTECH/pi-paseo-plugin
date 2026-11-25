@@ -2,7 +2,7 @@ import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles,seedPriorRelease,LOCK_0112} from './helpers/runtime-pid-files.mjs';
 import {loadPersistedConfig} from './helpers/paseo-config.mjs';
-import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError,RECORD_KINDS} from './helpers/upstream-stop.mjs';
+import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError,RECORD_KINDS,UPSTREAM_MS,UPSTREAM_LIMITS,MODELED_PASEO_VERSION} from './helpers/upstream-stop.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -649,6 +649,22 @@ test(`an unconfirmed terminal cleanup stays an error when ${name}: DAEMON_STILL_
  unfinishedStop(f);remains(f);assert.equal(f.signalsSent.length,1);
 });
 
+test('a daemon replaced before the stop signals anything is neither stopped nor reported as stopped: DAEMON_REPLACED',async t=>{
+ const f=fixture(t);f.permitStop();let replacement;
+ // After the plugin has read and verified the daemon, another supervisor takes the PID lock.
+ f.hooks.read=()=>{f.hooks.read=undefined;replacement=f.publish();};
+ await assert.rejects(f.runtime.deactivate(),{code:'DAEMON_REPLACED'});
+ assert.deepEqual(f.signalsSent,[],'the stop signals nothing it did not read');assert.equal(f.processes.has(replacement.pid),true);assert.equal(JSON.parse(fs.readFileSync(f.pidFile)).pid,replacement.pid);
+ unfinishedStop(f);
+});
+test('a daemon replaced while the supervisor is exiting: DAEMON_REPLACED after the one SIGTERM, the replacement untouched',async t=>{
+ const f=fixture(t);f.permitStop();let replacement;
+ f.stopScenario({supervisorHangs:true,duringWait:()=>{replacement=f.publish();}});
+ await assert.rejects(f.runtime.deactivate(),{code:'DAEMON_REPLACED'});
+ assert.deepEqual(f.signalsSent,[[f.initial.pid,'SIGTERM']]);assert.equal(f.processes.has(replacement.pid),true);assert.equal(f.processes.has(f.initial.pid),true);
+ unfinishedStop(f);
+});
+
 test('a supervisor that never exits fails at the stop budget: STOP_NOT_CONFIRMED, one SIGTERM, nothing killed',async t=>{
  const f=fixture(t);f.stopScenario({supervisorHangs:true});f.permitStop();const start=f.clock.now;
  await assert.rejects(f.runtime.deactivate(),{code:'STOP_NOT_CONFIRMED'});
@@ -673,9 +689,16 @@ test('more unresponsive terminal worker records than a daemon runs overrun the b
  assert.equal(f.clock.now-start,DAEMON_STOP_TIMEOUT_MS);unfinishedStop(f);assert.equal(f.processes.has(f.initial.pid),true);
 });
 
-test('the stop budgets cover upstream\'s worst case with its own constants, and the old 20 s did not',()=>{
- const worker=10000,record=13000,workers=2;
+test('the stop model and the budgets were derived from the Paseo release this plugin runs',()=>{
+ assert.equal(layout.PASEO_VERSION,MODELED_PASEO_VERSION,
+  'Paseo moved: re-read the upstream files named in tests/helpers/upstream-stop.mjs (stop, reaper, supervisor, worker manager), then update the model, the budgets in src/lifecycle-timeouts.mjs, the README and this version');
+});
+
+test('the stop budgets cover upstream\'s worst case with its constants (as modeled from upstream\'s source), and the old 20 s did not',()=>{
+ // The numbers come from tests/helpers/upstream-stop.mjs, which names the upstream file and constant of each.
+ const worker=UPSTREAM_MS.workerGrace,record=RECORD_KINDS.unresponsive.ms,workers=UPSTREAM_LIMITS.terminalWorkers;
  assert.equal(lifecycleTimeouts.WORKER_GRACE_MS,worker);assert.equal(lifecycleTimeouts.TERMINAL_RECORD_CLEANUP_MS,record);assert.equal(lifecycleTimeouts.TERMINAL_WORKER_LIMIT,workers);
+ assert.equal(record,UPSTREAM_MS.shutdownRequest+UPSTREAM_MS.shutdownWait+UPSTREAM_MS.killConfirm);
  const supervisorExit=worker+workers*record;
  assert.ok(DAEMON_STOP_TIMEOUT_MS>supervisorExit,'the wait for the supervisor');assert.ok(20000<supervisorExit,'the previous budget was too short');
  // The plugin supervisor stops the daemon and then runs upstream's second cleanup before it exits.

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
 import {checkProcessTable,PS_TABLE_ARGS,psInspectArgs,PS_UNAVAILABLE,PS_INCOMPATIBLE} from '../src/host-checks.mjs';
 import {diagnose,status} from '../src/runtime.mjs';
 import {locations,readState} from '../src/state.mjs';
@@ -12,19 +11,24 @@ import {locations,readState} from '../src/state.mjs';
 // dist/server/server/managed-processes/managed-processes.js). A shim `ps` only answers exactly them.
 const TABLE='-A -ww -o pid= -o ppid= -o sid= -o lstart=';
 const linux={skip:process.platform!=='linux'&&'the host check runs on Linux only'};
+// Only the tests that name this host's own ps need one that serves upstream's two commands; every other test answers
+// with a shim, so none depends on what the machine has installed.
+const hostPs=process.platform==='linux'?await checkProcessTable({timeoutMs:15000}):{ok:false};
+const needsProcps={skip:process.platform!=='linux'?'the host check runs on Linux only':!hostPs.ok&&'this host has no procps-compatible ps'};
 function shim(t,script){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-ps-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  if(script!==null)fs.writeFileSync(path.join(dir,'ps'),'#!/bin/sh\n'+script,{mode:0o755});
  return dir;
 }
-// Answers like procps for the pid 4242 whose parent is 4141; LC_ALL must be C.
-const GOOD=(extra='')=>`test "$LC_ALL" = C || { echo "LC_ALL=$LC_ALL" >&2; exit 65; }
+// Answers like procps for one process and its parent (4242 and 4141 unless told); LC_ALL must be C.
+const goodPs=(pid=4242,ppid=4141)=>`test "$LC_ALL" = C || { echo "LC_ALL=$LC_ALL" >&2; exit 65; }
 case "$*" in
- "${TABLE}") printf '    1     0     1 Mon Nov 24 07:33:00 2026\\n 4242  4141  4141 Wed Nov  5 19:52:11 2026\\n';;
- "-ww -p 4242 -o lstart= -o command=") printf 'Wed Nov  5 19:52:11 2026 node smoke.mjs\\n';;
+ "${TABLE}") printf '    1     0     1 Mon Nov 24 07:33:00 2026\\n ${pid}  ${ppid}  ${ppid} Wed Nov  5 19:52:11 2026\\n';;
+ "-ww -p ${pid} -o lstart= -o command=") printf 'Wed Nov  5 19:52:11 2026 node smoke.mjs\\n';;
  *) echo "unexpected arguments: $*" >&2; exit 64;;
 esac
-${extra}`;
+`;
+const GOOD=()=>goodPs();
 const self={pid:4242,ppid:4141};
 const check=(dir,options={})=>checkProcessTable({platform:'linux',env:{PATH:dir},...self,timeoutMs:5000,...options});
 
@@ -34,8 +38,7 @@ test('the check calls ps with the exact arguments and locale upstream uses',()=>
 test('a ps that serves both of upstream\'s commands passes',linux,async t=>{
  assert.deepEqual(await check(shim(t,GOOD())),{checked:true,ok:true});
 });
-test('the real ps of this host passes',linux,async t=>{
- if(spawnSync('ps',['-A','-o','pid='],{encoding:'utf8'}).status!==0)return t.skip('this host has no usable ps');
+test('the real ps of this host passes',needsProcps,async()=>{
  assert.deepEqual(await checkProcessTable({timeoutMs:15000}),{checked:true,ok:true});
 });
 test('no ps on the PATH is PS_UNAVAILABLE',linux,async t=>{
@@ -76,21 +79,36 @@ test('the check never throws and is not made off Linux',async()=>{
  assert.deepEqual(await checkProcessTable({platform:'linux',run:async()=>{throw Object.assign(new Error('x'),{code:2});}}),{checked:true,ok:false,code:PS_INCOMPATIBLE});
 });
 
-test('diagnose records the host check: a warning while ps is unusable, gone once it works',linux,async t=>{
+// diagnose() on the real module with a PATH of shims: provider commands that answer, and a ps that works or does not.
+function diagnoseEnvironment(t) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-ps-diagnose-'));
  const saved=Object.fromEntries(['HOME','PI_CODING_AGENT_DIR','PI_PASEO_STATE_DIR','PI_PASEO_RUNTIME_DIR','PI_PASEO_PORT','PATH'].map(key=>[key,process.env[key]]));
  t.after(()=>{for(const[key,value]of Object.entries(saved))value===undefined?delete process.env[key]:process.env[key]=value;fs.rmSync(dir,{recursive:true,force:true});});
  Object.assign(process.env,{HOME:path.join(dir,'home'),PI_CODING_AGENT_DIR:path.join(dir,'agent'),PI_PASEO_STATE_DIR:path.join(dir,'state'),PI_PASEO_RUNTIME_DIR:path.join(dir,'runtime')});delete process.env.PI_PASEO_PORT;
- const provider=path.join(dir,'providers');fs.mkdirSync(provider);
- for(const name of ['claude','codex','pi'])fs.writeFileSync(path.join(provider,name),'#!/bin/sh\nprintf "1.0.0\\n"\n',{mode:0o700});
- const broken=path.join(dir,'broken-ps');fs.mkdirSync(broken);fs.writeFileSync(path.join(broken,'ps'),'#!/bin/sh\nexit 1\n',{mode:0o755});
- const good=process.env.PATH;
- process.env.PATH=[provider,broken,good].join(path.delimiter);
+ const providers=path.join(dir,'providers');fs.mkdirSync(providers);
+ for(const name of ['claude','codex','pi'])fs.writeFileSync(path.join(providers,name),'#!/bin/sh\nprintf "1.0.0\\n"\n',{mode:0o700});
+ const withPs=(name,script)=>{const bin=path.join(dir,name);fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'ps'),'#!/bin/sh\n'+script,{mode:0o755});return bin;};
+ // The shims come first; the rest of the host's PATH stays behind them (flock, sh and node are needed to take locks).
+ const host=(saved.PATH||'').split(path.delimiter);
+ return {dir,providers,host,withPs,path:(...bins)=>{process.env.PATH=[...bins,...host].join(path.delimiter);}};
+}
+test('diagnose records the host check: a warning while ps is unusable, shown by status without running ps again',linux,async t=>{
+ const env=diagnoseEnvironment(t);
+ env.path(env.providers,env.withPs('broken-ps','exit 1\n'));
  const bad=await diagnose();
  assert.deepEqual(bad.warnings.map(row=>row.code),[PS_INCOMPATIBLE]);assert.equal(readState().processTable.ok,false);assert.equal(bad.diagnosticCode,null);
  assert.deepEqual((await status()).warnings.map(row=>row.code),[PS_INCOMPATIBLE],'status shows the recorded check without running ps');
- process.env.PATH=[provider,good].join(path.delimiter);
- if(spawnSync('ps',['-A','-o','pid='],{encoding:'utf8'}).status!==0)return t.skip('this host has no usable ps');
+ assert.equal(locations().stateDir,path.join(env.dir,'state'));
+});
+test('diagnose clears the warning once a ps that works is back (a shim answering for this very process)',linux,async t=>{
+ const env=diagnoseEnvironment(t);
+ env.path(env.providers,env.withPs('broken-ps','exit 1\n'));
+ assert.deepEqual((await diagnose()).warnings.map(row=>row.code),[PS_INCOMPATIBLE]);
+ env.path(env.providers,env.withPs('good-ps',goodPs(process.pid,process.ppid)));
  assert.deepEqual((await diagnose()).warnings,[]);assert.equal(readState().processTable.ok,true);
- assert.equal(locations().stateDir,path.join(dir,'state'));
+});
+test('diagnose with this host\'s own ps records a pass',needsProcps,async t=>{
+ const env=diagnoseEnvironment(t);
+ env.path(env.providers);
+ assert.deepEqual((await diagnose()).warnings,[]);assert.equal(readState().processTable.ok,true);
 });

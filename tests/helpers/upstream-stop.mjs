@@ -36,6 +36,13 @@ export class TerminalCleanupNotConfirmedError extends Error {
   }
 }
 
+/** The Paseo release this model (and the budgets in src/lifecycle-timeouts.mjs) were derived from by reading its
+ * source. A test fails when the pinned release moves, so that nobody keeps modeling a stop that no longer exists. */
+export const MODELED_PASEO_VERSION = '0.17.4';
+/** Upstream's limits that the budgets count with. */
+export const UPSTREAM_LIMITS = Object.freeze({
+  terminalWorkers: 2, // worker-terminal-manager.js MAX_TERMINAL_WORKERS: a daemon runs at most two terminal workers
+});
 /** Upstream's constants, in milliseconds. */
 export const UPSTREAM_MS = Object.freeze({
   workerGrace: 10000,    // supervisor.js WORKER_TERMINATION_GRACE_MS: the daemon worker's graceful shutdown, then its tree is killed
@@ -72,6 +79,7 @@ export const RECORD_KINDS = Object.freeze({
  *   supervisorHangs    the supervisor never exits
  *   retryConfirms      a later cleanup of the records an earlier one left open confirms them (procps was installed)
  *   leaveSupervisor    (not something upstream can do) the supervisor process survives its own exit
+ *   duringWait         called once, at the first poll of the supervisor's exit (a test replaces the daemon here)
  *   afterRelease       called once the PID lock is released, before the caller's terminal cleanup
  * @param {string} [host.recordsDir] where the closing records are kept as files (<PASEO_HOME>/terminal-worker)
  */
@@ -116,7 +124,9 @@ export function createUpstreamStop(host) {
     const records = scenario.records ?? [];
     const exitAt = scenario.supervisorHangs ? Infinity : clock.now + Math.min(scenario.workerShutdownMs ?? 0, UPSTREAM_MS.workerGrace)
       + records.reduce((sum, kind) => sum + RECORD_KINDS[kind].ms, 0) + closing.reduce((sum, entry) => sum + RECORD_KINDS[entry.kind].retryMs, 0) + (scenario.exitOverheadMs ?? 200);
+    let waited = false;
     while (clock.now < exitAt) {
+      if (!waited) { waited = true; scenario.duringWait?.(); }
       const current = host.readLock();
       if (current && !host.sameLock(instance, current)) throw new DaemonInstanceError('DAEMON_REPLACED', `Supervisor changed for ${home}; stop of PID ${instance.pid} was not confirmed.`);
       if (clock.now >= deadline) throw new DaemonInstanceError('STOP_NOT_CONFIRMED', `Timed out waiting for supervisor PID ${instance.pid} in ${home} to exit; use --force to permit forced cleanup.`);
