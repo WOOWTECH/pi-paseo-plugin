@@ -514,6 +514,9 @@ async function stopOwnedDaemon(loc, control, instance) {
 }
 export async function deactivate() {
   return withRuntimeLock(async () => {
+    // Recorded before the stop and not undone when it fails, on purpose: the host (or the user's disable) has already
+    // saved the pause, and only status().enabled reads this flag. A failed stop leaves the phase and the daemon as they
+    // were and reports why; reporting enabled: true would claim a service that nothing is going to start.
     updateState({ desiredEnabled: false });
     // One resolution: the release that read the instance is the one that stops it.
     const control = await resolveControl(), instance = await currentInstance(control);
