@@ -8,6 +8,10 @@ import {SUPERVISOR_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {processIdentity, assertSafePath} from './state.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+// A supervisor keeps running the code it was started with. After an in-place upgrade (the same
+// packageRoot) one recorded under another plugin version, or under none (0.1.23 and earlier), would
+// still call its own activate() when the daemon exits, and start the release it shipped with.
+const VERSION=(()=>{try{const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;return typeof version==='string'?version:null;}catch{return null;}})();
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function alive(pid) {try{process.kill(pid,0);return true;}catch{return false;}}
 function sameProcess(record) {
@@ -17,14 +21,28 @@ function sameProcess(record) {
   return args.includes(path.join(record.packageRoot,'bin/cli.mjs'))&&args.includes('supervise');
  } catch{return process.platform!=='linux'&&record.packageRoot===root;}
 }
+/** Signals the supervisor that `record` names, if that process is still that supervisor, and waits for it to end.
+ * True when it was one that had to be stopped. */
 async function stopOwnedSupervisor(record,timeoutMs) {
- if(!sameProcess(record))return;
+ if(!sameProcess(record))return false;
  try {process.kill(record.pid,'SIGTERM');} catch(error) {if(error.code!=='ESRCH')throw error;}
  const deadline=Date.now()+timeoutMs;
  while(sameProcess(record)) {
   if(Date.now()>=deadline)throw new Error('Plugin supervisor is still stopping');
   await delay(Math.min(100,Math.max(1,deadline-Date.now())));
  }
+ return true;
+}
+// How a supervisor's own stop of the daemon went. The host that signals it for a disable only waits for the process
+// to end and cannot see an error thrown inside it, so a failed stop is written down (stopSupervisor reads it).
+const stopFile=loc=>path.join(loc.stateDir,'supervisor-stop.json');
+const safeCode=value=>/^[A-Z][A-Z0-9_]{0,63}$/.test(value||'')?value:null;
+function recordStop(loc,outcome) {
+ try {writeRecord(stopFile(loc),{pid:process.pid,at:new Date().toISOString(),...outcome});} catch { /* the stop is what counts, not its record */ }
+}
+async function stopDaemon(loc) {
+ try {const result=await runtime.deactivate();recordStop(loc,{ok:true});return result;}
+ catch(error) {recordStop(loc,{ok:false,code:safeCode(error?.code)||'OPERATION_FAILED'});throw error;}
 }
 function sameRoot(installedPath) {
  if(typeof installedPath!=='string')return false;
@@ -73,7 +91,9 @@ export async function startSupervisor({cwd}={}) {
   if(!packageEnabled(loc,{cwd}))return {running:false};
   const old=readRecord(file);
   if(sameProcess(old)) {
-   if(old.packageRoot===root)return {running:true,pid:old.pid};
+   // Kept only when it runs this root at this version. A version this module cannot read leaves the
+   // previous rule (same root) in place. Replacement goes through the same ownership checks.
+   if(old.packageRoot===root&&(VERSION===null||old.version===VERSION))return {running:true,pid:old.pid};
    await stopOwnedSupervisor(old,SUPERVISOR_STOP_TIMEOUT_MS);
   }
   const logFile=path.join(loc.stateDir,'supervisor.log');
@@ -85,21 +105,27 @@ export async function startSupervisor({cwd}={}) {
    child=spawn(process.execPath,[path.join(root,'bin/cli.mjs'),'supervise'],{cwd:cwd||readRecord(path.join(loc.stateDir,'host-registration.json')).cwd||process.cwd(),detached:true,stdio:['ignore',log,log],env:process.env});
   } finally {fs.closeSync(log);}
   await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
-  writeRecord(file,{pid:child.pid,identity:processIdentity(child.pid),packageRoot:root,startedAt:new Date().toISOString()});child.unref();
+  writeRecord(file,{pid:child.pid,identity:processIdentity(child.pid),packageRoot:root,...(VERSION===null?{}:{version:VERSION}),startedAt:new Date().toISOString()});child.unref();
   return {running:true,pid:child.pid};
  });
 }
+/** Stops the plugin supervisor. When it ends for a disable it stops the daemon itself; if that failed, the result
+ * carries the failure ({stopped: true, failed: {code, at}}) so the caller does not wait out the same budget again. */
 export async function stopSupervisor({timeoutMs=SUPERVISOR_STOP_TIMEOUT_MS}={}) {
- const loc=runtime.locations();
+ const loc=runtime.locations(),began=Date.now();
  return withLock(path.join(loc.stateDir,'supervisor-start.lock'),async()=>{
-  await stopOwnedSupervisor(readRecord(path.join(loc.stateDir,'supervisor.json')),timeoutMs);
-  return {stopped:true};
+  const record=readRecord(path.join(loc.stateDir,'supervisor.json'));
+  if(!await stopOwnedSupervisor(record,timeoutMs))return {stopped:true};
+  let outcome;try {outcome=readRecord(stopFile(loc));} catch {outcome={};}
+  // Its own record: this supervisor's, written during this stop.
+  const failed=outcome.ok===false&&outcome.pid===record.pid&&Date.parse(outcome.at)>=began;
+  return failed?{stopped:true,failed:{code:safeCode(outcome.code)||'OPERATION_FAILED',at:outcome.at}}:{stopped:true};
  });
 }
 export async function supervise() {
  const loc=runtime.locations();
  let stop=false,initialized=false,retries=0,wake,refreshing;
- const shutdown=()=>{stop=true;wake?.();};
+ const shutdown=()=>{stop=true;runtime.abortPruning();wake?.();};
  const wait=ms=>new Promise(resolve=>{
   if(stop){resolve();return;}
   const timer=setTimeout(done,ms);
@@ -111,7 +137,7 @@ export async function supervise() {
  // Paseo disabled are two decisions, so only the first one is settled here.
  const unconfigured=async()=>{
   if(packageEnabled(loc))return false;
-  if(shouldDeactivate(loc))await runtime.deactivate();
+  if(shouldDeactivate(loc))await stopDaemon(loc);
   return true;
  };
  try {
@@ -136,9 +162,12 @@ export async function supervise() {
   }
  } finally {
   process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);
+  // However this supervisor ends, a delete of old releases it started must not keep the process alive: only the success path
+  // of `supervise` in bin/cli.mjs calls process.exit, and one that ends on a failed stop below would otherwise wait for it.
+  runtime.abortPruning();
   // A signal only means this process must end; whether Paseo should be left disabled
   // is a separate question (see shouldDeactivate). Deactivating on every stop
   // persisted "the user wants Paseo off" for a container shutdown or a source swap.
-  if(stop&&shouldDeactivate(loc))await runtime.deactivate();
+  if(stop&&shouldDeactivate(loc))await stopDaemon(loc);
  }
 }

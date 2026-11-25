@@ -1,0 +1,8 @@
+{
+  "package": "@getpaseo/server",
+  "version": "0.17.4",
+  "pidLockSha256": "a4e8bc790b27c944847b7bb84694b38d0366d08d7d565409edbc63dd6462b8f7",
+  "purpose": "Offline exact-source writer concurrency and branded server_info regression tests; not included in npm package",
+  "websocketServerSha256": "bfc79901aa7768a51b98385b6f729dac69a1098f4480a66fd3d2be1d6af06b4b",
+  "tarballIntegrity": "sha512-2/KH7KQKNJ8oVGShQKRCVKCJUsoLfyi5mc8Fx8nqhEChUwUJ4hso3p6LgCywDbz6XlLOQnZWuBBM/bY20Fegvg=="
+}

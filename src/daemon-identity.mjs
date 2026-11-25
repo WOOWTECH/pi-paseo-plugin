@@ -102,9 +102,10 @@ export function assertNoHomeSupervisor(loc) {
  }
 }
 
-export function createDaemonIdentity({readBirth=readLinuxBirth,assertNoSupervisor=assertNoHomeSupervisor}={}) {
+// `platform` lets tests run the darwin/other path in a Linux process; it defaults to the real one.
+export function createDaemonIdentity({readBirth=readLinuxBirth,assertNoSupervisor=assertNoHomeSupervisor,platform=process.platform}={}) {
  function observe(loc,instance,verifyOwnership) {
-  if(process.platform!=='linux')return;
+  if(platform!=='linux')return;
   const installationId=ownedHome(loc);requireRuntimeLock(loc);
   if(!runtimeReady(loc))fail('DAEMON_TRANSITION_UNVERIFIED');
   const record=pidRecord(loc,instance),before=readBirth(instance.pid);
@@ -115,11 +116,11 @@ export function createDaemonIdentity({readBirth=readLinuxBirth,assertNoSuperviso
   return {schema:1,installationId,home:loc.paseoHome,lock:{pid:instance.pid,startedAt:instance.startedAt,bootId:instance.bootId,uid:instance.uid,piPaseoProtocol:instance.piPaseoProtocol},process:before,pidFile:{dev:record.stat.dev,ino:record.stat.ino}};
  }
  async function observeOwnedInstance(loc,instance,verifyOwnership) {
-  if(process.platform!=='linux')return null;
+  if(platform!=='linux')return null;
   return withPidTransition(loc.paseoHome,()=>observe(loc,instance,verifyOwnership));
  }
  async function rememberOwnedInstance(loc,instance,verifyOwnership,expected) {
-  if(process.platform!=='linux')return;
+  if(platform!=='linux')return;
   return withPidTransition(loc.paseoHome,()=>{
   const receipt=observe(loc,instance,verifyOwnership);
   if(!expected||!sameBirth(receipt.process,expected.process)||!sameLock(receipt.lock,expected.lock)||!sameInode(receipt.pidFile,expected.pidFile))fail('DAEMON_STATE_CHANGED');
@@ -129,7 +130,7 @@ export function createDaemonIdentity({readBirth=readLinuxBirth,assertNoSuperviso
   });
  }
  async function recoverStaleInstance(loc,instance) {
-  if(process.platform!=='linux')fail('DAEMON_NOT_OWNED');
+  if(platform!=='linux')fail('DAEMON_NOT_OWNED');
   return withPidTransition(loc.paseoHome,()=>{
   const installationId=ownedHome(loc);requireRuntimeLock(loc);
   if(!runtimeReady(loc))fail('DAEMON_TRANSITION_UNVERIFIED');

@@ -8,18 +8,19 @@ import {gunzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {selectedBrand} from '../src/brand-identity.mjs';
 import {targetEnvironment} from '../src/connection-targets.mjs';
-import {patchBrandIdentitySource, applyBrandIdentityPatch, brandIdentityPatchReady, BRAND_SERVER_PATH,
+import {patchBrandIdentitySource, applyBrandIdentityPatch, brandIdentityPatchReady, BRAND_SERVER_PATH, BRAND_0112,
   ORIGINAL_BRAND_SERVER_SHA256, PATCHED_BRAND_SERVER_SHA256} from '../src/brand-identity-patch.mjs';
-import {runtimeDirectory, markRuntimeReady, runtimeReady, previousRuntimeDirectory} from '../src/runtime-layout.mjs';
-import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
-const source = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-0.11.2/websocket-server.js.gz', import.meta.url))).toString();
+import {runtimeDirectory, markRuntimeReady, runtimeReady, previousRuntimeDirectory, PASEO_VERSION} from '../src/runtime-layout.mjs';
+import {seedPidFiles, seedPriorRelease} from './helpers/runtime-pid-files.mjs';
+const source = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-0.17.4/websocket-server.js.gz', import.meta.url))).toString();
+const source0112 = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-0.11.2/websocket-server.js.gz', import.meta.url))).toString();
 const sha = value => createHash('sha256').update(value).digest('hex');
 function fixture(t) {
   const runtimeDir=fs.mkdtempSync(path.join(os.tmpdir(),'paseo-brand-'));
   t.after(()=>fs.rmSync(runtimeDir,{recursive:true,force:true}));
   const loc={runtimeDir};seedPidFiles(loc);
   const root=runtimeDirectory(loc),cli=path.join(root,'node_modules/@getpaseo/cli');
-  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:'0.11.2'}));
+  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:PASEO_VERSION}));
   return {loc,root,file:path.join(root,BRAND_SERVER_PATH)};
 }
 function payload(text, target) {
@@ -27,7 +28,8 @@ function payload(text, target) {
   // flags. The remaining class needs real providers/network and runs in CI/live.
   const method=text.slice(text.indexOf('    buildServerInfoStatusPayload(session) {'),text.indexOf('    createServerInfoMessage(session) {'));
   const object=vm.runInNewContext('({' + method + '})',{WS_PROTOCOL_VERSION:1,getHostName:()=> 'fixture',agentConnectBrand:selectedBrand(target)});
-  return object.buildServerInfoStatusPayload({getPermissions:()=>({})});
+  const daemon={serverId:'srv_fixture',daemonVersion:PASEO_VERSION,providerSnapshotManager:{supportsConfigRequiredProvider:()=>false}};
+  return object.buildServerInfoStatusPayload.call(daemon,{getPermissions:()=>[],getHostSourceId:()=>'owner'});
 }
 test('Apporo hello regression: the actual server payload declares the selected target',()=>{
   assert.equal(payload(source,'apporo').brand,undefined,'upstream reproduces Apporo close4004');
@@ -48,6 +50,8 @@ test('known server source patches deterministically and idempotently',()=>{
   assert.equal(sha(patched),PATCHED_BRAND_SERVER_SHA256);
   assert.equal(patchBrandIdentitySource(patched),patched);
   assert.throws(()=>patchBrandIdentitySource(source+'\n'),{code:'BRAND_IDENTITY_SOURCE_MISMATCH'});
+  // A release never receives a patch made for another upstream version.
+  assert.throws(()=>patchBrandIdentitySource(source0112),{code:'BRAND_IDENTITY_SOURCE_MISMATCH'});
 });
 test('unknown source fails before writing either server or helper',t=>{
   const {root,file}=fixture(t);fs.appendFileSync(file,'\n');
@@ -63,11 +67,25 @@ test('readiness verifies identity patch, helper and receipt; repeated marking re
   const before=fs.statSync(file).mtimeMs;markRuntimeReady(loc);assert.equal(fs.statSync(file).mtimeMs,before);
   const receipt=path.join(root,'.pi-paseo-runtime.json'),value=JSON.parse(fs.readFileSync(receipt));delete value.brandIdentityPatchId;fs.writeFileSync(receipt,JSON.stringify(value));assert.equal(runtimeReady(loc),false);
 });
-test('r3 daemon remains available for owned offline shutdown without rewriting its source',t=>{
-  const {loc,root,file}=fixture(t);markRuntimeReady(loc);
-  const old=root.replace('-r4-','-r3-');
-  const receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));receipt.revision=path.basename(old);delete receipt.brandIdentityPatchId;
-  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify(receipt));fs.writeFileSync(file,source);fs.renameSync(root,old);
+for(const generation of ['r3','r4'])test(generation+' (0.11.2) daemon remains available for owned offline shutdown without rewriting its source',t=>{
+  const {loc,root}=fixture(t);
+  const old=seedPriorRelease(loc,{generation});
+  fs.rmSync(root,{recursive:true});
   assert.equal(runtimeReady(loc),false);assert.equal(previousRuntimeDirectory(loc),old);
-  assert.equal(fs.readFileSync(path.join(old,BRAND_SERVER_PATH),'utf8'),source);
+  // Preparing the 0.17.4 release beside it leaves the old release byte-for-byte.
+  seedPidFiles(loc);const cli=path.join(root,'node_modules/@getpaseo/cli');
+  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:PASEO_VERSION}));
+  const server=path.join(old,BRAND_SERVER_PATH),helper=path.join(path.dirname(server),'pi-paseo-brand-identity.mjs');
+  const before=[server,helper].map(file=>fs.existsSync(file)?fs.readFileSync(file):null);
+  markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);assert.equal(previousRuntimeDirectory(loc),old);
+  assert.deepEqual([server,helper].map(file=>fs.existsSync(file)?fs.readFileSync(file):null),before);
+  // As 0.1.18-0.1.23 left them: r4 carries the 0.11.2 brand patch, r3 the plain upstream server.
+  if(generation==='r4'){assert.equal(sha(fs.readFileSync(server)),BRAND_0112.patched);assert.equal(brandIdentityPatchReady(old,BRAND_0112),true);}
+  else {assert.equal(fs.readFileSync(server,'utf8'),source0112);assert.equal(before[1],null);}
+});
+test('the 0.11.2 brand patch literals reproduce what 0.1.18-0.1.23 applied',()=>{
+  assert.equal(sha(source0112),BRAND_0112.original);
+  const patched=patchBrandIdentitySource(source0112,BRAND_0112);assert.equal(sha(patched),BRAND_0112.patched);
+  assert.equal(patchBrandIdentitySource(patched,BRAND_0112),patched);
+  assert.throws(()=>patchBrandIdentitySource(source,BRAND_0112),{code:'BRAND_IDENTITY_SOURCE_MISMATCH'});
 });
