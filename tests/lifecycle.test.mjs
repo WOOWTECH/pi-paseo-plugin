@@ -525,3 +525,15 @@ test('default supervisor shutdown remains bounded and never force-kills a proces
  assert.equal(clock.now-start,30000);assert.equal(f.processes.has(pid),true);
  assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
 });
+
+test('host status opens each target\'s official app and reports no bundled web client', async t => {
+  const f = fixture(t);
+  const host = f.load('src/host-api.mjs');
+  for (const [target, url] of [[undefined, 'https://app.paseo.sh/'], ['paseo', 'https://app.paseo.sh/'], ['woowtech', 'https://smart.woowtech.io/'], ['apporo', 'https://smart.apporo.ai/']]) {
+    if (target) f.write('preferences', { target });
+    const status = await host.status();
+    assert.equal(status.openUrl, url, String(target));
+    assert.equal('webClient' in status, false);
+    assert.equal(typeof host.web, 'undefined');
+  }
+});

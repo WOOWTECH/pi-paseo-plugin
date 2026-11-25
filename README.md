@@ -1,6 +1,6 @@
 # Agent Connect
 
-Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, routes and data directory.
+Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, settings routes and data directory; the bundled `/paseo-web` client was removed in 0.1.23.
 
 Changing the target saves its app URL and relay together. If the daemon is running, finish any conversations, disable the connector, then enable it to apply the change. Target changes clear previous pairing and relay verification; generate a fresh pairing link after restarting. Saving only a display name does not restart the daemon. A target change does not revoke a device already paired with the daemon.
 
@@ -17,7 +17,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 
 各標的使用自己的加密 relay；從 Pi Web 的受保護設定頁產生配對連結，再開啟所選標的的官方網站。
 
-`0.1.23` 起不再附內建網頁：Paseo 選項跟兩個 Smart 一樣開啟官方網站 `https://app.paseo.sh`，並在那裡配對。Pi Web 的 `/paseo-web` 路由與網頁包下載（約 11 MB）一併移除；啟動服務時會刪掉舊版留在插件狀態目錄 `web-client` 的網頁檔（只刪真正的目錄，不跟隨符號連結）。用 `/paseo-web` 配對過的瀏覽器要在官方網站重新配對一次；主機身分、登入與對話不變。0.1.9–0.1.22 內建的修正版（Paseo Web 0.13.0-woow.1）帶有兩項顯示修補：回覆途中重新整理時重複顯示，以及長回覆重連後只剩中間一段。上游 [PR #7908](https://github.com/getpaseo/paseo/pull/7908) 合併並部署前，官方網站可能仍會出現這兩個情況；後端對話不受影響。背景見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
+`0.1.23` 起不再附內建網頁：Paseo 選項跟兩個 Smart 一樣開啟官方網站 `https://app.paseo.sh`，並在那裡配對。Pi Web 的 `/paseo-web` 路由與網頁包下載（約 11 MB）一併移除；啟動服務時會刪掉舊版留在插件狀態目錄 `web-client` 的網頁檔（只刪舊版建立的項目，不跟隨符號連結，刪不掉也不影響啟動）。升級後要重新啟動 Pi Web（原生與容器的升級流程都會重啟）；重啟前，仍在執行的舊版 Pi Web 無法為 Paseo 產生配對連結，開著的 `/paseo-web` 分頁也會失效。用 `/paseo-web` 配對過的瀏覽器要在官方網站重新配對一次；主機身分、登入與對話不變。0.1.9–0.1.22 內建的修正版（Paseo Web 0.13.0-woow.1）帶有兩項顯示修補：回覆途中重新整理時重複顯示，以及長回覆重連後只剩中間一段。上游 [PR #7908](https://github.com/getpaseo/paseo/pull/7908) 合併並部署前，官方網站可能仍會出現這兩個情況；後端對話不受影響。背景見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
 
 ## 0.1.10 PID 復原修補
 

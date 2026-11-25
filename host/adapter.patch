@@ -448,7 +448,7 @@ index 0000000..ab336fe
 +});
 diff --git a/app/api/plugin-paseo/route.ts b/app/api/plugin-paseo/route.ts
 new file mode 100644
-index 0000000..222e5a5
+index 0000000..69af13e
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.ts
 @@ -0,0 +1,110 @@
@@ -483,17 +483,17 @@ index 0000000..222e5a5
 +
 +async function context(cwd: unknown) {
 +  // A directory named by the client must be one Pi Web already serves. The server's own fallback (PI_PASEO_CWD, else
-+  // the user's home) is trusted: the managed Web client route and startup recovery already read it without that
-+  // check, and requiring it made this panel unreachable on a fresh install that has no conversation and no
-+  // selected project (the project picker only registers a child directory of home).
++  // the user's home) is trusted: startup recovery already reads it without that check, and requiring it made this
++  // panel unreachable on a fresh install that has no conversation and no selected project (the project picker only
++  // registers a child directory of home).
 +  const requested = typeof cwd === "string" && cwd ? cwd : undefined;
 +  const configured = process.env.PI_PASEO_CWD;
 +  const directory = requested ?? (configured || homedir());
 +  if (!validCwd(directory) || !directoryExists(directory)) return null;
 +  const served = isExistingFilePathAllowed(directory, await getAllowedFileRoots());
 +  if (!served && requested) return null;
-+  // Outside the served roots only the global package is read, like the managed Web client route, unless the
-+  // operator named a project explicitly with PI_PASEO_CWD.
++  // Outside the served roots only the global package is read, unless the operator named a project explicitly
++  // with PI_PASEO_CWD.
 +  const packages = configuredPaseoPackages(directory, !served && !configured);
 +  const target = packages.find((pkg) => !pkg.disabled) ?? packages[0];
 +  if (!target) return null;
@@ -2120,10 +2120,10 @@ index 0000000..b8ab47d
 +});
 diff --git a/lib/paseo-plugin-lifecycle.ts b/lib/paseo-plugin-lifecycle.ts
 new file mode 100644
-index 0000000..1149fd5
+index 0000000..7d92f43
 --- /dev/null
 +++ b/lib/paseo-plugin-lifecycle.ts
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,84 @@
 +/** A confirmed Pi package operation, after its settings write succeeded. */
 +export type PaseoLifecycleAction = "install" | "enable" | "update" | "disable" | "remove";
 +export const PASEO_PACKAGE_NAME = "@woowtech/pi-paseo";
@@ -2154,7 +2154,6 @@ index 0000000..1149fd5
 +  status: () => Promise<Record<string, unknown>>;
 +  diagnostics: () => Promise<Record<string, unknown>>;
 +  pair: () => Promise<{ url: string; target?: string; expiresAt?: string }>;
-+  web?: (request: Request) => Response | Promise<Response>;
 +  listModels?: (provider: string) => Promise<Record<string, unknown>>;
 +  saveConfig: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 +};

@@ -174,22 +174,54 @@ test('pair uses reachable daemon and preserves proof without entering lifecycle 
  const result=await f.runtime.pair();assert.match(result.url,/^https:\/\/app\.paseo\.sh\/#offer=/);assert.equal(result.target,'paseo');assert.deepEqual(fs.readFileSync(f.proofFile),proof);assert.equal(f.starts(),0);
 });
 
+const RELEASE='a'.repeat(64),STAGE='.stage-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 test('activation removes the bundled web copy that 0.1.9-0.1.22 downloaded and keeps private state',async t=>{
- const f=fixture(t),retired=path.join(f.loc.stateDir,'web-client','a'.repeat(64));
+ const f=fixture(t),web=path.join(f.loc.stateDir,'web-client'),retired=path.join(web,RELEASE);
  fs.mkdirSync(path.join(retired,'_expo/static'),{recursive:true});fs.writeFileSync(path.join(retired,'index.html'),'retired');fs.writeFileSync(path.join(retired,'_expo/static/app.js'),'retired');
+ fs.mkdirSync(path.join(web,STAGE,'content'),{recursive:true});fs.writeFileSync(path.join(web,STAGE,'client.tar.gz'),'partial');
  await f.runtime.activate();
- assert.equal(fs.existsSync(path.join(f.loc.stateDir,'web-client')),false);
+ assert.equal(fs.existsSync(web),false);
  assert.equal(fs.readFileSync(path.join(f.loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');
  assert.equal(fs.readFileSync(path.join(f.loc.paseoHome,'agents.db'),'utf8'),'retain-data');
 });
 
-test('removing the retired web copy never follows a symlink',async t=>{
+test('only the entries the bundled client created are removed from web-client',async t=>{
+ const f=fixture(t),web=path.join(f.loc.stateDir,'web-client');
+ fs.mkdirSync(path.join(web,RELEASE),{recursive:true});fs.writeFileSync(path.join(web,RELEASE,'index.html'),'retired');
+ fs.writeFileSync(path.join(web,'notes.txt'),'unrelated');fs.mkdirSync(path.join(web,'b'.repeat(63)));
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(path.join(web,RELEASE)),false);
+ assert.equal(fs.readFileSync(path.join(web,'notes.txt'),'utf8'),'unrelated');
+ assert.equal(fs.statSync(path.join(web,'b'.repeat(63))).isDirectory(),true);
+});
+
+test('a symlinked web-client is left in place',async t=>{
  const f=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-web-outside-'));
  t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
- fs.writeFileSync(path.join(outside,'keep.txt'),'keep');fs.symlinkSync(outside,path.join(f.loc.stateDir,'web-client'));
+ fs.mkdirSync(path.join(outside,RELEASE));fs.writeFileSync(path.join(outside,RELEASE,'keep.txt'),'keep');fs.symlinkSync(outside,path.join(f.loc.stateDir,'web-client'));
  await f.runtime.activate();
- assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'keep');
  assert.equal(fs.lstatSync(path.join(f.loc.stateDir,'web-client')).isSymbolicLink(),true);
+ assert.equal(fs.readFileSync(path.join(outside,RELEASE,'keep.txt'),'utf8'),'keep');
+});
+
+test('a symlink inside the retired copy is removed without touching its target',async t=>{
+ const f=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-web-outside-')),retired=path.join(f.loc.stateDir,'web-client',RELEASE);
+ t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(outside,'keep.txt'),'keep');fs.mkdirSync(retired,{recursive:true});fs.symlinkSync(outside,path.join(retired,'assets'));
+ await f.runtime.activate();
+ assert.equal(fs.existsSync(path.join(f.loc.stateDir,'web-client')),false);
+ assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'keep');
+});
+
+test('a retired copy that cannot be removed does not block activation',{skip:process.getuid?.()===0&&'root bypasses directory permissions'},async t=>{
+ const f=fixture(t),locked=path.join(f.loc.stateDir,'web-client',RELEASE,'locked');
+ fs.mkdirSync(locked,{recursive:true});fs.writeFileSync(path.join(locked,'file'),'retired');fs.chmodSync(locked,0o500);
+ // Restore inside the test: the fixture's own cleanup hook runs first and needs to delete the tree.
+ try {
+  await f.runtime.activate();
+  assert.equal(fs.readFileSync(path.join(locked,'file'),'utf8'),'retired');
+  const result=await f.runtime.pair();assert.match(result.url,/^https:\/\/app\.paseo\.sh\/#offer=/);
+ } finally { fs.chmodSync(locked,0o700); }
 });
 
 for(const copy of ['dist/server/server','dist/src/server'])test('unpatched runtime '+copy+' refuses reclaim even with old valid proof',async t=>{
