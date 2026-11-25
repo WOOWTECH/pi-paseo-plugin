@@ -51,7 +51,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 - 目前版本；
 - 比目前版本舊的版本裡最新的那一個，作為退回用（0.1.24 之後是 `0.11.2-r4-4cf9d40940bf`）。排序依 Paseo 版本、revision 號碼、收據時間；
 - 比目前版本新的版本：降級插件之後留下的，再升級時就不必重新下載 0.7 GB；
-- 還有程序在它的環境變數 `PI_PASEO_RUNTIME_REVISION` 指向的版本，不論那個程序服務哪個 home（Linux 掃描同一使用者的 `/proc`；其他系統只認這個 home 自己的 daemon）。掃描一律往保守的方向：同一使用者的程序，環境變數讀不到（例如 non-dumpable 的程序，`/proc/<pid>/environ` 拒絕存取），或這個 home 的程序沒有標明用哪個版本，這次就不清理（`lastPrune.skipped: RELEASE_IN_USE_UNKNOWN`），下次啟用再試。執行這個插件的程序和它的上層程序不算；其他程序若全域匯出了這個 home 的 `PASEO_HOME`，也會讓清理一直跳過，須取消該匯出；
+- 還有程序在它的環境變數 `PI_PASEO_RUNTIME_REVISION` 指向的版本，不論那個程序服務哪個 home（Linux 掃描同一使用者的 `/proc`；其他系統只認這個 home 自己的 daemon）。掃描一律往保守的方向：同一使用者的程序，環境變數讀不到（例如 non-dumpable 的程序，`/proc/<pid>/environ` 拒絕存取），或這個 home 的程序沒有標明用哪個版本，這次就不清理（`lastPrune.skipped: RELEASE_IN_USE_UNKNOWN`），下次啟用再試。環境變數讀不到的程序，只有它的命令列（任何人都讀得到）能證明它跑不了 Paseo 版本才不算：Paseo 用 node 執行版本，自己的 supervisor 與 daemon 把行程標題改成 `Paseo …`；所以 tmux 用戶端或 python 小工具不會讓清理停擺，命令列也讀不到的程序會。執行這個插件的程序和它的上層程序不算；其他程序若全域匯出了這個 home 的 `PASEO_HOME`，也會讓清理一直跳過，須取消該匯出；
 - 不能確認是插件建立的一切。要同時符合：目錄名是 `<Paseo 版本>-r<n>-<12 位雜湊>`；是真正的目錄（不跟隨符號連結）；`.pi-paseo-runtime.json` 是一般檔案，其 `revision` 等於目錄名，`lockSha256` 以目錄名的雜湊開頭。別的名稱、檔案、符號連結、沒有收據或收據對不上的目錄、舊版留下的 `<runtimeDir>/node_modules`（舊版控制用副本），以及 `releases/` 以外的東西，一律不動。
 
 啟用時只在執行鎖之內做便宜的部分：判斷，並把版本目錄改名成 `.pruning-<版本名>-<UUID>`（一步完成，不會留下半個還像版本目錄的東西）。真正的刪除（SD 卡上 0.7 GB 可能要很久）在鎖釋放之後，由背景工作做：配對、儲存設定、停止不必等它；結果之後才寫進 `lastPrune`。刪除不跟隨符號連結。程序在刪到一半時結束（容器停止、Pi Web 重啟），剩下的 `.pruning-*` 由下次啟用接著刪，即使那時只剩目前版本和退回用的版本。清理盡力而為，失敗只記在 `lastPrune.failed`，不影響啟用與狀態。代價是退回只到前一個版本：再經過一次升級，要退回更早的插件版本，須重新下載它的 runtime（需要網路）。

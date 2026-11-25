@@ -67,7 +67,7 @@ function fixture(t, { platform = process.platform } = {}) {
     const p=processes.get(Number(m[1]));if(!p)throw missing();
     const uid=p.uid??process.getuid();
     switch(m[2]){
-     case 'cmdline':return p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0';
+     case 'cmdline':if(p.cmdlineUnreadable)throw Object.assign(new Error('denied'),{code:'EACCES'});return p.cmdline??(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0');
      case 'status':return `Name:\tfixture\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
      case 'stat':return `${m[1]} (fixture) S ${p.ppid??1} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${p.startTicks} 0 0 0\n`;
      case 'environ':
@@ -766,17 +766,24 @@ test('a release that a live process pins stays, whichever home it serves; a proc
  await activated(f);assert.equal(releaseNames(f).includes(R2),false,'once it is gone the pruning resumes');
 });
 
-test('the scan fails closed: a process of this user whose environment cannot be read stops the pruning, one of another user does not',async t=>{
+test('the scan fails closed: a process of this user whose environment is denied stops the pruning, unless its command line rules it out',async t=>{
  const f=fixture(t);seedOlder(f,['r4','r3a','r2']);
  // Another user's process: its owner is read from /proc/<pid>/status, and it is not ours to wonder about.
- f.process({uid:process.getuid()+1,environUnreadable:true});
- // A non-dumpable process of ours looks like this: /proc/<pid> is root's, the environment is denied to us.
- const sealed=f.process({environUnreadable:true});
+ f.process({uid:process.getuid()+1,environUnreadable:true,cmdline:'node\0/srv/app.js\0'});
+ // A tmux client, a python helper, a kernel-like helper with no arguments: denied, and visibly no Paseo release.
+ for(const cmdline of ['tmux: client\0','python3\0/opt/tool.py\0','','/usr/bin/nodemon-not\0'])f.process({environUnreadable:true,cmdline});
  await activated(f);
- assert.equal(state.readState().lastPrune.skipped,'RELEASE_IN_USE_UNKNOWN');assert.deepEqual(plain(state.readState().lastPrune.removed),[]);
- assert.deepEqual(releaseNames(f),[R2,R3A,R4,layout.RUNTIME_REVISION].sort(),'nothing was touched');
- f.processes.delete(sealed);
- await activated(f);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'the other user\'s process never mattered');
+ assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'none of them stops the pruning');
+ // A non-dumpable process of ours looks like this: /proc/<pid> is root's, the environment is denied to us. It runs node,
+ // or retitled itself as Paseo does, or its command line is denied too: what it runs cannot be ruled out.
+ for(const cmdline of ['/usr/bin/node\0/srv/app.js\0','node\0','Paseo Daemon\0',null]) {
+  seedOlder(f,['r2']);
+  const sealed=f.process({environUnreadable:true,cmdline:cmdline??'node\0',cmdlineUnreadable:cmdline===null});
+  await activated(f);
+  assert.equal(state.readState().lastPrune.skipped,'RELEASE_IN_USE_UNKNOWN',String(cmdline));assert.ok(releaseNames(f).includes(R2),'nothing was touched');
+  f.processes.delete(sealed);
+ }
+ await activated(f);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'once none is left the pruning resumes');
 });
 
 test('this process and its parent are not daemons: an ambient PASEO_HOME in their environment stops nothing',async t=>{

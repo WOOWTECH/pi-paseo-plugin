@@ -99,9 +99,18 @@ async function daemonRelease(loc) {
 // The releases that live processes of this user pin in their environment, for pruning. Linux only (elsewhere the
 // release a daemon uses is only recorded for this home's own daemon, see daemonRelease). Fails closed: `unknown`
 // means something this scan cannot see through, and nothing is pruned then. That is a process of this user whose
-// environment cannot be read (the owner is told by /proc/<pid>/status, which a non-dumpable process of ours still
-// shows although /proc/<pid> itself is then root's), or a process of this home that pins no release. This process
-// and its ancestors are not daemons, so an ambient PASEO_HOME in their environment does not count.
+// environment is denied (the owner is told by /proc/<pid>/status, which a non-dumpable process of ours still shows
+// although /proc/<pid> itself is then root's) unless its command line, which anyone can read, shows that it cannot
+// be running a release; or a process of this home that pins no release. This process and its ancestors are not
+// daemons, so an ambient PASEO_HOME in their environment does not count.
+// Paseo runs its releases with node, and its supervisor and daemon retitle themselves "Paseo ...". A tmux client or a
+// python helper whose environment is denied is no release: without this a single one would stop all pruning.
+function couldRunRelease(pid) {
+ try {
+  const args=fs.readFileSync(`/proc/${pid}/cmdline`,'utf8').split('\0');
+  return /(^|\/)node(js)?$/.test(args[0])||/paseo/i.test(args.join(' '));
+ } catch(error) {return error?.code!=='ENOENT'&&error?.code!=='ESRCH';} // unreadable: it cannot be ruled out
+}
 function runningRevisions(loc) {
  const found=new Set();
  if(process.platform!=='linux')return {found,unknown:false};
@@ -122,7 +131,7 @@ function runningRevisions(loc) {
   if(uid!==process.getuid())continue;
   let env;
   try {env=fs.readFileSync(`/proc/${name}/environ`,'utf8').split('\0');}
-  catch(error) {if(!gone(error))unknown=true;continue;}
+  catch(error) {if(!gone(error)&&couldRunRelease(name))unknown=true;continue;}
   const revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
   if(revision)found.add(revision);else if(env.includes(`PASEO_HOME=${loc.paseoHome}`)&&!own.has(Number(name)))unknown=true;
  }
