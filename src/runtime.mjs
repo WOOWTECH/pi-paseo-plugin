@@ -13,12 +13,12 @@ import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
-import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION} from './runtime-layout.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
 export { locations, readState, updateState } from './state.mjs';
-export const PASEO_VERSION = '0.11.2';
+export { PASEO_VERSION };
 const PROVIDERS = ['claude', 'codex', 'pi'];
 const safeCode = error => /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code || '') ? error.code : 'RUNTIME_FAILED';
 function credentialPresent(provider, file) {
@@ -42,8 +42,8 @@ function inheritedEnv() {
   env.PI_PASEO_CONNECTION_PROFILE_VERSION = '1';
   return env;
 }
-async function cli(args, options = {}) {
-  const result = await runProcess(process.execPath, [cliPath(controlRuntimeDirectory()||runtimeDirectory(locations())), '--home', locations().paseoHome, '--json', ...args], { env: inheritedEnv(), ...options });
+async function cli(args, options = {}, root = controlRuntimeDirectory() || runtimeDirectory(locations())) {
+  const result = await runProcess(process.execPath, [cliPath(root), '--home', locations().paseoHome, '--json', ...args], { env: inheritedEnv(), ...options });
   try { return JSON.parse(result); } catch { throw new RuntimeError('INVALID_COMMAND_OUTPUT'); }
 }
 function ownerFile() { return path.join(locations().paseoHome, '.pi-paseo-owner.json'); }
@@ -62,12 +62,40 @@ function ownsHome() {
   try { const marker = JSON.parse(fs.readFileSync(ownerFile(), 'utf8')); return marker.installationId === readState().installationId && marker.home === locations().paseoHome; } catch { return false; }
 }
 function legacyVersion() {try{return JSON.parse(fs.readFileSync(path.join(locations().runtimeDir,'node_modules/@getpaseo/cli/package.json'))).version;}catch{return null;}}
+function earlierRuntimeDirectory(loc,revision) {return previousRuntimeDirectory(loc,revision)||(legacyVersion()===LEGACY_PASEO_VERSION?loc.runtimeDir:null);}
+const REVISION_ENTRY='PI_PASEO_RUNTIME_REVISION=';
+// The revision of an earlier release whose daemon holds this home's PID file, as far as the
+// plugin can tell without upstream modules: Linux reads the revision pinned in that live
+// process's environment, other platforms the one recorded when this plugin started that PID.
+// It only picks control modules; ownership is still verified before any action.
+function earlierDaemonRevision(loc) {
+ let lock;
+ try {lock=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'paseo.pid'),'utf8'));} catch {return null;}
+ if(!Number.isInteger(lock?.pid)||lock.pid<=1)return null;
+ let revision;
+ if(process.platform==='linux'){
+  try {
+   const env=fs.readFileSync(`/proc/${lock.pid}/environ`,'utf8').split('\0');
+   if(!env.includes(`PASEO_HOME=${loc.paseoHome}`))return null;
+   revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
+  } catch {return null;}
+ } else {
+  const state=readState();
+  if(state.daemonPid!==lock.pid||state.daemonStartedAt!==lock.startedAt)return null;
+  revision=state.daemonRuntimeRevision;
+ }
+ return revision===RUNTIME_REVISION?null:revision||'unrecorded';
+}
+// Daemon control (read, verify, client, stop, live config) runs through the release that
+// started the daemon: an upgrade never stops, queries or reconfigures an older daemon through
+// newer upstream modules. Without a daemon, this release. Starting always uses this release.
 function controlRuntimeDirectory() {
  const loc=locations();
- if(runtimeReady(loc))return runtimeDirectory(loc);
- return previousRuntimeDirectory(loc)||(legacyVersion()===PASEO_VERSION?loc.runtimeDir:null);
+ if(!runtimeReady(loc))return earlierRuntimeDirectory(loc);
+ const earlier=earlierDaemonRevision(loc);
+ return (earlier&&earlierRuntimeDirectory(loc,earlier))||runtimeDirectory(loc);
 }
-async function serverModule(relative) { const root=controlRuntimeDirectory()||runtimeDirectory(locations());return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
+async function serverModule(relative, root = controlRuntimeDirectory() || runtimeDirectory(locations())) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
 async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
 async function currentInstance() { if (!controlRuntimeDirectory() || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
 function instanceNeedsRuntimeRestart(instance) {
@@ -120,7 +148,7 @@ async function choosePort(preferred) {
 async function detectLaunchers({ installMissing = false } = {}) {
   return resolveProviderLaunchers(locations(), { installMissing, env: inheritedEnv() });
 }
-// Paseo 0.11.2 hands its agents the Paseo MCP tools (create_agent, create_terminal,
+// Paseo (0.11.2 and 0.17.4) hands its agents the Paseo MCP tools (create_agent, create_terminal,
 // send_agent_prompt, set_agent_mode, respond_to_permission, create_schedule, ...)
 // only when daemon.mcp.injectIntoAgents is true, and leaves it false by default.
 // The daemon's config.json is the one source of truth: the Agent Connect switch
@@ -172,8 +200,8 @@ async function writeConfig(port, launchers) {
   let config = {};
   if (fs.existsSync(file)) { try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new RuntimeError('CONFIG_CORRUPT'); } }
   const providers = configureProviders(config.agents?.providers, launchers, loc, inheritedEnv());
-  // Paseo 0.11.2 rejects daemon.name. Display preferences belong to the
-  // host plugin; remove any legacy injected name while retaining other fields.
+  // Paseo's strict daemon schema (0.11.2 and 0.17.4) rejects daemon.name. Display preferences
+  // belong to the host plugin; remove any legacy injected name while retaining other fields.
   const daemon = { ...config.daemon };
   delete daemon.name;
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
@@ -185,7 +213,8 @@ async function writeConfig(port, launchers) {
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },
   };
   config = targetConfiguration(config, connectionPreferences(loc).target);
-  const { savePersistedConfig } = await serverModule('dist/server/server/config.js');
+  // Written for this release's daemon: the one about to start, or a running one of this revision.
+  const { savePersistedConfig } = await serverModule('dist/server/server/config.js', runtimeDirectory(loc));
   try { savePersistedConfig(loc.paseoHome, config); fs.chmodSync(file, 0o600); } catch { throw new RuntimeError('CONFIG_INVALID'); }
   updateState({ port, providerLaunchers: launchers });
   return providersChanged;
@@ -258,7 +287,7 @@ export async function activate(options = {}) {
       } else {
         const port = await choosePort(locations().port); await writeConfig(port, launchers);
         updateState({ phase: 'starting' });
-        await cli(['daemon', 'start', '--timeout', '90'], { timeoutMs: 105000 });
+        await cli(['daemon', 'start', '--timeout', '90'], { timeoutMs: 105000 }, runtimeDirectory(locations()));
         const instance = await currentInstance(); await verifyInstanceOwnership(instance);
         updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
       }

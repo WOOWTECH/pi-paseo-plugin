@@ -1,6 +1,6 @@
 import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
-import {seedPidFiles} from './helpers/runtime-pid-files.mjs';
+import {seedPidFiles,seedPriorRelease} from './helpers/runtime-pid-files.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +9,7 @@ import os from 'node:os';
 import vm from 'node:vm';
 import {spawnSync,spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import ts from 'typescript';
 import * as state from '../src/state.mjs';
@@ -31,10 +31,13 @@ function fixture(t, { platform = process.platform } = {}) {
  const installation=state.readState().installationId;
  state.atomicJson(path.join(loc.paseoHome,'.pi-paseo-owner.json'),{installationId:installation,home:loc.paseoHome});
  const root=layout.runtimeDirectory(loc),cli=path.join(root,'node_modules/@getpaseo/cli'),server=path.join(root,'node_modules/@getpaseo/server');
- fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:'0.11.2'}));
+ fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:layout.PASEO_VERSION}));
  fs.mkdirSync(path.join(server,'dist/server/web-ui'),{recursive:true});fs.writeFileSync(path.join(server,'dist/server/web-ui/index.html'),'fixture');seedPidFiles(loc);layout.markRuntimeReady(loc);
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),proofFile=path.join(loc.stateDir,'daemon-instance.private.json');
  const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false;
+ // Which release supplied each upstream module or CLI call: <runtimeDir>/releases/<revision>.
+ const releaseOf=file=>String(fileURLToPath(new URL(String(file),'file:///'))).split('/node_modules/@getpaseo/')[0];
+ const used={modules:[],cli:[],stoppedVia:null};
  function publish(mode=0o644){const pid=++nextPid;const birth={bootId,startTicks:String(pid),uid:process.getuid()};processes.set(pid,{...birth,role:'owned',home:loc.paseoHome});const lock={pid,startedAt:new Date().toISOString(),uid:process.getuid(),bootId,heartbeat:true,piPaseoProtocol:'linux-flock-v1',listen:'127.0.0.1:27669',hostname:'fixture'};fs.writeFileSync(pidFile,JSON.stringify(lock),{mode});return lock;}
  const initial=publish();const initialBytes=fs.readFileSync(pidFile);
  fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify({custom:'preserve',auth:{fixture:'retain'}}),{mode:0o600});
@@ -60,15 +63,19 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./lifecycle-timeouts.mjs')return lifecycleTimeouts;
   if(spec==='./single-flight.mjs')return {singleFlight,daemonStatusWindow:createReadWindow()};
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
-  if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version')return '0.11.2';if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true}})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
-  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>loadInstance(),stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
+  if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version'){assert.equal(releaseOf(args[0]),root);return layout.PASEO_VERSION;}used.cli.push({release:releaseOf(args[0]),command:args.slice(4).join(' ')});if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true}})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
+  if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
+  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
   if(spec.endsWith('/server/config.js'))return {savePersistedConfig:(_home,config)=>fs.writeFileSync(path.join(loc.paseoHome,'config.json'),JSON.stringify(config))};
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},r2({prepared=false}={}){const oldRoot=root.replace('-r4-','-r2-');fs.cpSync(root,oldRoot,{recursive:true,verbatimSymlinks:true});for(const copy of ['dist/server/server','dist/src/server'])fs.copyFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),path.join(oldRoot,'node_modules/@getpaseo/server',copy,'pid-lock.js'));const receipt=JSON.parse(fs.readFileSync(path.join(oldRoot,'.pi-paseo-runtime.json')));receipt.revision=layout.RUNTIME_REVISION.replace('-r4-','-r2-');delete receipt.pidLockPatchId;fs.writeFileSync(path.join(oldRoot,'.pi-paseo-runtime.json'),JSON.stringify(receipt));processes.get(initial.pid).revision=receipt.revision;const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},used,
+ // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
+ // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
+ prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');assert.equal(JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json'))).auth.fixture,'retain');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -241,20 +248,63 @@ test('real Linux birth inspection and default scanner reject another live same-h
 });
 
 
-test('upgrade before r3 installation: trusted r2 remains visible and normal deactivate stops the owned daemon',async t=>{
- const f=fixture(t);f.r2();assert.equal(fs.existsSync(layout.runtimeDirectory(f.loc)),false);
+for(const generation of ['r4','r2']){
+test(`upgrade before 0.17.4 installation: trusted 0.11.2 ${generation} remains visible and normal deactivate stops the owned daemon`,async t=>{
+ const f=fixture(t);const old=f.prior({generation});assert.equal(fs.existsSync(layout.runtimeDirectory(f.loc)),false);
  const snapshot=await f.runtime.status();assert.equal(snapshot.installed,true);assert.equal(snapshot.daemon.running,true);assert.equal(snapshot.daemon.reachable,true);assert.equal(snapshot.diagnosticCode,'RESTART_REQUIRED');
- const result=await f.runtime.deactivate();assert.equal(result.enabled,false);assert.equal(result.daemon.running,false);assert.equal(f.stops(),1);assert.equal(f.starts(),0);assert.equal(fs.existsSync(f.pidFile),false);assert.equal(fs.existsSync(f.proofFile),false);assert.equal(fs.existsSync(layout.runtimeDirectory(f.loc)),false);f.keep();
+ const result=await f.runtime.deactivate();assert.equal(result.enabled,false);assert.equal(result.daemon.running,false);assert.equal(f.stops(),1);assert.equal(f.starts(),0);assert.equal(f.used.stoppedVia,old);assert.equal(fs.existsSync(f.pidFile),false);assert.equal(fs.existsSync(f.proofFile),false);assert.equal(fs.existsSync(layout.runtimeDirectory(f.loc)),false);f.keep();
 });
-test('r2 fallback still verifies ownership before stop and never clears foreign legacy PID',async t=>{
- const f=fixture(t);f.r2();f.reuse();const before=fs.readFileSync(f.pidFile);
+test(`0.11.2 ${generation} fallback still verifies ownership before stop and never clears foreign legacy PID`,async t=>{
+ const f=fixture(t);f.prior({generation});f.reuse();const before=fs.readFileSync(f.pidFile);
  assert.equal((await f.runtime.status()).diagnosticCode,'DAEMON_NOT_OWNED');await assert.rejects(f.runtime.deactivate(),{code:'DAEMON_NOT_OWNED'});
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);assert.equal(fs.existsSync(f.proofFile),false);
 });
-test('prepared r3 with healthy r2 still requires explicit restart and cannot mint a proof',async t=>{
- const f=fixture(t);f.r2({prepared:true});const before=fs.readFileSync(f.pidFile);
+test(`prepared 0.17.4 with a healthy 0.11.2 ${generation} daemon requires an explicit restart, cannot mint a proof, and keeps using the daemon's own release`,async t=>{
+ const f=fixture(t);const old=f.prior({generation,prepared:true});const before=fs.readFileSync(f.pidFile);
  const result=await f.runtime.activate();assert.equal(result.phase,'restart_required');assert.equal(result.daemon.reachable,true);assert.equal(result.diagnosticCode,'RESTART_REQUIRED');
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);assert.equal(fs.existsSync(f.proofFile),false);
+ // Reading, verifying and querying the old daemon never loaded a 0.17.4 module.
+ assert.ok(f.used.modules.length>0);assert.deepEqual(f.used.modules.filter(m=>m.release!==old),[]);
+ const pairing=await f.runtime.pair();assert.match(pairing.url,/^https:\/\/app\.paseo\.sh\/#offer=/);
+ assert.deepEqual(f.used.cli.map(c=>c.release),[old]);assert.equal(f.starts(),0);
+});
+}
+test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to 0.17.4 on the same home, keeps data and the old release',async t=>{
+ const f=fixture(t);const old=f.prior({generation:'r4',prepared:true});
+ const configFile=path.join(f.loc.paseoHome,'config.json');
+ assert.equal((await f.runtime.activate()).phase,'restart_required');assert.equal(f.stops(),0);assert.equal(f.starts(),0);
+ f.permitStop();const stopped=await f.runtime.deactivate();
+ assert.equal(stopped.daemon.running,false);assert.equal(f.stops(),1);assert.equal(f.used.stoppedVia,old,'the old daemon is stopped by its own release');
+ f.used.modules.length=0;
+ const result=await f.runtime.activate();
+ assert.equal(result.phase,'running');assert.equal(result.daemon.reachable,true);assert.equal(result.diagnosticCode,null);assert.equal(f.starts(),1);
+ const root=layout.runtimeDirectory(f.loc);
+ assert.deepEqual(f.used.cli.filter(c=>c.command.startsWith('daemon start')).map(c=>c.release),[root],'0.17.4 starts the new daemon');
+ assert.deepEqual(f.used.modules.filter(m=>m.release!==root),[],'no old module touches the new daemon');
+ assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
+ assert.equal(fs.statSync(f.proofFile).mode&0o777,0o600);assert.notEqual(JSON.parse(fs.readFileSync(f.proofFile)).lock.pid,f.initial.pid);
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.listen,'127.0.0.1:'+state.readState().port);
+ f.keep();
+ // The 0.11.2 release stays verified for a rollback and is never started.
+ assert.equal(layout.previousRuntimeDirectory(f.loc),old);assert.equal(JSON.parse(fs.readFileSync(path.join(old,'.pi-paseo-runtime.json'))).revision,path.basename(old));
+ assert.equal((await f.runtime.status()).diagnosticCode,null);await f.runtime.activate();assert.equal(f.starts(),1);
+});
+test('darwin: a stale 0.11.2-r4 PID record never starts the old release',async t=>{
+ const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
+ f.processes.delete(f.initial.pid); // died without releasing paseo.pid; state still records it
+ const result=await f.runtime.activate();assert.equal(result.phase,'running');assert.equal(f.starts(),1);
+ const root=layout.runtimeDirectory(f.loc);
+ assert.deepEqual(f.used.cli.map(c=>c.release),[root]);
+ assert.deepEqual(f.used.modules.filter(m=>m.module==='config.js').map(m=>m.release),[root]);
+ assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);assert.equal(layout.previousRuntimeDirectory(f.loc),old);f.keep();
+});
+test('darwin: a 0.11.2-r4 daemon recorded by the earlier release is controlled and stopped by that release',async t=>{
+ const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
+ const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.daemon.reachable,true);
+ assert.deepEqual(f.used.modules.filter(m=>m.release!==old),[]);
+ await f.runtime.deactivate();assert.equal(f.used.stoppedVia,old);
+ await f.runtime.activate();assert.equal(f.starts(),1);assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
+ assert.equal((await f.runtime.status()).diagnosticCode,null);f.keep();
 });
 
 

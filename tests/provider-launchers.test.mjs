@@ -206,7 +206,7 @@ test('runtime applies new private commands with the official reload API and repo
   const cliRoot = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/cli');
   const ui = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/server/dist/server/web-ui/index.html');
   fs.mkdirSync(cliRoot, { recursive: true }); fs.mkdirSync(path.dirname(ui), { recursive: true });
-  fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: '0.11.2' })); fs.writeFileSync(ui, 'fixture UI');
+  fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: runtimeLayout.PASEO_VERSION })); fs.writeFileSync(ui, 'fixture UI');
   seedPidFiles(f.loc);runtimeLayout.markRuntimeReady(f.loc);
   let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running', daemonPid: 5000, daemonStartedAt: 'fixture-start', daemonRuntimeRevision: runtimeLayout.RUNTIME_REVISION };
   fs.writeFileSync(path.join(f.loc.paseoHome, '.pi-paseo-owner.json'), JSON.stringify({ installationId: state.installationId, home: f.loc.paseoHome }));
@@ -254,7 +254,7 @@ test('runtime applies new private commands with the official reload API and repo
         assert.equal(options.env.PASEO_RELAY_PUBLIC_ENDPOINT,'relay.paseo.sh:443');
         assert.equal(options.env.PASEO_RELAY_USE_TLS,'true');
         assert.equal(options.env.PASEO_RELAY_PUBLIC_USE_TLS,'true');
-        return '0.11.2';
+        return runtimeLayout.PASEO_VERSION;
       },
     };
     if (spec === './provider-launchers.mjs') return {

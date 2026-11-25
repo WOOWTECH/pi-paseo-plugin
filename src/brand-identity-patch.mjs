@@ -3,10 +3,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertSafePath, RuntimeError } from './state.mjs';
 
-// Frozen @getpaseo/server 0.11.2. The upstream status envelope preserves extra
-// fields; branded clients require this optional brand identity during hello.
-export const ORIGINAL_BRAND_SERVER_SHA256 = 'ba8122d01dd17533231a573097ec4e9f91f4fd12caada107adb9f6706f5f8950';
-export const PATCHED_BRAND_SERVER_SHA256 = '8315add9226617d4c2c09d1481c750eff7a34fa83670725914c69892f1cd1561';
+// Frozen @getpaseo/server 0.17.4. The hello response is serialized as built, so the
+// status envelope keeps extra fields; branded clients require this optional brand
+// identity during hello. Releases built for 0.11.2 are never patched again: offline
+// control of their daemons does not load this module.
+export const ORIGINAL_BRAND_SERVER_SHA256 = 'bfc79901aa7768a51b98385b6f729dac69a1098f4480a66fd3d2be1d6af06b4b';
+export const PATCHED_BRAND_SERVER_SHA256 = '17ea88357d2f25caab81ad63d32804fe41158c1d70e8e4f549c4fc7173fe8d68';
 const helper = fs.readFileSync(new URL('./brand-identity.mjs', import.meta.url));
 const sha = value => createHash('sha256').update(value).digest('hex');
 export const BRAND_IDENTITY_PATCH_ID = sha(Buffer.concat([helper, Buffer.from(PATCHED_BRAND_SERVER_SHA256)]));
