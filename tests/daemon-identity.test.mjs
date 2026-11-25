@@ -589,7 +589,11 @@ const unfinishedStop=(f,{recorded=false}={})=>{
 
 test('a stop whose terminal cleanup cannot be confirmed has stopped the daemon: warning recorded, phase disabled',async t=>{
  const f=fixture(t);f.stopScenario({records:['noPs']});f.permitStop();
+ // Processes that are not this daemon's supervisor: another home's, and a terminal worker's leftover. None may be signaled.
+ f.processes.set(900500,{role:'foreign',home:'/elsewhere/daemon',startTicks:'900500',bootId:'11111111-1111-1111-1111-111111111111',uid:process.getuid()});
+ f.processes.set(900501,{role:'owned',home:'/elsewhere/daemon',startTicks:'900501',bootId:'11111111-1111-1111-1111-111111111111',uid:process.getuid()});
  const result=await f.runtime.deactivate();
+ assert.equal(f.processes.has(900500)&&f.processes.has(900501),true,'unrelated processes are untouched');
  assert.equal(result.phase,'disabled');assert.equal(result.enabled,false);assert.equal(result.daemon.running,false);
  assert.equal(f.processes.has(f.initial.pid),false,'the supervisor is gone');assert.equal(fs.existsSync(f.pidFile),false,'the PID lock is released');
  // Upstream's order: the lock is released before the cleanup that failed.
