@@ -1,6 +1,6 @@
 import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
-import {seedPidFiles,seedPriorRelease} from './helpers/runtime-pid-files.mjs';
+import {seedPidFiles,seedPriorRelease,LOCK_0112} from './helpers/runtime-pid-files.mjs';
 import {loadPersistedConfig} from './helpers/paseo-config.mjs';
 import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError} from './helpers/upstream-stop.mjs';
 import test from 'node:test';
@@ -57,7 +57,7 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.writeFileSync(path.join(loc.stateDir,'pairing.private.json'),'retain-pairing',{mode:0o600});
  const verifyProc=()=>{for(const [pid,p]of processes)if(p.role==='owned'&&p.home===loc.paseoHome)throw new state.RuntimeError('DAEMON_ALREADY_RUNNING');};
  const identity=identityModule.createDaemonIdentity?.({platform,readBirth:pid=>{const p=processes.get(pid);if(p?.unreadable)throw new state.RuntimeError('DAEMON_IDENTITY_UNVERIFIABLE');return p?{bootId:p.bootId,startTicks:p.startTicks,uid:p.uid}:null;},assertNoSupervisor:verifyProc});
- const fakeFs={...fs,readFileSync(file,...args){const m=/^\/proc\/(\d+)\/(cmdline|environ)$/.exec(String(file));if(m){const p=processes.get(Number(m[1]));if(!p)throw Object.assign(new Error('gone'),{code:'ENOENT'});return m[2]==='cmdline'?(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0'):`PASEO_HOME=${p.home}\0${p.noRevision?'':`PI_PASEO_RUNTIME_REVISION=${p.revision||layout.RUNTIME_REVISION}\0`}${p.noConnectionProfile?'':'PI_PASEO_CONNECTION_PROFILE_VERSION=1\0'}`;}
+ const fakeFs={...fs,readFileSync(file,...args){const m=/^\/proc\/(\d+)\/(cmdline|environ)$/.exec(String(file));if(m){const p=processes.get(Number(m[1]));if(!p)return fs.readFileSync(file,...args);/* not a fake: a real process (a test's own child) or gone */return m[2]==='cmdline'?(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0'):`PASEO_HOME=${p.home}\0${p.noRevision?'':`PI_PASEO_RUNTIME_REVISION=${p.revision||layout.RUNTIME_REVISION}\0`}${p.noConnectionProfile?'':'PI_PASEO_CONNECTION_PROFILE_VERSION=1\0'}`;}
   // updatePidLock truncates before it writes: a reader can meet the empty file.
   if(String(file)===pidFile&&emptyPidReads>0){emptyPidReads--;return '';}
   return fs.readFileSync(file,...args);},realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);}};
@@ -676,4 +676,75 @@ test('a ps that cannot serve terminal cleanup is a warning on every start and di
  // procps is installed: the next check clears it.
  f.processTable({checked:true,ok:true});
  const fixed=await f.runtime.activate();assert.deepEqual(plain(fixed.warnings),[]);assert.equal(state.readState().processTable.ok,true);
+});
+
+// ---- Pruning old releases behind a healthy start from this release ----
+const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479';
+const releaseNames=f=>fs.readdirSync(path.join(f.loc.runtimeDir,'releases')).sort();
+function seedOlder(f,generations=['r4','r3a','r3b','r2']) {
+ const seeds={r4:{generation:'r4'},r3a:{generation:'r3'},r3b:{generation:'r3',lockSha256:LOCK_0112},r2:{generation:'r2'}};
+ for(const generation of generations)seedPriorRelease(f.loc,seeds[generation]);
+}
+async function pinned(t,revision,paseoHome='/elsewhere/daemon') {
+ const child=spawn(process.execPath,['-e',"process.stdout.write('ready');process.stdin.resume();process.stdin.on('end',()=>process.exit(0));"],{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,PASEO_HOME:paseoHome,...(revision?{PI_PASEO_RUNTIME_REVISION:revision}:{})}});
+ await once(child.stdout,'data');
+ const stop=async()=>{if(child.exitCode!==null||child.signalCode)return;const ended=once(child,'exit');child.stdin.end();await ended;};
+ t.after(stop);
+ return stop;
+}
+
+test('a healthy start from this release removes the older releases nothing needs, and records names only',async t=>{
+ const f=fixture(t);seedOlder(f);
+ fs.mkdirSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli'),{recursive:true});fs.writeFileSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json'),'{"version":"0.11.2"}');
+ assert.deepEqual(releaseNames(f),[R2,R3A,R3B,R4,layout.RUNTIME_REVISION].sort());
+ const result=await f.runtime.activate();
+ assert.equal(result.phase,'running');assert.equal(result.daemon.reachable,true);assert.equal(f.starts(),0,'the healthy daemon was adopted, not restarted');
+ assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'this release and the newest earlier one remain');
+ const prune=plain(state.readState().lastPrune);
+ assert.deepEqual(Object.keys(prune).sort(),['at','failed','kept','removed']);assert.deepEqual([...prune.removed].sort(),[R2,R3A,R3B].sort());assert.deepEqual(prune.kept,[layout.RUNTIME_REVISION,R4]);assert.deepEqual(prune.failed,[]);
+ assert.doesNotMatch(JSON.stringify(prune),/\/|home|runtime-pid/,'names only: no path');
+ assert.ok(fs.existsSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json')),'the legacy control copy is not a release');
+ assert.equal(layout.previousRuntimeDirectory(f.loc),path.join(f.loc.runtimeDir,'releases',R4),'the rollback release still verifies');
+ // Nothing left to remove: the next activation neither removes nor rewrites the record.
+ await f.runtime.activate();assert.deepEqual(plain(state.readState().lastPrune),prune);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());
+ f.keep();
+});
+
+test('nothing is pruned while an older daemon serves; the release it needs for control stays until the upgrade is done',async t=>{
+ const f=fixture(t);seedOlder(f,['r3a','r2']);const old=f.prior({generation:'r4',prepared:true});
+ const all=releaseNames(f);
+ assert.equal((await f.runtime.activate()).phase,'restart_required');
+ assert.deepEqual(releaseNames(f),all);assert.equal(state.readState().lastPrune,undefined);
+ f.permitStop();await f.runtime.deactivate();assert.deepEqual(releaseNames(f),all,'a stop prunes nothing');
+ const started=await f.runtime.activate();
+ assert.equal(started.phase,'running');assert.equal(f.starts(),1);
+ assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());assert.equal(layout.previousRuntimeDirectory(f.loc),old);
+ assert.deepEqual(plain(state.readState().lastPrune.removed).sort(),[R2,R3A].sort());
+});
+
+test('a release that a live process pins stays, whichever home it serves; a process of this home that pins none stops the pruning',async t=>{
+ const f=fixture(t);seedOlder(f,['r4','r3a','r2']);
+ await pinned(t,R3A);
+ await f.runtime.activate();
+ assert.deepEqual(releaseNames(f),[R3A,R4,layout.RUNTIME_REVISION].sort(),'another home\'s daemon still runs 0.11.2-r3');assert.deepEqual(plain(state.readState().lastPrune.removed),[R2]);
+ // A process of this very home that says nothing about its release: what it runs cannot be told, so nothing goes.
+ seedOlder(f,['r2']);
+ const stray=await pinned(t,null,f.loc.paseoHome);
+ await f.runtime.activate();
+ assert.equal(state.readState().lastPrune.skipped,'RELEASE_IN_USE_UNKNOWN');assert.ok(releaseNames(f).includes(R2));
+ await stray();
+ await f.runtime.activate();assert.equal(releaseNames(f).includes(R2),false,'once it is gone the pruning resumes');
+});
+
+test('a pruning failure never fails an activation or a status',{skip:process.getuid?.()===0&&'permissions do not stop root'},async t=>{
+ const f=fixture(t);seedOlder(f);const releases=path.join(f.loc.runtimeDir,'releases');
+ fs.chmodSync(releases,0o555);
+ try {
+  const result=await f.runtime.activate();
+  assert.equal(result.phase,'running');assert.equal(result.daemon.reachable,true);assert.equal(result.diagnosticCode,null);
+  assert.deepEqual(plain(state.readState().lastPrune.failed).sort(),[R2,R3A,R3B].sort());assert.deepEqual(plain(state.readState().lastPrune.removed),[]);
+  assert.equal((await f.runtime.status()).phase,'running');
+ } finally {fs.chmodSync(releases,0o755);}
+ assert.deepEqual(releaseNames(f),[R2,R3A,R3B,R4,layout.RUNTIME_REVISION].sort(),'every release is whole');
+ await f.runtime.activate();assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'the next activation finishes the job');
 });

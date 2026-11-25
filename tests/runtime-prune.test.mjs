@@ -1,0 +1,165 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {RUNTIME_REVISION,ownedReleases,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
+
+// Revisions of the releases Agent Connect 0.1.4-0.1.23 shipped (see runtime-layout.mjs), and this one.
+const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479',R1='0.11.2-r1-0123456789ab';
+const lockOf=revision=>revision.slice(-12)+'0'.repeat(52);
+const receipt=revision=>JSON.stringify({revision,lockSha256:lockOf(revision)});
+function fixture(t){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-prune-'));
+ const loc={runtimeDir:path.join(dir,'runtime')};
+ const releases=path.join(loc.runtimeDir,'releases');fs.mkdirSync(releases,{recursive:true});
+ // A test may leave a directory it made unwritable: give the owner back its rights before removing the tree.
+ t.after(()=>{spawnSync('chmod',['-R','u+rwX',dir]);fs.rmSync(dir,{recursive:true,force:true});});
+ return {dir,loc,releases,
+  /** A release as the installer leaves it: packages, a nested directory, a receipt. */
+  release(revision,{withReceipt=true,receiptText=receipt(revision)}={}){
+   const root=path.join(releases,revision);
+   fs.mkdirSync(path.join(root,'node_modules/@getpaseo/cli'),{recursive:true});
+   fs.writeFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'),'{"version":"0.0.0"}');
+   fs.writeFileSync(path.join(root,'package.json'),'{}');
+   if(withReceipt)fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),receiptText);
+   return root;
+  },
+  names:()=>fs.readdirSync(releases).sort()};
+}
+
+test('this release and exactly the newest earlier one stay; the other plugin-owned releases go',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R3B,R2,R1,'0.99.0-r1-bbbbbbbbbbbb'])f.release(revision);
+ const result=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort(),'a newer release is not a rollback target either');
+ assert.deepEqual(result.kept,[RUNTIME_REVISION,R4]);
+ assert.deepEqual(result.removed.sort(),[R1,R2,R3A,R3B,'0.99.0-r1-bbbbbbbbbbbb'].sort());assert.deepEqual(result.failed,[]);assert.equal(result.skipped,undefined);
+});
+
+test('earlier means an older Paseo version, then an older revision number, whatever the directory times say',async t=>{
+ const f=fixture(t);
+ const older='0.17.3-r9-cccccccccccc',sameVersion='0.17.4-r0-dddddddddddd',oldest='0.16.2-r4-eeeeeeeeeeee';
+ for(const revision of [RUNTIME_REVISION,older,sameVersion,oldest])f.release(revision);
+ // The oldest release was touched last: recency is not what orders them.
+ fs.utimesSync(path.join(f.releases,oldest),new Date(),new Date());fs.utimesSync(path.join(f.releases,oldest,'.pi-paseo-runtime.json'),new Date(),new Date());
+ await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(f.names(),[sameVersion,RUNTIME_REVISION].sort());
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),[RUNTIME_REVISION,sameVersion]);
+});
+
+test('two releases of one version and revision number (two lockfiles): the later receipt is the rollback',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R3A,R3B])f.release(revision);
+ const early=new Date('2026-10-01T00:00:00Z'),late=new Date('2026-11-01T00:00:00Z');
+ fs.utimesSync(path.join(f.releases,R3A,'.pi-paseo-runtime.json'),early,early);fs.utimesSync(path.join(f.releases,R3B,'.pi-paseo-runtime.json'),late,late);
+ await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(f.names(),[R3B,RUNTIME_REVISION].sort());
+});
+
+test('a release the caller names stays, however old',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);
+ const result=await pruneRuntimeReleases(f.loc,{keep:[R3A,'not-a-release-at-all']});
+ assert.deepEqual(f.names(),[R3A,R4,RUNTIME_REVISION].sort());assert.deepEqual(result.removed,[R2]);
+});
+
+test('an entry that is not provably a plugin-owned release is never touched',async t=>{
+ const f=fixture(t);
+ f.release(RUNTIME_REVISION);f.release(R4);
+ const foreign={
+  noReceipt:f.release('0.11.2-r3-aaaaaaaaaaaa',{withReceipt:false}),
+  otherRevision:f.release('0.11.2-r3-bbbbbbbbbbbb',{receiptText:receipt(R3A)}),
+  brokenJson:f.release('0.11.2-r3-cccccccccccc',{receiptText:'{broken'}),
+  hashOfAnother:f.release('0.11.2-r3-dddddddddddd',{receiptText:JSON.stringify({revision:'0.11.2-r3-dddddddddddd',lockSha256:lockOf(R3A)})}),
+  noHash:f.release('0.11.2-r3-eeeeeeeeeeee',{receiptText:JSON.stringify({revision:'0.11.2-r3-eeeeeeeeeeee'})}),
+  notAnObject:f.release('0.11.2-r3-ffffffffffff',{receiptText:'[]'}),
+  hugeReceipt:f.release('0.11.2-r3-111111111111',{receiptText:' '.repeat(70000)+receipt('0.11.2-r3-111111111111')}),
+ };
+ // Names that are not revisions, a plain file named like one, an uppercase hash, a half-finished download.
+ const others=['0.11.2-r2-6d8dbe515479.bak','custom','.tmp-install','0.11.2-r2-6D8DBE515479','0.11.2-r2-short','0.11.2-6d8dbe515479','v0.11.2-r2-6d8dbe515479'];
+ for(const name of others){fs.mkdirSync(path.join(f.releases,name,'node_modules'),{recursive:true});fs.writeFileSync(path.join(f.releases,name,'.pi-paseo-runtime.json'),receipt('0.11.2-r2-6d8dbe515479'));}
+ fs.writeFileSync(path.join(f.releases,'0.11.2-r2-aaaaaaaaaaaa'),receipt('0.11.2-r2-aaaaaaaaaaaa'));
+ // Outside releases/: the legacy control copy earlier plugin versions installed, and files nobody here owns.
+ fs.mkdirSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli'),{recursive:true});fs.writeFileSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json'),'{"version":"0.11.2"}');
+ fs.writeFileSync(path.join(f.loc.runtimeDir,'package.json'),'{}');
+ const before=f.names();
+ const result=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(f.names(),before,'nothing was removed or renamed');assert.deepEqual(result.removed,[]);assert.deepEqual(result.failed,[]);
+ for(const root of Object.values(foreign))assert.ok(fs.existsSync(path.join(root,'package.json')),root);
+ assert.ok(fs.existsSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json')));assert.ok(fs.existsSync(path.join(f.loc.runtimeDir,'package.json')));
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),[RUNTIME_REVISION,R4]);
+});
+
+test('a link is never followed: a release-named link, a linked receipt, a linked releases directory, a link inside a release',async t=>{
+ const f=fixture(t);
+ f.release(RUNTIME_REVISION);f.release(R4);
+ const outside=path.join(f.dir,'outside');fs.mkdirSync(path.join(outside,'target/node_modules'),{recursive:true});
+ fs.writeFileSync(path.join(outside,'target/.pi-paseo-runtime.json'),receipt(R3A));fs.writeFileSync(path.join(outside,'target/node_modules/keep.txt'),'precious');
+ fs.symlinkSync(path.join(outside,'target'),path.join(f.releases,R3A),'dir');
+ // A release whose receipt is a link to a valid one, and an old release with a link into the outside directory.
+ f.release(R3B,{withReceipt:false});fs.symlinkSync(path.join(outside,'target/.pi-paseo-runtime.json'),path.join(f.releases,R3B,'.pi-paseo-runtime.json'));
+ f.release(R2);fs.symlinkSync(outside,path.join(f.releases,R2,'node_modules/escape'),'dir');
+ const result=await pruneRuntimeReleases(f.loc);
+ assert.equal(fs.lstatSync(path.join(f.releases,R3A)).isSymbolicLink(),true,'the link stays');
+ assert.equal(fs.readFileSync(path.join(outside,'target/node_modules/keep.txt'),'utf8'),'precious');assert.ok(fs.existsSync(path.join(f.releases,R3B,'package.json')),'a linked receipt does not make an owned release');
+ assert.deepEqual(result.removed,[R2]);assert.equal(fs.existsSync(path.join(f.releases,R2)),false);
+ assert.equal(fs.readFileSync(path.join(outside,'target/node_modules/keep.txt'),'utf8'),'precious','what the link inside a removed release pointed to is untouched');
+ // The releases directory itself behind a link: not even listed.
+ const real=path.join(f.dir,'real-releases');fs.renameSync(f.releases,real);fs.symlinkSync(real,f.releases,'dir');
+ const before=fs.readdirSync(real).sort();
+ assert.deepEqual(await pruneRuntimeReleases(f.loc),{removed:[],kept:[],failed:[],skipped:'RELEASES_UNSAFE'});assert.deepEqual(fs.readdirSync(real).sort(),before);assert.deepEqual(ownedReleases(f.loc),[]);
+});
+
+test('a failure to remove is reported by name, breaks nothing, and the next run finishes the job',{skip:process.getuid?.()===0&&'permissions do not stop root'},async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);
+ // Nothing can be renamed in a read-only releases directory: every release stays whole and valid.
+ fs.chmodSync(f.releases,0o555);
+ const refused=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(refused.removed,[]);assert.deepEqual(refused.failed.sort(),[R2,R3A].sort());
+ fs.chmodSync(f.releases,0o755);assert.deepEqual(ownedReleases(f.loc).map(release=>release.name).sort(),[RUNTIME_REVISION,R4,R3A,R2].sort());
+ // A tree that cannot be emptied: the release is already renamed away, so it cannot be mistaken for a release...
+ const stuck=path.join(f.releases,R3A,'node_modules/@getpaseo/cli');fs.chmodSync(stuck,0o555);
+ const partial=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(partial.removed,[R2]);assert.deepEqual(partial.failed,[R3A]);
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name).sort(),[RUNTIME_REVISION,R4].sort());
+ assert.equal(f.names().filter(name=>name.startsWith('.pruning-'+R3A+'-')).length,1,'what is left is named for what it was');
+ // ...and once it can be emptied, the next prune removes it and says so.
+ for(const name of f.names().filter(name=>name.startsWith('.pruning-')))fs.chmodSync(path.join(f.releases,name,'node_modules/@getpaseo/cli'),0o755);
+ const finished=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(finished.removed,[R3A]);assert.deepEqual(finished.failed,[]);assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort());
+});
+
+test('pruning twice changes nothing the second time',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);
+ const first=await pruneRuntimeReleases(f.loc),again=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(first.removed.sort(),[R2,R3A].sort());
+ assert.deepEqual(again,{removed:[],kept:[RUNTIME_REVISION,R4],failed:[]});assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort());
+});
+
+test('without a valid current release, or without a releases directory, nothing is removed',async t=>{
+ const f=fixture(t);
+ for(const revision of [R4,R3A])f.release(revision);
+ assert.deepEqual(await pruneRuntimeReleases(f.loc),{removed:[],kept:[],failed:[],skipped:'CURRENT_RELEASE_NOT_FOUND'});assert.deepEqual(f.names(),[R3A,R4].sort());
+ f.release(RUNTIME_REVISION,{withReceipt:false});
+ assert.equal((await pruneRuntimeReleases(f.loc)).skipped,'CURRENT_RELEASE_NOT_FOUND');
+ fs.rmSync(f.releases,{recursive:true});
+ assert.deepEqual(await pruneRuntimeReleases(f.loc),{removed:[],kept:[],failed:[]});
+ fs.writeFileSync(f.releases,'a file');
+ assert.equal((await pruneRuntimeReleases(f.loc)).skipped,'RELEASES_NOT_A_DIRECTORY');
+});
+
+test('only a leftover that this code named is finished, and only if it is a real directory',async t=>{
+ const f=fixture(t);
+ f.release(RUNTIME_REVISION);
+ const own='.pruning-'+R3A+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+ fs.mkdirSync(path.join(f.releases,own,'node_modules'),{recursive:true});fs.mkdirSync(path.join(f.releases,'.pruning-custom'),{recursive:true});
+ const outside=path.join(f.dir,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'keep.txt'),'precious');
+ fs.symlinkSync(outside,path.join(f.releases,'.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'),'dir');
+ const result=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(result.removed,[R3A]);assert.equal(fs.existsSync(path.join(f.releases,own)),false);
+ assert.ok(fs.existsSync(path.join(f.releases,'.pruning-custom')));assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'precious');
+});

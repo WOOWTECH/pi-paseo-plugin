@@ -13,7 +13,7 @@ import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
-import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,ownedReleases,pruneRuntimeReleases,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -96,6 +96,25 @@ async function daemonRelease(loc) {
  }
  return {pid:lock.pid,revision:revision||null};
 }
+// The releases that live processes of this user pin in their environment, for pruning. Linux only (elsewhere the
+// release a daemon uses is only recorded for this home's own daemon, see daemonRelease). `unknown`: a process of this
+// home that pins none (or /proc cannot be read), so what it runs cannot be told: nothing is pruned then.
+function runningRevisions(loc) {
+ const found=new Set();
+ if(process.platform!=='linux')return {found,unknown:false};
+ let names;try {names=fs.readdirSync('/proc');}catch {return {found,unknown:true};}
+ let unknown=false;
+ for(const name of names){
+  if(!/^\d+$/.test(name))continue;
+  try {
+   if(fs.statSync('/proc/'+name).uid!==process.getuid())continue;
+   const env=fs.readFileSync(`/proc/${name}/environ`,'utf8').split('\0');
+   const revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
+   if(revision)found.add(revision);else if(env.includes(`PASEO_HOME=${loc.paseoHome}`))unknown=true;
+  } catch { /* gone, or not readable: not a process of this user */ }
+ }
+ return {found,unknown};
+}
 // Daemon control (read, verify, client, pair, stop, live config) runs through the release that
 // started the daemon: an upgrade never stops, queries or reconfigures an older daemon through newer
 // upstream modules. Resolved once per operation, so reading and stopping use the same release.
@@ -177,6 +196,22 @@ function verifyInstanceOwnership(instance, control) {
       if (!supervisor || executable !== expectedNode || instance.heartbeat !== true || !env.includes(`PASEO_HOME=${locations().paseoHome}`)) throw new RuntimeError('DAEMON_NOT_OWNED');
     } catch { throw new RuntimeError('DAEMON_NOT_OWNED'); }
   }
+}
+/** Behind a healthy daemon of this release, removes the older releases nothing needs (runtime-layout.mjs
+ * pruneRuntimeReleases: it keeps this release, the newest earlier one for a rollback, and what is passed in).
+ * Nothing is removed unless this release's daemon is the one control resolves to, and a release that any live
+ * process of this user pins in its environment stays, whichever home it serves. Records names only.
+ * Best effort: it never throws, so a failed removal cannot fail an activation or a status. */
+async function pruneOldReleases(loc) {
+  try {
+    // This release and the one before it are all there is in the steady state: nothing to look at then.
+    if (ownedReleases(loc).length <= 2) return;
+    const control = await resolveControl(loc);
+    if (control.root !== runtimeDirectory(loc)) return;
+    const running = runningRevisions(loc);
+    const prune = running.unknown ? { removed: [], kept: [], failed: [], skipped: 'RELEASE_IN_USE_UNKNOWN' } : await pruneRuntimeReleases(loc, { keep: [...running.found] });
+    if (prune.removed.length || prune.failed.length || prune.skipped) updateState({ lastPrune: { at: new Date().toISOString(), ...prune } });
+  } catch { /* old releases are only disk space */ }
 }
 async function installRuntime() {
   privateDirectory(locations().runtimeDir);
@@ -382,6 +417,7 @@ export async function activate(options = {}) {
       if (!healthy || healthy.pid !== result.daemon.pid) throw new RuntimeError('DAEMON_STATE_CHANGED');
       await rememberOwnedInstance(locations(), healthy, verify, observation);
       updateState({ lastDiagnostic: { checkedAt: new Date().toISOString(), daemonReachable: true, providers: result.providers.map(row => ({ provider: row.provider, status: row.status })) } });
+      await pruneOldReleases(locations());
       return status();
     } catch (error) { updateState({ phase: error.code === 'RESTART_REQUIRED' ? 'restart_required' : 'error', lastError: { code: safeCode(error), at: new Date().toISOString() } }); throw new RuntimeError(safeCode(error)); }
   }, { timeoutMs: options.lockTimeoutMs || 360000 });
