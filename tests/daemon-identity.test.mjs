@@ -84,8 +84,9 @@ function fixture(t, { platform = process.platform } = {}) {
   },
   readdirSync(dir,...args){return String(dir)==='/proc'?[...processes.keys()].map(String):fs.readdirSync(dir,...args);},
   realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);},
-  // The deletion of pruned releases, slowed or broken by a test (`f.removal`).
-  promises:{...fs.promises,rm:(...args)=>removal?removal(...args):fs.promises.rm(...args)}};
+  // The deletion of pruned releases (removeTree) goes through these four calls. A test sees each one, by operation and
+  // path, and can slow or break it (`f.removal`): the hook runs before the real call, and what it throws is what fails.
+  promises:{...fs.promises,...Object.fromEntries(['lstat','readdir','unlink','rmdir'].map(op=>[op,async(...args)=>{await removal?.(op,String(args[0]));return fs.promises[op](...args);}]))}};
  const loadInstance=()=>fs.existsSync(pidFile)?JSON.parse(fs.readFileSync(pidFile)):null;
  const upstream=createUpstreamStop({clock,scenario:()=>scenario,readLock:loadInstance,recordsDir:path.join(loc.paseoHome,'terminal-worker'),
   ownerRunning:lock=>!!(processes.has(lock.pid)||state.processIdentity(lock.pid)),
@@ -124,7 +125,7 @@ function fixture(t, { platform = process.platform } = {}) {
  process(extra={}){const pid=++nextPid;processes.set(pid,{bootId,startTicks:String(pid),uid:process.getuid(),role:'foreign',home:'/elsewhere/daemon',...extra});return pid;},
  /** The runtime's own process (pid selfPid) and a parent of it, with what their environment says. */
  self(extra={},parentExtra={}){processes.set(selfPid,{bootId,startTicks:String(selfPid),uid:process.getuid(),role:'foreign',ppid:selfPid-1,...extra});processes.set(selfPid-1,{bootId,startTicks:String(selfPid-1),uid:process.getuid(),role:'foreign',...parentExtra});},
- /** Replaces how the runtime deletes (fs.promises.rm): a test makes it slow or broken. */
+ /** Runs before every call the deletion of pruned releases makes, with the operation and its path: a test makes it slow or broken, or counts. */
  removal:fn=>{removal=fn;},
  // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
  // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
@@ -870,8 +871,9 @@ test('a release newer than this one is never pruned (a downgrade leaves one, and
 test('deleting old releases takes no lock: pairing and settings go through while it runs, and its outcome is recorded after',async t=>{
  const f=fixture(t);seedOlder(f);
  let began,release;const started=new Promise(resolve=>{began=resolve;}),gate=new Promise(resolve=>{release=resolve;});
- // A slow disk: every deletion waits here.
- f.removal(async(target,options)=>{began();await gate;return fs.promises.rm(target,options);});
+ // A slow disk: every call of a deletion waits here. Each tomb's own directory is listed once per deletion of it.
+ const listed={};
+ f.removal(async(op,target)=>{if(op==='readdir'&&path.basename(path.dirname(target))==='releases')listed[path.basename(target)]=(listed[path.basename(target)]||0)+1;began();await gate;});
  const result=await Promise.race([f.runtime.activate(),after(10000,'waited for the deletion')]);
  assert.notEqual(result,'waited for the deletion','the activation does not wait for the deletion');
  assert.equal(result.phase,'running');
@@ -884,11 +886,65 @@ test('deleting old releases takes no lock: pairing and settings go through while
  const quick=await Promise.race([Promise.all([f.runtime.pair(),f.runtime.saveConnectionSettings({name:'while deleting'})]).then(()=>'done'),after(5000,'blocked')]);
  assert.equal(quick,'done','pair and saveConnectionSettings are not blocked by a slow deletion');
  assert.equal((await f.runtime.status()).phase,'running');
- // Another activation meanwhile leaves the tombs being deleted alone.
+ // Another activation meanwhile leaves the tombs being deleted alone: it sees them as leftovers, and a second deletion
+ // of the same tombs would only race the first.
  assert.equal((await f.runtime.activate()).phase,'running');
  release();await f.runtime.pruneSettled();
  assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());
+ assert.equal(Object.keys(listed).length,3);assert.deepEqual(Object.values(listed),[1,1,1],'each tomb was deleted once');
  const prune=plain(state.readState().lastPrune);assert.deepEqual([...prune.removed].sort(),[R2,R3A,R3B].sort());assert.deepEqual(prune.failed,[]);
+});
+
+// What a stop does to a deletion in flight: it ends at its next operation, leaves the tombs for the next activation, and
+// is not recorded as done (lastPrune only ever describes a deletion that finished).
+const gated=()=>{let began,release;const started=new Promise(resolve=>{began=resolve;}),gate=new Promise(resolve=>{release=resolve;});return {started,release,hold:async()=>{began();await gate;}};};
+
+test('a stop ends a deletion in flight right away, even while it still waits for the runtime lock; the next activation finishes it',async t=>{
+ const f=fixture(t);seedOlder(f);f.permitStop();
+ const disk=gated();f.removal(disk.hold);
+ await f.runtime.activate();await disk.started;
+ assert.equal(tombs(f).length,3);
+ // Something else holds the runtime lock (a pairing, say), so the stop has to wait for it. That wait is not a reason to go
+ // on competing with it for the disk and the thread pool.
+ let free;const busy=new Promise(resolve=>{free=resolve;}),holder=state.withRuntimeLock(()=>busy,{timeoutMs:60000});
+ const stopping=f.runtime.deactivate();
+ disk.release();await f.runtime.pruneSettled();
+ assert.equal(tombs(f).length,3,'nothing more was deleted: the deletion ended at its next operation');
+ assert.equal(state.readState().lastPrune,undefined,'an unfinished deletion is not recorded as done');
+ free();await holder;
+ assert.equal((await stopping).phase,'disabled');
+ // What it left is a tomb, which is no release, and the next activation finishes it.
+ f.removal(null);
+ await f.runtime.activate();await f.runtime.pruneSettled();
+ assert.equal(tombs(f).length,0);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());
+ assert.deepEqual(plain(state.readState().lastPrune.removed).sort(),[R2,R3A,R3B].sort());
+});
+
+test('a stop that waited for the activation to end also ends the deletion that activation started on its way out',async t=>{
+ const f=fixture(t);seedOlder(f);f.permitStop();
+ const disk=gated();f.removal(disk.hold);
+ // The stop arrives while the activation holds the lock. It asks for the lock and gets it after the activation, which by
+ // then has started its deletion: only a second look after the lock catches that one.
+ let stopping=null;
+ f.hooks.read=()=>{if(!stopping){stopping=f.runtime.deactivate();stopping.catch(()=>{});}};
+ await f.runtime.activate();await disk.started;
+ assert.equal((await stopping).phase,'disabled');
+ disk.release();await f.runtime.pruneSettled();
+ assert.equal(tombs(f).length,3,'the deletion that started after the stop was asked for ended at its next operation');
+ assert.equal(state.readState().lastPrune,undefined);
+});
+
+test('abortPruning ends only what is in flight: what it finished is not recorded as the whole job, and a deletion that starts afterwards runs to the end',async t=>{
+ const f=fixture(t);seedOlder(f,['r4','r3a','r2']);
+ // The first tomb goes at once; the second waits on the disk.
+ const disk=gated();f.removal(async(op,target)=>{if(target.includes(R2))await disk.hold();});
+ await f.runtime.activate();await disk.started;
+ assert.equal(tombs(f).length,1,'one tomb was deleted, the other is being deleted');
+ f.runtime.abortPruning();disk.release();await f.runtime.pruneSettled();
+ assert.equal(tombs(f).length,1);assert.equal(state.readState().lastPrune,undefined,'half a job is not recorded, not even as what it removed');
+ f.removal(null);
+ await activated(f);
+ assert.equal(tombs(f).length,0);assert.deepEqual(plain(state.readState().lastPrune.removed),[R2]);
 });
 
 test('a leftover of an earlier deletion is finished at the next activation, even with only this release and its rollback left',async t=>{

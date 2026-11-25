@@ -125,7 +125,7 @@ export async function stopSupervisor({timeoutMs=SUPERVISOR_STOP_TIMEOUT_MS}={}) 
 export async function supervise() {
  const loc=runtime.locations();
  let stop=false,initialized=false,retries=0,wake,refreshing;
- const shutdown=()=>{stop=true;wake?.();};
+ const shutdown=()=>{stop=true;runtime.abortPruning();wake?.();};
  const wait=ms=>new Promise(resolve=>{
   if(stop){resolve();return;}
   const timer=setTimeout(done,ms);
@@ -162,6 +162,9 @@ export async function supervise() {
   }
  } finally {
   process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);
+  // However this supervisor ends, a delete of old releases it started must not keep the process alive: only the success path
+  // of `supervise` in bin/cli.mjs calls process.exit, and one that ends on a failed stop below would otherwise wait for it.
+  runtime.abortPruning();
   // A signal only means this process must end; whether Paseo should be left disabled
   // is a separate question (see shouldDeactivate). Deactivating on every stop
   // persisted "the user wants Paseo off" for a container shutdown or a source swap.

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {RUNTIME_REVISION,ownedReleases,prunePlan,claimReleases,removeTombs,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
+import {monitorEventLoopDelay} from 'node:perf_hooks';
+import {RUNTIME_REVISION,REMOVAL_BATCH,ownedReleases,prunePlan,claimReleases,removeTree,removeTombs,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
 
 // Revisions of the releases Agent Connect 0.1.4-0.1.23 shipped (see runtime-layout.mjs), and this one.
 const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479',R1='0.11.2-r1-0123456789ab';
@@ -28,6 +29,11 @@ function fixture(t){
   },
   names:()=>fs.readdirSync(releases).sort()};
 }
+
+// The four fs.promises calls removeTree makes, with each one written down as [operation, path] before it runs.
+const OPS=['lstat','readdir','unlink','rmdir'];
+const watched=(seen,before=async()=>{})=>Object.fromEntries(OPS.map(op=>[op,async(target,...rest)=>{seen.push([op,target]);await before(op,target);return fs.promises[op](target,...rest);}]));
+const EIO=()=>Object.assign(new Error('EIO'),{code:'EIO'});
 
 const NEWER='0.99.0-r1-bbbbbbbbbbbb';
 test('this release, exactly the newest earlier one and every newer one stay; the other plugin-owned releases go',async t=>{
@@ -57,9 +63,11 @@ test('planning reads only, claiming only renames, removing deletes: the lock is 
  assert.ok(claim.claimed.every(row=>row.tomb.startsWith('.pruning-'+row.name+'-')&&fs.existsSync(path.join(f.releases,row.tomb,'package.json'))),'renamed whole, nothing deleted yet');
  assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),[RUNTIME_REVISION,R4],'a claimed release is no release any more');
  assert.deepEqual(prunePlan(f.loc).tombs.map(row=>row.name).sort(),[R2,R3A].sort(),'and the next plan lists it as a leftover');
- const calls=[],done=await removeTombs(f.loc,claim.claimed,{rm:async(target,options)=>{calls.push([path.basename(target),options]);return fs.promises.rm(target,options);}});
+ const seen=[],done=await removeTombs(f.loc,claim.claimed,{ops:watched(seen)});
  assert.deepEqual(done.removed.sort(),[R2,R3A].sort());assert.deepEqual(done.failed,[]);assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort());
- assert.deepEqual(calls.map(call=>call[1]),[{recursive:true,force:true},{recursive:true,force:true}]);
+ const finished=seen.filter(([op])=>op==='rmdir').map(([,target])=>path.basename(target));
+ for(const {tomb} of claim.claimed)assert.ok(finished.includes(tomb),'each tomb ends with the removal of its own directory: '+tomb);
+ assert.ok(seen.every(([,target])=>target.startsWith(f.releases+path.sep+'.pruning-')),'only inside the tombs');
 });
 
 test('claiming refuses this release and whatever is not an owned release; removing touches tombs only',async t=>{
@@ -69,14 +77,15 @@ test('claiming refuses this release and whatever is not an owned release; removi
  assert.deepEqual(claim.claimed,[]);assert.deepEqual(claim.failed,[RUNTIME_REVISION,R3A,'custom','0.1.0-r1-aaaaaaaaaaaa']);
  assert.deepEqual(f.names(),[R3A,R4,RUNTIME_REVISION,'custom'].sort());
  const tomb='.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';fs.mkdirSync(path.join(f.releases,tomb));
- const calls=[];
- const done=await removeTombs(f.loc,[{name:R4,tomb:R4},{name:'x',tomb:'custom'},{name:R2,tomb},{name:R1,tomb:'.pruning-'+R1+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{rm:async target=>{calls.push(path.basename(target));await fs.promises.rm(target,{recursive:true,force:true});}});
- assert.deepEqual(calls,[tomb],'only the tomb that exists was removed');assert.deepEqual(done.failed.sort(),[R4,'x'].sort());assert.deepEqual(done.removed.sort(),[R1,R2].sort(),'a tomb that is already gone counts as done');
+ const seen=[];
+ const done=await removeTombs(f.loc,[{name:R4,tomb:R4},{name:'x',tomb:'custom'},{name:R2,tomb},{name:R1,tomb:'.pruning-'+R1+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{ops:watched(seen)});
+ assert.deepEqual([...new Set(seen.map(([,target])=>path.basename(target)))],[tomb],'only the tomb that exists was touched');assert.deepEqual(done.failed.sort(),[R4,'x'].sort());assert.deepEqual(done.removed.sort(),[R1,R2].sort(),'a tomb that is already gone counts as done');
  assert.ok(fs.existsSync(path.join(f.releases,R4,'package.json'))&&fs.existsSync(path.join(f.releases,'custom')));
- const failing=await removeTombs(f.loc,[{name:R2,tomb:'.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{rm:async()=>{throw Object.assign(new Error('EIO'),{code:'EIO'});}});
- assert.deepEqual(failing,{removed:[R2],failed:[]},'a missing tomb is done whatever rm would say');
+ const broken={...fs.promises,lstat:async()=>{throw EIO();}};
+ const failing=await removeTombs(f.loc,[{name:R2,tomb:'.pruning-'+R2+'-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'}],{ops:broken});
+ assert.deepEqual(failing,{removed:[R2],failed:[]},'a missing tomb is done whatever the file system would say');
  fs.mkdirSync(path.join(f.releases,tomb));
- assert.deepEqual(await removeTombs(f.loc,[{name:R2,tomb}],{rm:async()=>{throw Object.assign(new Error('EIO'),{code:'EIO'});}}),{removed:[],failed:[R2]});
+ assert.deepEqual(await removeTombs(f.loc,[{name:R2,tomb}],{ops:broken}),{removed:[],failed:[R2]});
 });
 
 test('earlier means an older Paseo version, then an older revision number, whatever the directory times say',async t=>{
@@ -238,4 +247,97 @@ test('only a leftover that this code named is finished, and only if it is a real
  const result=await pruneRuntimeReleases(f.loc);
  assert.deepEqual(result.removed,[R3A]);assert.equal(fs.existsSync(path.join(f.releases,own)),false);
  assert.ok(fs.existsSync(path.join(f.releases,'.pruning-custom')));assert.equal(fs.readFileSync(path.join(outside,'keep.txt'),'utf8'),'precious');
+});
+
+// ---- removeTree: one operation at a time, no link followed, over when it is told to be ----
+const fileCount=root=>{let count=0;const walk=dir=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true}))entry.isDirectory()?walk(path.join(dir,entry.name)):count++;};walk(root);return count;};
+const manyFiles=(root,count)=>{for(let d=0,made=0;made<count;d++){const sub=path.join(root,'node_modules',`pkg-${d%40}`,`lib-${d}`);fs.mkdirSync(sub,{recursive:true});for(let i=0;i<250&&made<count;i++,made++)fs.writeFileSync(path.join(sub,`f${i}.js`),'x');}};
+
+test('removeTree empties a tree from the leaves up, one operation at a time, and never follows a link',async t=>{
+ const f=fixture(t),root=path.join(f.dir,'tomb'),outside=path.join(f.dir,'outside');
+ fs.mkdirSync(path.join(outside,'dir'),{recursive:true});fs.writeFileSync(path.join(outside,'dir/keep.txt'),'precious');fs.writeFileSync(path.join(outside,'file.txt'),'precious');
+ for(const dir of ['a/b/c','a/d','e'])fs.mkdirSync(path.join(root,dir),{recursive:true});
+ for(const file of ['top.txt','a/one.txt','a/b/two.txt','a/b/c/three.txt','e/four.txt'])fs.writeFileSync(path.join(root,file),'x');
+ fs.chmodSync(path.join(root,'a/b/two.txt'),0o444);
+ fs.symlinkSync(path.join(outside,'dir'),path.join(root,'a/link-to-dir'),'dir');fs.symlinkSync(path.join(outside,'file.txt'),path.join(root,'e/link-to-file'));fs.symlinkSync(path.join(f.dir,'nowhere'),path.join(root,'dangling'));
+ let inFlight=0,most=0;
+ const ops=Object.fromEntries(OPS.map(op=>[op,async(...args)=>{most=Math.max(most,++inFlight);try {return await fs.promises[op](...args);} finally {inFlight--;}}]));
+ assert.equal(await removeTree(root,{ops}),true);
+ assert.equal(fs.existsSync(root),false);assert.equal(most,1,'one operation at a time');
+ assert.equal(fs.readFileSync(path.join(outside,'dir/keep.txt'),'utf8'),'precious','a linked directory is unlinked, not entered');assert.equal(fs.readFileSync(path.join(outside,'file.txt'),'utf8'),'precious');
+ // The root itself as a link: the link goes and what it points to stays. A root that is not there is done.
+ fs.symlinkSync(outside,path.join(f.dir,'root-link'),'dir');
+ assert.equal(await removeTree(path.join(f.dir,'root-link')),true);assert.equal(fs.existsSync(path.join(f.dir,'root-link')),false);assert.equal(fs.existsSync(path.join(outside,'dir/keep.txt')),true);
+ assert.equal(await removeTree(path.join(f.dir,'no-such-tomb')),true);
+});
+
+test('removeTree: an entry someone else already removed is done, any other failure is thrown',async t=>{
+ const f=fixture(t),root=path.join(f.dir,'tomb');
+ fs.mkdirSync(path.join(root,'sub'),{recursive:true});for(const file of ['one','sub/two'])fs.writeFileSync(path.join(root,file),'x');
+ // Every file is removed by someone else just before this one tries; so is the directory.
+ const raced=Object.fromEntries(OPS.map(op=>[op,async(target,...rest)=>{if(op==='unlink'||op==='rmdir')fs.rmSync(target,{recursive:true,force:true});return fs.promises[op](target,...rest);}]));
+ assert.equal(await removeTree(root,{ops:raced}),true);assert.equal(fs.existsSync(root),false);
+ fs.mkdirSync(root);fs.writeFileSync(path.join(root,'one'),'x');
+ await assert.rejects(removeTree(root,{ops:{...fs.promises,unlink:async()=>{throw EIO();}}}),{code:'EIO'});
+ assert.ok(fs.existsSync(path.join(root,'one')),'what failed stays');
+});
+
+test('removeTree stops before its next operation once it is told to, and what it leaves is finished by another call',async t=>{
+ const f=fixture(t),root=path.join(f.dir,'tomb');
+ for(let d=0;d<5;d++){fs.mkdirSync(path.join(root,'d'+d),{recursive:true});for(let i=0;i<20;i++)fs.writeFileSync(path.join(root,'d'+d,'f'+i),'x');}
+ let count=0;
+ const ops=Object.fromEntries(OPS.map(op=>[op,async(...args)=>{count++;return fs.promises[op](...args);}]));
+ assert.equal(await removeTree(root,{ops,aborted:()=>count>=30}),false);
+ assert.equal(count,30,'not one operation after the stop');
+ assert.ok(fs.existsSync(root)&&fileCount(root)>0&&fileCount(root)<100,'the directory is still there, partly emptied');
+ assert.equal(await removeTree(root),true);assert.equal(fs.existsSync(root),false);
+});
+
+test('an aborted removal reports what it finished and nothing else: the tomb it stopped in is neither removed nor failed, and the next run finishes it',async t=>{
+ const f=fixture(t);
+ for(const revision of [RUNTIME_REVISION,R4,R3A,R2])f.release(revision);
+ const plan=prunePlan(f.loc),claim=claimReleases(f.loc,plan.candidates),[first,second]=claim.claimed;
+ assert.deepEqual([first.name,second.name],[R3A,R2]);
+ let inSecond=0;
+ const ops=watched([],async(op,target)=>{if(target.includes(second.tomb))inSecond++;});
+ const done=await removeTombs(f.loc,claim.claimed,{ops,aborted:()=>inSecond>=2});
+ assert.deepEqual(done,{removed:[R3A],failed:[],aborted:true});
+ assert.equal(fs.existsSync(path.join(f.releases,first.tomb)),false);assert.ok(fs.existsSync(path.join(f.releases,second.tomb)),'the tomb it stopped in is still there');
+ assert.deepEqual(ownedReleases(f.loc).map(release=>release.name),[RUNTIME_REVISION,R4],'it was a release no longer, and is none now');
+ // pruneRuntimeReleases says so too; a later run lists the leftover as a tomb and finishes it.
+ const again=await pruneRuntimeReleases(f.loc,{aborted:()=>true});
+ assert.equal(again.aborted,true);assert.deepEqual(again.removed,[]);
+ const later=await pruneRuntimeReleases(f.loc);
+ assert.deepEqual(later.removed,[R2]);assert.equal(later.aborted,undefined);assert.deepEqual(f.names(),[R4,RUNTIME_REVISION].sort());
+});
+
+test('removeTree gives the event loop a turn at least every REMOVAL_BATCH operations, even when every operation answers at once',async t=>{
+ // A synthetic tree on a file system that answers immediately: no thread pool, so only the pause between batches can yield.
+ const entries=(prefix,count)=>Array.from({length:count},(_,i)=>({name:prefix+i,isDirectory:()=>prefix==='d'}));
+ let sinceTurn=0,most=0,turns=0,live=true,total=0;
+ const turn=()=>{most=Math.max(most,sinceTurn);sinceTurn=0;turns++;if(live)setImmediate(turn);};setImmediate(turn);
+ const count=()=>{sinceTurn++;total++;};
+ const ops={lstat:async()=>{count();return {isDirectory:()=>true};},readdir:async dir=>{count();return dir==='/virtual/root'?entries('d',10):entries('f',300);},unlink:async()=>{count();},rmdir:async()=>{count();}};
+ assert.equal(await removeTree('/virtual/root',{ops}),true);live=false;
+ assert.ok(total>3000,'a tree of '+total+' operations');
+ assert.ok(most<=REMOVAL_BATCH+1,`${most} operations between two turns of the event loop`);
+ assert.ok(turns>=Math.floor(total/(REMOVAL_BATCH+1)),`${turns} turns for ${total} operations`);
+});
+
+test('measured: 20 000 files go without stalling the event loop, and a stop ends a deletion within a fraction of a second',{timeout:180000},async t=>{
+ const f=fixture(t),whole=path.join(f.dir,'whole'),stopped=path.join(f.dir,'stopped');
+ manyFiles(whole,20000);manyFiles(stopped,8000);
+ const lag=monitorEventLoopDelay({resolution:5});lag.enable();
+ assert.equal(await removeTree(whole),true);
+ lag.disable();
+ const worstMs=lag.max/1e6; // fs.promises.rm on a tree of this kind stood still for 250 ms and more (measured with 50 000 files)
+ assert.equal(fs.existsSync(whole),false);
+ assert.ok(worstMs<250,`the event loop stood still for ${Math.round(worstMs)} ms`);
+ // A stop 300 ms into a deletion that needs more than a second.
+ let stop=false,stopAt=0;setTimeout(()=>{stop=true;stopAt=performance.now();},300);
+ const result=await removeTree(stopped,{aborted:()=>stop}),lateMs=performance.now()-stopAt;
+ assert.equal(result,false,'the deletion was still running when the stop came');
+ assert.ok(lateMs<500,`ended ${Math.round(lateMs)} ms after the stop`);
+ assert.ok(fs.existsSync(stopped)&&fileCount(stopped)>0,'what is left stays');
+ assert.equal(await removeTree(stopped),true);assert.equal(fs.existsSync(stopped),false);
 });

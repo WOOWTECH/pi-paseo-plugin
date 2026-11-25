@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import {privateDirectory,atomicJson,RuntimeError,assertSafePath} from './state.mjs';
 import {applyPidLockPatch,pidLockPatchReady,PID_LOCK_PATCH_ID,PID_LOCK_COPIES,PID_LOCK_0112} from './pid-lock-patch.mjs';
 import {applyBrandIdentityPatch,brandIdentityPatchReady,BRAND_IDENTITY_PATCH_ID,BRAND_0112} from './brand-identity-patch.mjs';
@@ -165,24 +166,70 @@ export function claimReleases(loc,names) {
  }
  return {claimed,failed};
 }
+// A release is tens of thousands of files. fs.promises.rm({recursive}) starts the delete of every entry of a directory at
+// once: all of them are queued on the thread pool, so a read that something else needs (a stop's, a status's) waits behind
+// them, and their callbacks keep the event loop busy in long stretches. Measured on a fast disk with 50 000 files: the
+// event loop stood still for up to 250 ms and a small readFile took up to 800 ms. removeTree does one operation at a time,
+// from the leaves up, pauses briefly every REMOVAL_BATCH operations (the disk is an SD card on the boards this runs on, and a
+// daemon is using it), and looks at `aborted` before each operation, so a stop ends it within one.
+const PAUSE_MS=2;
+/** How many file operations removeTree makes between two pauses (and two turns of the event loop). */
+export const REMOVAL_BATCH=64;
+/** Deletes `root` and everything under it without following a link: an entry that is a link (or anything but a
+ * directory) is unlinked as itself, and only real directories are entered. Resolves to true when the whole tree is gone,
+ * to false when `aborted()` ended it first (what is left stays as it is: the directory is still there, with whatever it
+ * had not lost yet); anything else that fails is thrown, except ENOENT (someone else already removed it).
+ * `ops` is the file system (the fs.promises calls lstat, readdir, unlink and rmdir) and `pause` the wait between batches,
+ * for tests. */
+export async function removeTree(root,{aborted=()=>false,ops=fs.promises,pause=()=>delay(PAUSE_MS)}={}) {
+ let operations=0;
+ const batch=async()=>{if(++operations%REMOVAL_BATCH===0)await pause();};
+ const gone=error=>error?.code==='ENOENT';
+ // The root itself is looked at without following it: a link is removed as itself, whatever it points to.
+ try {if(!(await ops.lstat(root)).isDirectory()){await ops.unlink(root);return true;}} catch(error) {if(gone(error))return true;throw error;}
+ const stack=[{dir:root,entries:null}];
+ while(stack.length) {
+  if(aborted())return false;
+  const top=stack[stack.length-1];
+  if(top.entries===null) {
+   // The type of each entry comes with the listing (the directory entry's own type, never what a link points to).
+   try {top.entries=await ops.readdir(top.dir,{withFileTypes:true});} catch(error) {if(!gone(error))throw error;stack.pop();}
+   await batch();continue;
+  }
+  const entry=top.entries.pop();
+  if(!entry) {
+   try {await ops.rmdir(top.dir);} catch(error) {if(!gone(error))throw error;}
+   stack.pop();await batch();continue;
+  }
+  const target=path.join(top.dir,entry.name);
+  if(entry.isDirectory()) {stack.push({dir:target,entries:null});continue;}
+  try {await ops.unlink(target);} catch(error) {if(!gone(error))throw error;}
+  await batch();
+ }
+ return true;
+}
 /** Deletes tombs (the slow part: it takes no lock and does not follow links). A tomb is only ever a real directory
- * whose name this code made. {removed: [names], failed: [names]}; `rm` is where a caller puts its own file system. */
-export async function removeTombs(loc,items,{rm=(target,options)=>fs.promises.rm(target,options)}={}) {
+ * whose name this code made. {removed: [names], failed: [names], aborted?: true}: with `aborted` the deletion stopped
+ * early, and the tomb it was in (and every one after it) is neither removed nor failed, it is left for the next run.
+ * `aborted`, `ops` and `pause` go to removeTree. */
+export async function removeTombs(loc,items,{aborted=()=>false,ops,pause}={}) {
  const releases=path.join(loc.runtimeDir,'releases'),removed=[],failed=[];
  for(const {name,tomb} of items) {
+  if(aborted())return {removed,failed,aborted:true};
   try {
    if(!TOMB_NAME.test(tomb))throw new RuntimeError('RUNTIME_NOT_OWNED');
    if(!fs.lstatSync(path.join(releases,tomb)).isDirectory())throw new RuntimeError('RUNTIME_NOT_OWNED');
-   await rm(path.join(releases,tomb),{recursive:true,force:true});removed.push(name);
+   if(await removeTree(path.join(releases,tomb),{aborted,ops,pause})===false)return {removed,failed,aborted:true};
+   removed.push(name);
   } catch(error) {(error?.code==='ENOENT'?removed:failed).push(name);} // gone already: someone else finished it
  }
  return {removed,failed};
 }
-/** All three steps in a row: {removed, kept, failed, skipped?}, names only. Best effort: what cannot be removed is
+/** All three steps in a row: {removed, kept, failed, skipped?, aborted?}, names only. Best effort: what cannot be removed is
  * reported in `failed`, never thrown. */
-export async function pruneRuntimeReleases(loc,{keep=[],rm}={}) {
+export async function pruneRuntimeReleases(loc,{keep=[],aborted,ops,pause}={}) {
  const plan=prunePlan(loc,{keep});
  if(plan.skipped)return {removed:[],kept:[],failed:[],skipped:plan.skipped};
- const claim=claimReleases(loc,plan.candidates),done=await removeTombs(loc,[...plan.tombs,...claim.claimed],{rm});
- return {removed:done.removed,kept:plan.kept,failed:[...claim.failed,...done.failed]};
+ const claim=claimReleases(loc,plan.candidates),done=await removeTombs(loc,[...plan.tombs,...claim.claimed],{aborted,ops,pause});
+ return {removed:done.removed,kept:plan.kept,failed:[...claim.failed,...done.failed],...(done.aborted?{aborted:true}:{})};
 }

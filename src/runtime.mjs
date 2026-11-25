@@ -250,13 +250,22 @@ async function claimOldReleases(loc) {
   } catch { return null; }
 }
 const removing = new Set(), removals = new Set();
+// Counts the stops this process was asked for. A deletion started before one ends at its next operation (abortPruning).
+let pruneEpoch = 0;
+/** Ends the deletion of old releases this process has in flight, at its next file operation. A stop must not share the
+ * disk and the thread pool with a delete of 0.7 GB, and a supervisor that is ending must not stay alive until one is
+ * done. What is left stays a tomb, which the next activation finishes; the run is not recorded as done. A deletion that
+ * starts after this call is not affected. */
+export function abortPruning() { pruneEpoch++; }
 /** Deletes what claimOldReleases renamed, then records the outcome in state.lastPrune (names only, no lock needed). */
 function removeInBackground(prune) {
   if (!prune) return;
-  const items = prune.work.filter(item => !removing.has(item.tomb));
+  const items = prune.work.filter(item => !removing.has(item.tomb)), epoch = pruneEpoch, aborted = () => pruneEpoch !== epoch;
   for (const item of items) removing.add(item.tomb);
   const task = (async () => {
-    const done = items.length ? await removeTombs(prune.loc, items, { rm: (target, options) => fs.promises.rm(target, options) }) : { removed: [], failed: [] };
+    const done = items.length ? await removeTombs(prune.loc, items, { aborted, ops: fs.promises }) : { removed: [], failed: [] };
+    // Stopped before it was done: lastPrune only ever describes a run that finished, and the tombs left are another run's.
+    if (done.aborted) return;
     const failed = [...prune.failed, ...done.failed];
     if (!done.removed.length && !failed.length && !prune.skipped) return;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -518,7 +527,9 @@ async function stopOwnedDaemon(loc, control, instance) {
   }
 }
 export async function deactivate() {
+  abortPruning(); // a stop does not share the disk with a delete of old releases
   return withRuntimeLock(async () => {
+    abortPruning(); // nor with one that the activation holding the lock until now started on its way out
     // Recorded before the stop and not undone when it fails, on purpose: the host (or the user's disable) has already
     // saved the pause, and only status().enabled reads this flag. A failed stop leaves the phase and the daemon as they
     // were and reports why; reporting enabled: true would claim a service that nothing is going to start.

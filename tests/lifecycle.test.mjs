@@ -60,6 +60,7 @@ function fixture(t, { clock } = {}) {
     refreshPiCatalogIfChanged: async () => false,
     activate: async () => { calls.push(['activate']); return {}; },
     deactivate: async () => { calls.push(['deactivate']); return {}; },
+    abortPruning: () => {},
   };
   const cache = new Map();
   function load(file) {
@@ -595,6 +596,32 @@ test(`a supervisor that ends for a disable writes down that stopping the daemon 
  const record=JSON.parse(fs.readFileSync(path.join(f.loc.stateDir,'supervisor-stop.json'),'utf8'));
  assert.equal(record.pid,4000);assert.equal(record.ok,expected.ok);assert.equal(record.code,expected.code);assert.match(record.at,/^\d{4}-\d\d-\d\dT/);
  assert.doesNotMatch(JSON.stringify(record),/private detail/);assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
+});
+// A delete of old releases that an activation started runs in the supervisor's process, in the background. A stop must not
+// share the disk with it, and a supervisor that ends must not stay alive until it is done (bin/cli.mjs calls process.exit
+// only when `supervise` returns; one that throws would otherwise wait for the deletion).
+test('a supervisor that is asked to stop ends the deletion of old releases at the signal, before it stops the daemon',async t=>{
+ const f=fixture(t);f.packages([root]);f.write('host-registration',{enabled:true,packageRoot:root,cwd:f.loc.home});
+ const entered=deferred(),release=deferred();
+ f.runtime.activate=async()=>{entered.resolve();await release.promise;};
+ f.runtime.abortPruning=()=>{f.calls.push(['abortPruning']);};
+ const supervising=f.load('src/supervisor.mjs').supervise();
+ await entered.promise;
+ f.write('host-registration',{enabled:false,packageRoot:root,cwd:f.loc.home});
+ f.signals.emit('SIGTERM');
+ assert.deepEqual(f.calls.map(c=>c[0]),['abortPruning'],'at the signal itself, while an activation is still running');
+ release.resolve();await supervising;
+ const order=f.calls.map(c=>c[0]);
+ assert.equal(order.filter(name=>name==='deactivate').length,1);assert.ok(order.lastIndexOf('abortPruning')<order.indexOf('deactivate'),'and again before the daemon is stopped: '+order);
+});
+for(const [name,failure] of [['finishes','none'],['fails',new Error('the stop failed')]])
+test(`a supervisor that ends because it is disabled has ended the deletion of old releases when its stop of the daemon ${name}`,async t=>{
+ const f=fixture(t);f.packages([root]);f.write('host-registration',{enabled:false,packageRoot:root,cwd:f.loc.home});
+ f.runtime.abortPruning=()=>{f.calls.push(['abortPruning']);};
+ f.runtime.deactivate=async()=>{f.calls.push(['deactivate']);if(failure!=='none')throw failure;return {};};
+ if(failure==='none')await f.load('src/supervisor.mjs').supervise();else await assert.rejects(f.load('src/supervisor.mjs').supervise(),error=>error===failure);
+ const order=f.calls.map(c=>c[0]);
+ assert.deepEqual(order,['deactivate','abortPruning'],'the supervisor stops its own work however it ends: '+order);
 });
 test('a stop that completed with an unconfirmed terminal cleanup says so next to the disabled phase',async t=>{
  const f=fixture(t);f.packages([root]);f.owned();
