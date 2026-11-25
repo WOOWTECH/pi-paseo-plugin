@@ -1041,6 +1041,24 @@ test('the warning threshold is where the 45 s budget runs out for the worst case
  assert.equal(over.processes.has(over.initial.pid),true,'bounded, and never forced');
 });
 
+test('with nothing but closing records, stops begin to fail at 15 of them, at 12 when the daemon worker takes its full 10 s (the README gives these numbers)',async t=>{
+ // The threshold above is derived for the worst case upstream allows. Nothing bounds the ordinary case: the supervisor's pass
+ // alone walks each record for 3 s, and the 45 s budget (less the 0.2 s the model gives the supervisor to exit, and the
+ // daemon worker's own shutdown) runs out at floor((45 - 0.2 - worker) / 3) + 1 records.
+ const firstFailure=async workerShutdownMs=>{
+  const f=fixture(t);f.permitStop();
+  for(let records=1;records<=25;records++) {
+   f.upstream.addClosing('noPs');f.stopScenario({workerShutdownMs});
+   try {await f.runtime.deactivate();}
+   catch(error) {assert.equal(error.code,'STOP_NOT_CONFIRMED');assert.ok(await accumulating(f),'and the plugin has been warning about it');return records;}
+   await f.runtime.activate(); // a new daemon: upstream's records stay as they are
+  }
+  return null;
+ };
+ assert.equal(await firstFailure(0),15);
+ assert.equal(await firstFailure(UPSTREAM_MS.workerGrace),12);
+});
+
 test('procps back: the next start and stop retire the records, and the warning goes with them',async t=>{
  const f=fixture(t);f.permitStop();
  for(let i=0;i<CLOSING_RECORDS_WARNING_AT+1;i++)f.upstream.addClosing('noPs');
