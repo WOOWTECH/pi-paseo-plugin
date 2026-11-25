@@ -10,7 +10,7 @@ Changing the target saves its app URL and relay together. If the daemon is runni
 | Apporo Smart | https://smart.apporo.ai | relay.apporo.ai:443 |
 | Paseo | https://app.paseo.sh | relay.paseo.sh:443 |
 
-The connector uses upstream Paseo 0.11.2 and its V2 pairing format. Smart mobile push notifications use a fork-specific FCM protocol and are not supported by this configuration-only integration; desktop/mobile production pairing still needs live acceptance. The branded app source currently identifies itself as 0.10.1.
+The connector uses upstream Paseo 0.17.4 (0.1.4–0.1.23 used 0.11.2) and its V2 pairing format. Smart mobile push notifications use a fork-specific FCM protocol and are not supported by this configuration-only integration; desktop/mobile production pairing still needs live acceptance. The branded app source currently identifies itself as 0.10.1; Paseo 0.17.4 still admits its older relay encryption unless `daemon.relay.requireProtectedSecurity` is turned on, which Agent Connect never does.
 
 
 Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。使用者在 **Pi Web 設定 → 插件 → Agent Connect** 選擇連線標的並開始配對。
@@ -18,6 +18,8 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 各標的使用自己的加密 relay；從 Pi Web 的受保護設定頁產生配對連結，再開啟所選標的的官方網站。
 
 `0.1.23` 起不再附內建網頁：Paseo 選項跟兩個 Smart 一樣開啟官方網站 `https://app.paseo.sh`，並在那裡配對。Pi Web 的 `/paseo-web` 路由與網頁包下載（約 11 MB）一併移除；啟動服務時會刪掉舊版留在插件狀態目錄 `web-client` 的網頁檔（只刪舊版建立的項目，不跟隨符號連結，刪不掉也不影響啟動）。升級後要重新啟動 Pi Web（原生與容器的升級流程都會重啟）；重啟前，仍在執行的舊版 Pi Web 無法為 Paseo 產生配對連結，開著的 `/paseo-web` 分頁也會失效。用 `/paseo-web` 配對過的瀏覽器要在官方網站重新配對一次；主機身分、登入與對話不變。0.1.9–0.1.22 內建的修正版（Paseo Web 0.13.0-woow.1）帶有兩項顯示修補：回覆途中重新整理時重複顯示，以及長回覆重連後只剩中間一段。上游 [PR #7908](https://github.com/getpaseo/paseo/pull/7908) 合併並部署前，官方網站可能仍會出現這兩個情況；後端對話不受影響。背景見[修補報告](docs/pi4-stream-reload-2026-10-26.md)。
+
+`0.1.24` 起管理的 Paseo daemon 從 0.11.2 升到 0.17.4（managed runtime revision `0.17.4-r1-a651f42711da`）。升級後第一次啟用只在新的版本目錄安裝 0.17.4，不會停掉執行中的 0.11.2 daemon：它繼續服務並回報 `RESTART_REQUIRED`，這段期間的狀態、配對、設定重新載入與停止都交給它自己的 0.11.2 版本處理。在設定頁停止再啟動服務後，同一個 `PASEO_HOME` 改由 0.17.4 執行；設定、對話資料、server ID 與 daemon 金鑰（配對連結裡的主機身分）都保留。舊版本目錄（0.1.18–0.1.23 的 `0.11.2-r4-4cf9d40940bf`）留著供退回，只用來控制舊 daemon，不會再被啟動。退回 0.1.23 也要停止再啟動一次；0.17.4 期間若有 Paseo 用戶端寫入 0.11.2 不認得的設定，舊版會以 `CONFIG_INVALID` 拒絕，須先移除該設定。Smart App 使用舊版 relay 加密：不要開啟 daemon 的 `daemon.relay.requireProtectedSecurity`（Paseo 用戶端的主機設定 API 或 `paseo daemon config` 都能改），否則 Smart App 會連不上。
 
 ## 0.1.10 PID 復原修補
 
@@ -34,7 +36,7 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 - Node.js 22.19.0+、npm、git。Linux（包含 Windows 既有 WSL2、Ubuntu、k3s/PaaS、HA add-on）需要 util-linux `flock`；macOS 使用 Node SQLite 交易鎖。原生 Windows 不在本次範圍。各平台的真實部署與 provider 驗收須分別記錄，不能由來源測試推定通過。
 - Pi `@earendil-works/pi-coding-agent` 1.0.0+。
 - Pi Web 0.10.0，整合層固定基底 commit `6fcd7d44981ab51a21d6cd6eb06d361d0e3d3068`。
-- Paseo `@getpaseo/cli` 0.11.2，使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。
+- Paseo `@getpaseo/cli` 0.17.4（managed runtime revision `0.17.4-r1-a651f42711da`），使用發行包內固定的修補依賴 lockfile，下載至持久 HOME 的獨立版本目錄。0.1.18–0.1.23 安裝的 `0.11.2-r4-4cf9d40940bf` 等 0.11.2 版本目錄只保留給升級前仍在執行的 daemon 停止使用。
 - 登入在執行 Pi Web 的同一使用者 HOME。插件沿用現有 provider CLI；缺少時下載固定版本到插件的獨立目錄。既有帳號資料用於官方 CLI 登入。
 
 啟用本機聽寫或語音模式時，服務的 PATH 還需要 `tar` 與 `bzip2`，並預留語音模型下載、解壓縮與執行所需空間。Paseo 會自動下載缺少的模型；精簡容器沒有 `bzip2` 時，可能已下載完整壓縮檔卻回報 `tar exited with code 2`。容器映像應安裝此相依套件，或使用服務啟動時可找到的持久化工具；只在暫時容器層安裝，重建後會消失。本插件不會替容器安裝 OS 套件。Pi4 的實測與恢復紀錄見 [儲存復原驗證](docs/pi4-storage-recovery-2026-10-25.md)。
@@ -88,7 +90,7 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 ### 允許代理彼此協作（0.1.22 起，預設關閉）
 
-設定頁的「允許代理彼此協作」開關控制 Paseo daemon 的 `daemon.mcp.injectIntoAgents`。Paseo 0.11.2 預設不開，所以透過 Agent Connect 執行的代理不會拿到 Paseo 的管理工具。
+設定頁的「允許代理彼此協作」開關控制 Paseo daemon 的 `daemon.mcp.injectIntoAgents`。Paseo（0.11.2 與 0.17.4）預設不開，所以透過 Agent Connect 執行的代理不會拿到 Paseo 的管理工具。
 
 - 開啟後，代理可以建立代理、終端機和排程，並對這台主機上任何代理傳訊息、切換它的權限模式（包括不需確認的模式）、替它批准權限請求。終端機可以直接執行指令，不經權限確認。只要有一段對話被惡意內容誘導，就可能藉此控制這台主機上的其他對話，所以只在信任這台主機上所有對話內容時開啟。
 - 這不是沙盒：就算關閉，被允許執行指令的代理仍可以直接使用本機的 `paseo` CLI。
@@ -99,7 +101,7 @@ Pi Web 本身需要重新啟動一次才能載入新的整合層。安裝器只�
 
 ### 顯示名稱
 
-設定頁的名稱是 Pi Web 插件的顯示標籤，可使用大小寫、中文及空白，長度上限 100 字元；空白名稱會使用 `Pi Agent`。儲存標籤不會啟停服務或重新驗證帳號。Paseo 0.11.2 的 daemon 設定不支援 `name`／`displayName`：官方 Web 初始名稱來自容器 hostname，改名則儲存在 Paseo 客戶端。需要變更官方 Web 顯示名稱時，請在該介面重新命名 host；插件不宣稱已同步此名稱。既有插件名稱偏好會保留，重新啟動會移除過去錯誤注入的 `daemon.name`，避免 `CONFIG_INVALID`。
+設定頁的名稱是 Pi Web 插件的顯示標籤，可使用大小寫、中文及空白，長度上限 100 字元；空白名稱會使用 `Pi Agent`。儲存標籤不會啟停服務或重新驗證帳號。Paseo 0.11.2 與 0.17.4 的 daemon 設定都不支援 `name`／`displayName`：官方 Web 初始名稱來自容器 hostname，改名則儲存在 Paseo 客戶端。需要變更官方 Web 顯示名稱時，請在該介面重新命名 host；插件不宣稱已同步此名稱。既有插件名稱偏好會保留，重新啟動會移除過去錯誤注入的 `daemon.name`，避免 `CONFIG_INVALID`。
 
 ### 沿用 Omnigent 選定的 Claude gateway
 
@@ -230,3 +232,5 @@ Paseo 安裝器會優先使用已登記在全域設定的 GitHub 版 Omnigent（
 2026-10-26：Pi4 已部署修正版 `/paseo-web`，完成 Claude 串流中重新整理及三引擎續聊驗收，詳見[正式部署報告](docs/pi4-managed-web-2026-10-26.md)。
 
 2026-11-25：0.1.23 移除內建 `/paseo-web`，Paseo 選項改開官方 `app.paseo.sh`。
+
+2026-11-25：0.1.24 管理的 Paseo daemon 升到 0.17.4；升級前的 0.11.2 daemon 要停止再啟動才會換版。
