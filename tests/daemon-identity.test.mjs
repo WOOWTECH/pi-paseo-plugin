@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import vm from 'node:vm';
 import {spawnSync,spawn} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
 import {once} from 'node:events';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
@@ -17,6 +18,7 @@ import ts from 'typescript';
 import * as state from '../src/state.mjs';
 import * as layout from '../src/runtime-layout.mjs';
 import * as lifecycleTimeouts from '../src/lifecycle-timeouts.mjs';
+import * as realRuntime from '../src/runtime.mjs';
 import {healthReport} from '../src/health.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 const require=createRequire(import.meta.url);
@@ -68,7 +70,7 @@ function fixture(t, { platform = process.platform } = {}) {
     const uid=p.uid??process.getuid();
     switch(m[2]){
      case 'cmdline':if(p.cmdlineUnreadable)throw Object.assign(new Error('denied'),{code:'EACCES'});return p.cmdline??(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0');
-     case 'status':return `Name:\tfixture\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
+     case 'status':if(p.statusError)throw Object.assign(new Error('cannot read'),{code:p.statusError});return `Name:\tfixture\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
      case 'stat':return `${m[1]} (fixture) S ${p.ppid??1} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${p.startTicks} 0 0 0\n`;
      case 'environ':
       if(p.environUnreadable)throw Object.assign(new Error('denied'),{code:'EACCES'});
@@ -807,6 +809,42 @@ test('the scan fails closed: a process of this user whose environment is denied 
   f.processes.delete(sealed);
  }
  await activated(f);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'once none is left the pruning resumes');
+});
+
+test('a process whose status is denied is another user\'s (a hidepid mount) and stops nothing; any other failure to read it still stops the pruning',async t=>{
+ const f=fixture(t);seedOlder(f,['r4','r3a','r2']);
+ // Everything of another user's, root's daemons included, looks like this on such a host: not even the owner can be read.
+ for(const statusError of ['EACCES','EPERM'])f.process({statusError,environUnreadable:true,cmdline:'node\0/srv/app.js\0'});
+ await activated(f);
+ assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'the pruning runs');assert.deepEqual(plain(state.readState().lastPrune.removed).sort(),[R2,R3A].sort());
+ // A status that fails for any other reason leaves the owner unknown, and nothing is pruned on a guess.
+ for(const statusError of ['EIO','EMFILE']) {
+  seedOlder(f,['r2']);
+  const broken=f.process({statusError});
+  await activated(f);
+  assert.equal(state.readState().lastPrune.skipped,'RELEASE_IN_USE_UNKNOWN',statusError);assert.ok(releaseNames(f).includes(R2),'nothing was touched');
+  f.processes.delete(broken);
+ }
+ await activated(f);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'once it reads again the pruning resumes');
+});
+
+// The scan above runs against a virtual /proc. This one reads the real one: a real child process pins a revision in its
+// environment, and the real runningRevisions has to find it. The child lives 30 s at most and is killed with the test.
+test('the real /proc scan finds the release a real process pins, and an unmarked process of the home makes it unknown',{skip:process.platform!=='linux'&&'Linux only'},async t=>{
+ const revision='0.11.2-r3-'+randomBytes(6).toString('hex'),home=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-scan-'));
+ const children=[];
+ const child=env=>{const c=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{env:{...process.env,...env},stdio:'ignore'});children.push(c);return c;};
+ t.after(()=>{for(const c of children)try{c.kill('SIGKILL');}catch{}fs.rmSync(home,{recursive:true,force:true});});
+ const environmentOf=c=>{try{return fs.readFileSync(`/proc/${c.pid}/environ`,'utf8').split('\0');}catch{return [];}};
+ // spawn() returns before the new image has replaced the environment of the forked one.
+ const ready=async(c,entry)=>{for(let i=0;i<200&&!environmentOf(c).includes(entry);i++)await new Promise(resolve=>setTimeout(resolve,25));assert.ok(environmentOf(c).includes(entry),'the child runs');};
+ const pinning=child({PI_PASEO_RUNTIME_REVISION:revision});await ready(pinning,'PI_PASEO_RUNTIME_REVISION='+revision);
+ const scan=realRuntime.runningRevisions({paseoHome:home});
+ assert.ok(scan.found.has(revision),'the revision a real process pins is found');
+ const unmarked=child({PASEO_HOME:home});await ready(unmarked,'PASEO_HOME='+home);
+ assert.equal(realRuntime.runningRevisions({paseoHome:home}).unknown,true,'a live process of this home that pins no release: unknown');
+ for(const c of children){c.kill('SIGKILL');await once(c,'exit');}
+ assert.equal(realRuntime.runningRevisions({paseoHome:home}).found.has(revision),false,'gone with the process');
 });
 
 test('this process and its parent are not daemons: an ambient PASEO_HOME in their environment stops nothing',async t=>{

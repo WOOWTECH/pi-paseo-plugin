@@ -103,6 +103,9 @@ async function daemonRelease(loc) {
 // although /proc/<pid> itself is then root's) unless its command line, which anyone can read, shows that it cannot
 // be running a release; or a process of this home that pins no release. This process and its ancestors are not
 // daemons, so an ambient PASEO_HOME in their environment does not count.
+// A status that is itself denied (EACCES, EPERM) is another user's process on a /proc mounted with hidepid: it is not
+// ours, and counting it would stop the pruning on such a host for good. Any other failure to read it is unknown.
+// (A non-dumpable process of ours is not told apart on such a mount: its status is denied there as well.)
 // Paseo runs its releases with node, and its supervisor and daemon retitle themselves "Paseo ...". A tmux client or a
 // python helper whose environment is denied is no release: without this a single one would stop all pruning.
 function couldRunRelease(pid) {
@@ -111,10 +114,12 @@ function couldRunRelease(pid) {
   return /(^|\/)node(js)?$/.test(args[0])||/paseo/i.test(args.join(' '));
  } catch(error) {return error?.code!=='ENOENT'&&error?.code!=='ESRCH';} // unreadable: it cannot be ruled out
 }
-function runningRevisions(loc) {
+/** Exported for the tests that run it against real processes. */
+export function runningRevisions(loc) {
  const found=new Set();
  if(process.platform!=='linux')return {found,unknown:false};
  const gone=error=>error?.code==='ENOENT'||error?.code==='ESRCH';
+ const denied=error=>error?.code==='EACCES'||error?.code==='EPERM';
  let names;try {names=fs.readdirSync('/proc');}catch {return {found,unknown:true};}
  const own=new Set([process.pid]);
  for(let pid=process.pid,hops=0;hops<64;hops++){
@@ -127,7 +132,7 @@ function runningRevisions(loc) {
   if(!/^\d+$/.test(name))continue;
   let uid;
   try {uid=Number(/^Uid:\s+(\d+)/m.exec(fs.readFileSync(`/proc/${name}/status`,'utf8'))?.[1]);}
-  catch(error) {if(!gone(error))unknown=true;continue;}
+  catch(error) {if(!gone(error)&&!denied(error))unknown=true;continue;}
   if(uid!==process.getuid())continue;
   let env;
   try {env=fs.readFileSync(`/proc/${name}/environ`,'utf8').split('\0');}
