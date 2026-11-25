@@ -21,14 +21,28 @@ function sameProcess(record) {
   return args.includes(path.join(record.packageRoot,'bin/cli.mjs'))&&args.includes('supervise');
  } catch{return process.platform!=='linux'&&record.packageRoot===root;}
 }
+/** Signals the supervisor that `record` names, if that process is still that supervisor, and waits for it to end.
+ * True when it was one that had to be stopped. */
 async function stopOwnedSupervisor(record,timeoutMs) {
- if(!sameProcess(record))return;
+ if(!sameProcess(record))return false;
  try {process.kill(record.pid,'SIGTERM');} catch(error) {if(error.code!=='ESRCH')throw error;}
  const deadline=Date.now()+timeoutMs;
  while(sameProcess(record)) {
   if(Date.now()>=deadline)throw new Error('Plugin supervisor is still stopping');
   await delay(Math.min(100,Math.max(1,deadline-Date.now())));
  }
+ return true;
+}
+// How a supervisor's own stop of the daemon went. The host that signals it for a disable only waits for the process
+// to end and cannot see an error thrown inside it, so a failed stop is written down (stopSupervisor reads it).
+const stopFile=loc=>path.join(loc.stateDir,'supervisor-stop.json');
+const safeCode=value=>/^[A-Z][A-Z0-9_]{0,63}$/.test(value||'')?value:null;
+function recordStop(loc,outcome) {
+ try {writeRecord(stopFile(loc),{pid:process.pid,at:new Date().toISOString(),...outcome});} catch { /* the stop is what counts, not its record */ }
+}
+async function stopDaemon(loc) {
+ try {const result=await runtime.deactivate();recordStop(loc,{ok:true});return result;}
+ catch(error) {recordStop(loc,{ok:false,code:safeCode(error?.code)||'OPERATION_FAILED'});throw error;}
 }
 function sameRoot(installedPath) {
  if(typeof installedPath!=='string')return false;
@@ -95,11 +109,17 @@ export async function startSupervisor({cwd}={}) {
   return {running:true,pid:child.pid};
  });
 }
+/** Stops the plugin supervisor. When it ends for a disable it stops the daemon itself; if that failed, the result
+ * carries the failure ({stopped: true, failed: {code, at}}) so the caller does not wait out the same budget again. */
 export async function stopSupervisor({timeoutMs=SUPERVISOR_STOP_TIMEOUT_MS}={}) {
- const loc=runtime.locations();
+ const loc=runtime.locations(),began=Date.now();
  return withLock(path.join(loc.stateDir,'supervisor-start.lock'),async()=>{
-  await stopOwnedSupervisor(readRecord(path.join(loc.stateDir,'supervisor.json')),timeoutMs);
-  return {stopped:true};
+  const record=readRecord(path.join(loc.stateDir,'supervisor.json'));
+  if(!await stopOwnedSupervisor(record,timeoutMs))return {stopped:true};
+  let outcome;try {outcome=readRecord(stopFile(loc));} catch {outcome={};}
+  // Its own record: this supervisor's, written during this stop.
+  const failed=outcome.ok===false&&outcome.pid===record.pid&&Date.parse(outcome.at)>=began;
+  return failed?{stopped:true,failed:{code:safeCode(outcome.code)||'OPERATION_FAILED',at:outcome.at}}:{stopped:true};
  });
 }
 export async function supervise() {
@@ -117,7 +137,7 @@ export async function supervise() {
  // Paseo disabled are two decisions, so only the first one is settled here.
  const unconfigured=async()=>{
   if(packageEnabled(loc))return false;
-  if(shouldDeactivate(loc))await runtime.deactivate();
+  if(shouldDeactivate(loc))await stopDaemon(loc);
   return true;
  };
  try {
@@ -145,6 +165,6 @@ export async function supervise() {
   // A signal only means this process must end; whether Paseo should be left disabled
   // is a separate question (see shouldDeactivate). Deactivating on every stop
   // persisted "the user wants Paseo off" for a container shutdown or a source swap.
-  if(stop&&shouldDeactivate(loc))await runtime.deactivate();
+  if(stop&&shouldDeactivate(loc))await stopDaemon(loc);
  }
 }

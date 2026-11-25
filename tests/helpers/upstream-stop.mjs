@@ -12,6 +12,12 @@
 // process. A cleanup it cannot confirm throws TerminalCleanupNotConfirmedError out of a stop that has already
 // stopped the daemon. The real implementation is exercised by scripts/verify-upgrade.mjs.
 // Time is a counter (`clock.now`): nothing here sleeps.
+//
+// A cleanup that cannot confirm leaves a closing record (terminal-worker/closing-<id>.json) that every later cleanup
+// walks again: 3 s per record and pass once its worker is gone. The model keeps them as files when it is given a
+// `recordsDir`, so that what reads that directory sees what upstream would leave there.
+import fs from 'node:fs';
+import path from 'node:path';
 
 export class DaemonInstanceError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -67,21 +73,26 @@ export const RECORD_KINDS = Object.freeze({
  *   retryConfirms      a later cleanup of the records an earlier one left open confirms them (procps was installed)
  *   leaveSupervisor    (not something upstream can do) the supervisor process survives its own exit
  *   afterRelease       called once the PID lock is released, before the caller's terminal cleanup
+ * @param {string} [host.recordsDir] where the closing records are kept as files (<PASEO_HOME>/terminal-worker)
  */
 export function createUpstreamStop(host) {
   const { clock } = host;
   const events = [], closing = [];
+  let nextRecord = 0;
   const note = event => events.push({ event, at: clock.now });
-  const closingEntry = (kind, index) => ({ pid: 700000 + closing.length + index, role: 'terminal program', reason: kind === 'noPs' ? 'inspection failed' : 'still alive', detail: kind === 'noPs' ? 'spawn ps ENOENT' : 'survived SIGKILL', kind });
+  const closingFile = entry => host.recordsDir && path.join(host.recordsDir, `closing-${entry.id}.json`);
+  const keep = entry => { const file = closingFile(entry); if (file) { fs.mkdirSync(host.recordsDir, { recursive: true }); fs.writeFileSync(file, JSON.stringify({ recordId: entry.id, closing: { unresolved: [{ pid: entry.pid, role: entry.role, reason: entry.reason, detail: entry.detail }] } })); } return entry; };
+  const retire = entry => { const file = closingFile(entry); if (file) fs.rmSync(file, { force: true }); };
+  const closingEntry = (kind, index = 0) => ({ id: `record-${++nextRecord}`, pid: 700000 + nextRecord + index, role: 'terminal program', reason: kind === 'noPs' ? 'inspection failed' : 'still alive', detail: kind === 'noPs' ? 'spawn ps ENOENT' : 'survived SIGKILL', kind });
   // The caller's own reapTerminalWorkers, after the supervisor exited and the PID lock was released: it retries
   // what the supervisor's cleanup left open and throws when it still cannot confirm it.
   async function closeLeftoverTerminals() {
     note('terminal-cleanup');
     const retried = closing.splice(0);
     for (const entry of retried) { clock.now += RECORD_KINDS[entry.kind].retryMs; await Promise.resolve(); }
-    if (host.scenario().retryConfirms) return;
+    if (host.scenario().retryConfirms) { retried.forEach(retire); return; }
     closing.push(...retried);
-    if (retried.length) throw new TerminalCleanupNotConfirmedError(retried.map(({ kind, ...entry }) => entry));
+    if (retried.length) throw new TerminalCleanupNotConfirmedError(retried.map(({ kind, id, ...entry }) => entry));
   }
   async function stopDaemonInstance(home, options = {}) {
     const { timeoutMs = 15000 } = options;
@@ -100,10 +111,11 @@ export function createUpstreamStop(host) {
     if (instance.pid <= 1) throw new Error('Refusing to stop invalid supervisor PID');
     host.deliver(instance.pid, 'SIGTERM');
     note('sigterm');
-    // The supervisor's shutdown takes the worker's grace (at most 10 s) plus one cleanup per terminal worker record.
+    // The supervisor's shutdown takes the worker's grace (at most 10 s), one cleanup per terminal worker record, and
+    // another look at every closing record an earlier cleanup left (3 s each).
     const records = scenario.records ?? [];
     const exitAt = scenario.supervisorHangs ? Infinity : clock.now + Math.min(scenario.workerShutdownMs ?? 0, UPSTREAM_MS.workerGrace)
-      + records.reduce((sum, kind) => sum + RECORD_KINDS[kind].ms, 0) + (scenario.exitOverheadMs ?? 200);
+      + records.reduce((sum, kind) => sum + RECORD_KINDS[kind].ms, 0) + closing.reduce((sum, entry) => sum + RECORD_KINDS[entry.kind].retryMs, 0) + (scenario.exitOverheadMs ?? 200);
     while (clock.now < exitAt) {
       const current = host.readLock();
       if (current && !host.sameLock(instance, current)) throw new DaemonInstanceError('DAEMON_REPLACED', `Supervisor changed for ${home}; stop of PID ${instance.pid} was not confirmed.`);
@@ -111,8 +123,10 @@ export function createUpstreamStop(host) {
       clock.now += UPSTREAM_MS.exitPoll;
       await Promise.resolve();
     }
-    // The supervisor's own cleanup is what left these closing records; it then released the lock and exited.
-    closing.push(...records.filter(kind => !RECORD_KINDS[kind].confirmed).map(closingEntry));
+    // The supervisor's own cleanup is what left these closing records (and confirmed the old ones, once ps works again);
+    // it then released the lock and exited.
+    if (scenario.retryConfirms) closing.splice(0).forEach(retire);
+    closing.push(...records.filter(kind => !RECORD_KINDS[kind].confirmed).map((kind, index) => keep(closingEntry(kind, index))));
     if (!scenario.leaveSupervisor) host.exit(instance.pid);
     note('supervisor-exit');
     host.releaseLock(instance);
@@ -121,5 +135,7 @@ export function createUpstreamStop(host) {
     await closeLeftoverTerminals();
     return { action: 'stopped', pid: instance.pid, forced: false, usedLifecycleRpc: false };
   }
-  return { stopDaemonInstance, events, closing };
+  /** A closing record an earlier cleanup left (a test's way to age the host without running many stops). */
+  const addClosing = kind => { const entry = keep(closingEntry(kind)); closing.push(entry); return entry; };
+  return { stopDaemonInstance, events, closing, addClosing };
 }

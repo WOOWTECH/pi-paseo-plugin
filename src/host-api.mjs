@@ -30,7 +30,10 @@ export async function lifecycle(input={}) {
     writeRecord(file,{enabled:active,packageRoot:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),cwd:input.cwd||previous.cwd||loc.home,registeredAt:new Date().toISOString()});
     if (!active) {
       // A supervisor may still be finishing activate(). Deactivate only after it exits.
-      await stopSupervisor();
+      const supervisor=await stopSupervisor();
+      // A supervisor that ends for a disable stops the daemon itself. If that failed, a second attempt here would wait
+      // out the same budget again and fail the same way: report what failed.
+      if(supervisor?.failed)throw Object.assign(new Error('Stopping Agent Connect failed'),{code:supervisor.failed.code});
       const stopped=await runtime.deactivate();
       // The stop completed; a terminal cleanup it could not confirm is reported next to it, not instead of it.
       const warnings=(Array.isArray(stopped?.warnings)?stopped.warnings:[]).map(row=>row?.code).filter(code=>typeof code==='string');

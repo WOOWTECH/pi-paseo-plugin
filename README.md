@@ -39,8 +39,13 @@ Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code�
 - 啟動與診斷時，插件用同樣的兩個指令檢查一次，回報 `PS_UNAVAILABLE`（跑不起來或逾時）或 `PS_INCOMPATIBLE`（不接受參數或輸出不對）警告。這只是警告，不擋啟動，也不影響 `health` 是否 ready。
 - 開過終端機的主機，停止時 Paseo 無法確認終端機程序已結束，丟出 `TERMINAL_CLEANUP_NOT_CONFIRMED`。這時 daemon 已經停止、PID 鎖已經釋放，插件就把這次停止視為完成：階段 `disabled`，並記下 `TERMINAL_CLEANUP_NOT_CONFIRMED` 警告。Paseo 對確認不了的程序不送任何訊號，保留 `closing-*.json`，終端機裡的 shell 和工作可能留成孤兒程序。裝好 procps 後，再啟動服務（啟動時 Paseo 會重試並關閉），或對那個 `PASEO_HOME` 執行 `paseo daemon stop`，清理就完成，警告隨之消失。daemon 還在執行、或 PID 鎖還在時，仍然是錯誤，與之前相同。
 - 警告出現在 `status`、`diagnose`、`health` 的 `warnings`（`status`、`diagnose` 每項是 `{code, at}`，`health` 只列代碼）與 `paseo_status`、`paseo_diagnose` 工具，停止指令的結果也帶 `warnings`（只列代碼）。Pi Web 設定頁只顯示白名單欄位，不顯示這些警告。
+- 沒有可用的 `ps` 時，每次停止都多留一筆 `closing-*.json`；之後每次清理的兩個階段（supervisor 結束時，以及 Paseo 停止流程裡的那一次）都要再多花約 3 秒看它一次。插件不隨筆數調整停止的時間上限（下方「停止的時間」）；累積到 3 筆，也就是 45 秒預算扣掉結束緩衝後，再多一筆最壞情況就放不下時，插件回報 `TERMINAL_RECORDS_ACCUMULATING` 警告（`count` 是筆數），顯示的地方同上。處理：安裝 procps，再啟動服務（啟動時 Paseo 重試並收掉）或對那個 `PASEO_HOME` 執行 `paseo daemon stop`；記錄收掉後，警告就消失。
 
 **停止的時間：** 停止要等 supervisor 結束，最久 45 秒：daemon worker 的關閉最多 10 秒（逾時 Paseo 自己終止它的程序樹），每筆終端機 worker 記錄最多 13 秒（5 秒請它關閉、5 秒等待、終止後 3 秒確認），一個 daemon 最多 2 個 worker，再加緩衝。這之後 Paseo 還會在執行停止的行程裡再清理一次終端機，不算在 45 秒內；插件的 supervisor 等這整段做完才結束，上限 81 秒。逾時回報 `STOP_NOT_CONFIRMED`，狀態維持原樣，插件不強制終止任何程序（沒有 `--force`）：daemon 若還在，等它自己結束，或由你處理。0.11.2 沒有終端機清理，停止只等 supervisor 結束。
+
+停止失敗時的錯誤碼：`STOP_NOT_CONFIRMED`（等不到 supervisor 結束）、`DAEMON_REPLACED`（等的時候，換成了另一個 daemon）、`DAEMON_STILL_PRESENT`（上游回報終端機清理未確認，但 daemon、supervisor 或 PID 鎖仍在，所以沒有停止；和「已停止、附警告」的 `TERMINAL_CLEANUP_NOT_CONFIRMED` 是不同的碼）。`node bin/cli.mjs` 直接印出這三個碼。從設定頁、`stop` 或移除套件停止時，插件的 supervisor 在結束前會自己停止 daemon；這一步失敗，它把結果寫進 `supervisor-stop.json`，主機的停止流程就回報同一個錯誤碼，不再對同一個停不下來的 daemon 多等一輪（否則是兩個 45 秒）。
+
+停止進行時持有執行鎖（`withRuntimeLock`）。這段時間按下的配對或儲存設定，最多等 30 秒，逾時回報 `RUNTIME_BUSY`；另一個啟停操作等主機鎖最多 15 秒，逾時回報 `LOCK_BUSY`。所以最壞要幾十秒的停止進行中，其他操作可能先失敗，等停止結束再試即可。前面若有 Cloudflare 這類 100 秒上限的代理，一次最壞的停止加上等鎖可能超過，瀏覽器會看到 524，工作仍在背景進行，之後重新整理狀態即可。
 
 **磁碟空間與舊版本目錄：** 每個 runtime 版本目錄裝好約 0.6–0.7 GB（實測 0.11.2 約 565 MB，0.17.4 約 713 MB），升級後新舊並存約 1.3 GB。目前版本的 daemon 健康啟動之後，插件移除用不到的舊版本目錄（舊 daemon 仍在服務的 `RESTART_REQUIRED` 期間，以及停止時，都不清理），並在 `state.json` 的 `lastPrune` 記下 `removed`、`kept`、`failed` 的版本名稱（只有名稱，沒有路徑）。保留：
 - 目前版本；

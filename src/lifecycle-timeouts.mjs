@@ -23,3 +23,12 @@ export const DAEMON_STOP_TIMEOUT_MS = WORKER_GRACE_MS + TERMINAL_CLEANUP_BUDGET_
 // The plugin supervisor awaits the complete daemon stop before it exits: the wait above, then the second terminal
 // cleanup, then the final status and record writes. Its parent must cover all of it.
 export const SUPERVISOR_STOP_TIMEOUT_MS = DAEMON_STOP_TIMEOUT_MS + TERMINAL_CLEANUP_BUDGET_MS + 10000;
+// What an earlier cleanup could not confirm stays as a closing record (<PASEO_HOME>/terminal-worker/closing-<id>.json)
+// and every later cleanup walks it again, in each of its two passes: a worker that is gone costs 3 s of confirmation
+// per record (terminal-worker-reaper.js, DEFAULT_CONFIRM_MS). On a host without a usable ps every stop leaves one more.
+// The budget above is not resized for them. The margin has room for a few (one record's time stays for signal delivery,
+// the exit poll and the log flush), and past that the worst case no longer fits DAEMON_STOP_TIMEOUT_MS: that count is
+// where the plugin warns (TERMINAL_RECORDS_ACCUMULATING), while 3 records still cost the supervisor no more than 9 s.
+export const CLOSING_RECORD_CLEANUP_MS = 3000;
+export const CLOSING_RECORDS_IN_BUDGET = Math.floor(SUPERVISOR_EXIT_MARGIN_MS / CLOSING_RECORD_CLEANUP_MS) - 1;
+export const CLOSING_RECORDS_WARNING_AT = CLOSING_RECORDS_IN_BUDGET + 1;

@@ -9,7 +9,7 @@ import { findExecutable, runProcess } from './process.mjs';
 import { resolveProviderLaunchers, configureProviders } from './provider-launchers.mjs';
 import { providerReplyError } from './provider-reply.mjs';
 import { assistantEntries, latestAssistantCursor, chatResult } from './chat-result.mjs';
-import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
+import {DAEMON_STOP_TIMEOUT_MS,CLOSING_RECORDS_WARNING_AT} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
@@ -487,7 +487,8 @@ async function daemonStopped(lifecycle, loc, instance, identity) {
  * usable `ps`, a process that outlives SIGKILL) it throws TERMINAL_CLEANUP_NOT_CONFIRMED and keeps a closing
  * record that the next stop or start retries; nothing is signaled on a guess. By then the daemon is stopped, so
  * the stop is done once that is verified here: the supervisor is gone and the PID lock is released. Any other
- * outcome, including a daemon that is still there, stays an error. The stop is never forced. */
+ * outcome stays an error: DAEMON_STILL_PRESENT when the daemon, its supervisor or a lock file is still there after
+ * that cleanup error, and upstream's own codes (STOP_NOT_CONFIRMED, DAEMON_REPLACED) as they are. The stop is never forced. */
 async function stopOwnedDaemon(loc, control, instance) {
   const lifecycle = await serverModule('dist/server/server/daemon-instance.js', control.root);
   const identity = processIdentity(instance.pid);
@@ -497,7 +498,8 @@ async function stopOwnedDaemon(loc, control, instance) {
     return null;
   } catch (error) {
     if (error?.code !== TERMINAL_CLEANUP_NOT_CONFIRMED) throw new RuntimeError(safeCode(error));
-    if (!(await daemonStopped(lifecycle, loc, instance, identity))) throw new RuntimeError(TERMINAL_CLEANUP_NOT_CONFIRMED);
+    // Not the warning's code: here the daemon (or its supervisor, or a lock file) is still there and nothing stopped.
+    if (!(await daemonStopped(lifecycle, loc, instance, identity))) throw new RuntimeError('DAEMON_STILL_PRESENT');
     return { code: TERMINAL_CLEANUP_NOT_CONFIRMED, at: new Date().toISOString() };
   }
 }
@@ -558,24 +560,34 @@ export async function refreshPiCatalogIfChanged() {
   } catch { return false; }
 }
 const CONFIG_BLOCKERS = new Set(['CONFIG_CORRUPT', 'CONFIG_INCOMPATIBLE', 'CONFIG_INVALID']);
+const CLOSING_RECORD = /^closing-[A-Za-z0-9-]+\.json$/;
+/** How many closing records upstream keeps in <PASEO_HOME>/terminal-worker: what earlier cleanups could not confirm. Names are all it reads. */
+function closingTerminalRecords(loc) {
+  const dir = path.join(loc.paseoHome, 'terminal-worker');
+  try { return fs.lstatSync(dir).isDirectory() ? fs.readdirSync(dir).filter(name => CLOSING_RECORD.test(name)).length : 0; }
+  catch { return 0; }
+}
 /** Conditions that do not stop Paseo from working, as { code, at? } (health lists them apart from its blocking codes).
  * Terminal cleanup: a running 0.17.4 daemon says what its last cleanup could not confirm; a stopped one is covered
  * by the record of the stop that finished with the cleanup unconfirmed. Host: the last check of `ps`. */
 function statusWarnings(state, daemon) {
-  const warnings = [], add = (code, at) => {
-    if (/^[A-Z][A-Z0-9_]{0,63}$/.test(code || '') && !warnings.some(row => row.code === code)) warnings.push({ code, ...(typeof at === 'string' ? { at } : {}) });
+  const warnings = [], add = (code, at, extra = {}) => {
+    if (/^[A-Z][A-Z0-9_]{0,63}$/.test(code || '') && !warnings.some(row => row.code === code)) warnings.push({ code, ...(typeof at === 'string' ? { at } : {}), ...extra });
   };
   if (daemon.running) { if (daemon.terminalCleanupUnconfirmed > 0) add(TERMINAL_CLEANUP_NOT_CONFIRMED, daemon.statusCheckedAt); }
   else if (state.terminalCleanup) add(state.terminalCleanup.code, state.terminalCleanup.at);
   // The last check of the host's `ps` (start and diagnose): PS_UNAVAILABLE or PS_INCOMPATIBLE.
   if (state.processTable?.ok === false) add(state.processTable.code, state.processTable.checkedAt);
+  // Every cleanup that could not confirm leaves a record each later cleanup walks again (3 s each, per pass): from
+  // CLOSING_RECORDS_WARNING_AT on, the stop budget no longer has room for them in the worst case.
+  if (daemon.closingTerminalRecords >= CLOSING_RECORDS_WARNING_AT) add('TERMINAL_RECORDS_ACCUMULATING', undefined, { count: daemon.closingTerminalRecords });
   return warnings;
 }
 async function readStatus() {
   const state = readState(), loc = locations(), control = await resolveControl(loc), owned = ownsHome();
   const installed = runtimeReady(loc) || !!control.root;
   // daemon.version: the Paseo release serving it (0.11.2 until an upgrade's explicit stop and start).
-  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, version: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null, terminalCleanupUnconfirmed: null };
+  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, version: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null, terminalCleanupUnconfirmed: null, closingTerminalRecords: owned ? closingTerminalRecords(loc) : 0 };
   // A config the next start cannot write outranks RESTART_REQUIRED: stopping would only take Paseo down.
   const configBlocker = state.phase === 'error' && CONFIG_BLOCKERS.has(state.lastError?.code) ? state.lastError.code : null;
   let providers = [], diagnosticCode = configBlocker || (state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null);

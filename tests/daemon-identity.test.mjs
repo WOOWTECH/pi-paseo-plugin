@@ -2,7 +2,7 @@ import * as connectionTargets from '../src/connection-targets.mjs';
 import * as onboarding from '../src/onboarding.mjs';
 import {seedPidFiles,seedPriorRelease,LOCK_0112} from './helpers/runtime-pid-files.mjs';
 import {loadPersistedConfig} from './helpers/paseo-config.mjs';
-import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError} from './helpers/upstream-stop.mjs';
+import {createUpstreamStop,DaemonInstanceError,TerminalCleanupNotConfirmedError,RECORD_KINDS} from './helpers/upstream-stop.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -85,7 +85,7 @@ function fixture(t, { platform = process.platform } = {}) {
   // The deletion of pruned releases, slowed or broken by a test (`f.removal`).
   promises:{...fs.promises,rm:(...args)=>removal?removal(...args):fs.promises.rm(...args)}};
  const loadInstance=()=>fs.existsSync(pidFile)?JSON.parse(fs.readFileSync(pidFile)):null;
- const upstream=createUpstreamStop({clock,scenario:()=>scenario,readLock:loadInstance,
+ const upstream=createUpstreamStop({clock,scenario:()=>scenario,readLock:loadInstance,recordsDir:path.join(loc.paseoHome,'terminal-worker'),
   ownerRunning:lock=>!!(processes.has(lock.pid)||state.processIdentity(lock.pid)),
   sameLock:(a,b)=>a.pid===b.pid&&a.startedAt===b.startedAt,
   deliver:(pid,signal)=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(pid)?.role,'owned');signalsSent.push([pid,signal]);stops++;},
@@ -643,9 +643,9 @@ for(const [name,scenario,remains]of [
  ['another daemon now holds the PID lock',f=>({records:['noPs'],afterRelease:()=>f.publish()}),f=>assert.notEqual(JSON.parse(fs.readFileSync(f.pidFile)).pid,f.initial.pid)],
  ['a PID lock file is still there',f=>({records:['noPs'],afterRelease:()=>fs.writeFileSync(f.pidFile,JSON.stringify({pid:900999,startedAt:'stale',uid:process.getuid()}))}),f=>assert.equal(JSON.parse(fs.readFileSync(f.pidFile)).pid,900999)],
 ])
-test(`an unconfirmed terminal cleanup stays an error when ${name}`,async t=>{
+test(`an unconfirmed terminal cleanup stays an error when ${name}: DAEMON_STILL_PRESENT, not the warning's code`,async t=>{
  const f=fixture(t);f.stopScenario(scenario(f));f.permitStop();
- await assert.rejects(f.runtime.deactivate(),{code:TERMINAL_CODE});
+ await assert.rejects(f.runtime.deactivate(),error=>{assert.equal(error.code,'DAEMON_STILL_PRESENT');assert.notEqual(error.code,TERMINAL_CODE);return true;});
  unfinishedStop(f);remains(f);assert.equal(f.signalsSent.length,1);
 });
 
@@ -866,4 +866,60 @@ test('a pruning failure never fails an activation or a status',{skip:process.get
  } finally {fs.chmodSync(releases,0o755);}
  assert.deepEqual(releaseNames(f),[R2,R3A,R3B,R4,layout.RUNTIME_REVISION].sort(),'every release is whole');
  await activated(f);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'the next activation finishes the job');
+});
+
+// ---- Closing records accumulate on a host without a usable ps (the stop budget is not resized for them) ----
+const {CLOSING_RECORDS_WARNING_AT,CLOSING_RECORDS_IN_BUDGET,CLOSING_RECORD_CLEANUP_MS}=lifecycleTimeouts;
+const closingFiles=f=>fs.readdirSync(path.join(f.loc.paseoHome,'terminal-worker')).filter(name=>/^closing-.+\.json$/.test(name));
+const accumulating=async f=>plain((await f.runtime.status()).warnings).find(row=>row.code==='TERMINAL_RECORDS_ACCUMULATING');
+
+test('every stop on a host without ps leaves a closing record; the plugin warns from the count where the stop budget runs out',async t=>{
+ const f=fixture(t);f.permitStop();
+ for(let stops=1;stops<=CLOSING_RECORDS_WARNING_AT+1;stops++) {
+  f.stopScenario({records:['noPs']});
+  const stopped=await f.runtime.deactivate();
+  assert.equal(stopped.phase,'disabled');assert.equal(closingFiles(f).length,stops);assert.equal(f.upstream.closing.length,stops);
+  const warning=await accumulating(f);
+  if(stops<CLOSING_RECORDS_WARNING_AT)assert.equal(warning,undefined,`${stops} records still fit the budget`);
+  else {
+   assert.equal(warning.count,stops);assert.equal(warning.at,undefined);
+   // The same through status, diagnose-style snapshots and health: a warning, never a reason for "not ready".
+   assert.ok(stopped.warnings.some(row=>row.code==='TERMINAL_RECORDS_ACCUMULATING'));
+   const health=healthReport(stopped);assert.ok(health.warnings.includes('TERMINAL_RECORDS_ACCUMULATING'));assert.equal(health.codes.includes('TERMINAL_RECORDS_ACCUMULATING'),false);
+  }
+  assert.equal(stopped.diagnosticCode,null);
+  await f.runtime.activate(); // a new daemon: the fixture starts one, upstream's records stay as they are
+ }
+});
+
+test('the warning threshold is where the 45 s budget runs out for the worst case upstream allows',async t=>{
+ // The worst case DAEMON_STOP_TIMEOUT_MS is sized for: a slow daemon worker and two unresponsive terminal workers.
+ const worst={workerShutdownMs:60000,records:['unresponsive','unresponsive']};
+ assert.equal(CLOSING_RECORD_CLEANUP_MS,RECORD_KINDS.noPs.retryMs,'a closing record costs one confirmation window per pass');
+ // One record fewer than the threshold: the stop still ends inside the budget.
+ const fits=fixture(t);fits.permitStop();
+ for(let i=0;i<CLOSING_RECORDS_WARNING_AT-1;i++)fits.upstream.addClosing('noPs');
+ assert.equal(await accumulating(fits),undefined);
+ fits.stopScenario(worst);
+ const stopped=await fits.runtime.deactivate();
+ // The budget bounds the wait for the supervisor to exit; upstream's second cleanup follows it, outside the budget.
+ const at=Object.fromEntries(fits.upstream.events.map(row=>[row.event,row.at]));
+ assert.equal(stopped.phase,'disabled');assert.ok(at['supervisor-exit']-at.sigterm<=DAEMON_STOP_TIMEOUT_MS,'within the budget: '+(at['supervisor-exit']-at.sigterm));
+ assert.equal(CLOSING_RECORDS_IN_BUDGET,CLOSING_RECORDS_WARNING_AT-1);
+ // At the threshold it no longer does, and the plugin has been saying so.
+ const over=fixture(t);over.permitStop();
+ for(let i=0;i<CLOSING_RECORDS_WARNING_AT;i++)over.upstream.addClosing('noPs');
+ assert.equal((await accumulating(over)).count,CLOSING_RECORDS_WARNING_AT);
+ over.stopScenario(worst);
+ await assert.rejects(over.runtime.deactivate(),{code:'STOP_NOT_CONFIRMED'});
+ assert.equal(over.processes.has(over.initial.pid),true,'bounded, and never forced');
+});
+
+test('procps back: the next start and stop retire the records, and the warning goes with them',async t=>{
+ const f=fixture(t);f.permitStop();
+ for(let i=0;i<CLOSING_RECORDS_WARNING_AT+1;i++)f.upstream.addClosing('noPs');
+ assert.equal((await accumulating(f)).count,CLOSING_RECORDS_WARNING_AT+1);
+ f.stopScenario({retryConfirms:true});
+ const stopped=await f.runtime.deactivate();
+ assert.equal(stopped.phase,'disabled');assert.equal(closingFiles(f).length,0);assert.equal(await accumulating(f),undefined);assert.deepEqual(plain(stopped.warnings),[]);
 });

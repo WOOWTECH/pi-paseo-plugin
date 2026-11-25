@@ -30,3 +30,12 @@ test('CLI names the upgrade config, release control and Smart pairing security c
   assert.equal(r.exitCode,1);assert.equal(JSON.parse(r.stderr).code,code);assert.doesNotMatch(r.stderr,/private detail/);
  }
 });
+test('CLI names the stop failure codes, and no longer the one the stop warns with',async()=>{
+ for(const code of ['STOP_NOT_CONFIRMED','DAEMON_REPLACED','DAEMON_STILL_PRESENT']){
+  const r=await run('status',{status:async()=>{throw Object.assign(Error('private detail'),{name:'RuntimeError',code});}});
+  assert.equal(r.exitCode,1);assert.equal(JSON.parse(r.stderr).code,code);assert.doesNotMatch(r.stderr,/private detail/);
+ }
+ // TERMINAL_CLEANUP_NOT_CONFIRMED is a warning of a completed stop now, never an error code.
+ const warning=await run('status',{status:async()=>{throw Object.assign(Error('x'),{name:'RuntimeError',code:'TERMINAL_CLEANUP_NOT_CONFIRMED'});}});
+ assert.equal(JSON.parse(warning.stderr).code,'OPERATION_FAILED');
+});

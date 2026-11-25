@@ -535,6 +535,47 @@ test('default supervisor shutdown remains bounded and never force-kills a proces
  assert.equal(clock.now-start,timeouts.SUPERVISOR_STOP_TIMEOUT_MS);assert.equal(f.processes.has(pid),true);
  assert.deepEqual(f.calls.filter(c=>c[0]==='signal'),[['signal',pid,'SIGTERM']]);
 });
+// The supervisor stops the daemon itself when it ends for a disable (supervise()'s finally), and the host only waits
+// for that process to end. Whether the stop worked is written down in supervisor-stop.json.
+test('a disable whose supervisor already failed to stop the daemon reports that, and does not stop it a second time',async t=>{
+ const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);f.owned();
+ f.setSignalHandler((pid,signal)=>{assert.equal(signal,'SIGTERM');f.processes.delete(pid);f.write('supervisor-stop',{pid,ok:false,code:'STOP_NOT_CONFIRMED',at:new Date(clock.now+1).toISOString()});});
+ const start=clock.now;
+ await assert.rejects(f.load('src/host-api.mjs').lifecycle({action:'disable'}),error=>error.code==='STOP_NOT_CONFIRMED');
+ assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,0,'no second wait for the same daemon');
+ assert.ok(clock.now-start<timeouts.DAEMON_STOP_TIMEOUT_MS,'the failure is reported at once');
+});
+for(const [name,record]of [
+ ['the stop of another supervisor',(pid,clock)=>({pid:pid+1,ok:false,code:'STOP_NOT_CONFIRMED',at:new Date(clock.now+1).toISOString()})],
+ ['an earlier stop of this supervisor\'s pid',(pid,clock)=>({pid,ok:false,code:'STOP_NOT_CONFIRMED',at:new Date(clock.now-60000).toISOString()})],
+ ['a stop that worked',(pid,clock)=>({pid,ok:true,at:new Date(clock.now+1).toISOString()})],
+ ['no record at all',()=>null],
+])
+test(`a disable is still finished by the host after ${name}`,async t=>{
+ const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);const pid=f.owned();
+ if(record(pid,clock))f.write('supervisor-stop',record(pid,clock));
+ const result=await f.load('src/host-api.mjs').lifecycle({action:'disable'});
+ assert.equal(result.phase,'disabled');assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
+});
+for(const [name,failure,expected]of [
+ ['worked',null,{ok:true}],
+ ['failed with one of upstream\'s codes',Object.assign(new Error('private detail'),{code:'STOP_NOT_CONFIRMED'}),{ok:false,code:'STOP_NOT_CONFIRMED'}],
+ ['failed without a code',new Error('private detail'),{ok:false,code:'OPERATION_FAILED'}],
+])
+test(`a supervisor that ends for a disable writes down that stopping the daemon ${name}`,async t=>{
+ const f=fixture(t);f.packages([root]);f.write('host-registration',{enabled:true,packageRoot:root,cwd:f.loc.home});
+ const entered=deferred(),release=deferred();
+ f.runtime.activate=async()=>{entered.resolve();await release.promise;};
+ f.runtime.deactivate=async()=>{f.calls.push(['deactivate']);if(failure)throw failure;return {};};
+ const supervising=f.load('src/supervisor.mjs').supervise();
+ await entered.promise;
+ f.write('host-registration',{enabled:false,packageRoot:root,cwd:f.loc.home}); // the host's disable, recorded before it signals
+ f.signals.emit('SIGTERM');release.resolve();
+ if(failure)await assert.rejects(supervising,error=>error===failure);else await supervising;
+ const record=JSON.parse(fs.readFileSync(path.join(f.loc.stateDir,'supervisor-stop.json'),'utf8'));
+ assert.equal(record.pid,4000);assert.equal(record.ok,expected.ok);assert.equal(record.code,expected.code);assert.match(record.at,/^\d{4}-\d\d-\d\dT/);
+ assert.doesNotMatch(JSON.stringify(record),/private detail/);assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
+});
 test('a stop that completed with an unconfirmed terminal cleanup says so next to the disabled phase',async t=>{
  const f=fixture(t);f.packages([root]);f.owned();
  f.runtime.deactivate=async()=>{f.calls.push(['deactivate']);return {warnings:[{code:'TERMINAL_CLEANUP_NOT_CONFIRMED',at:'2026-11-25T00:00:00.000Z'}]};};
