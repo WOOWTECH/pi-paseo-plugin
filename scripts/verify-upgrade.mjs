@@ -37,6 +37,8 @@ import {setTimeout as delay} from 'node:timers/promises';
 const repoRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const self=fileURLToPath(import.meta.url);
 const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||'152e1c3',DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
+// A commit, tag or branch name: it is passed to git archive, so it may not start like an option.
+const OLD_REF_VALID=/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(OLD_REF);
 const OLD_VERSION='0.1.23',OLD_REVISION='0.11.2-r4-4cf9d40940bf',OLD_PASEO='0.11.2',NEW_PASEO='0.17.4';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fileSha=file=>fs.existsSync(file)?sha(fs.readFileSync(file)):null;
@@ -298,12 +300,16 @@ function prepareScenario(base,name) {
  for(const dir of ['home','agent','state'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});
  return root;
 }
+let running=null;
+for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{running?.kill('SIGKILL');interrupted=true;});
+let interrupted=false;
 function runPhase(args,env,{timeoutMs=1500000}={}) {
  return new Promise(resolve=>{
-  const child=spawn(process.execPath,[self,'--phase',...args],{env,stdio:['ignore','pipe','pipe']});let err='';
+  if(interrupted){resolve({code:130,err:'INTERRUPTED'});return;}
+  const child=running=spawn(process.execPath,[self,'--phase',...args],{env,stdio:['ignore','pipe','pipe']});let err='';
   child.stdout.on('data',data=>process.stdout.write(data));child.stderr.on('data',data=>{err=(err+data).slice(-3000);});
   const timer=setTimeout(()=>{err+='\nPHASE_TIMEOUT';child.kill('SIGKILL');},timeoutMs);
-  child.on('close',code=>{clearTimeout(timer);resolve({code,err});});
+  child.on('close',code=>{clearTimeout(timer);running=null;resolve({code,err:interrupted?err+'\nINTERRUPTED':err});});
  });
 }
 async function orchestrate(which) {
@@ -354,6 +360,7 @@ if(first==='--phase') {
  if(!['all','upgrade','fresh'].includes(which)){console.error(JSON.stringify({passed:false,code:'USAGE',message:'node scripts/verify-upgrade.mjs [all|upgrade|fresh]'}));process.exitCode=2;}
  else {
   try {
+   if(!OLD_REF_VALID)throw new Error('PI_PASEO_UPGRADE_OLD_REF');
    execFileSync('git',['-C',repoRoot,'cat-file','-e',OLD_REF+'^{commit}'],{stdio:'ignore'});
    execFileSync('tar',['--version'],{stdio:'ignore'});
   } catch {console.error(JSON.stringify({passed:false,code:'OLD_PLUGIN_UNAVAILABLE',message:`git history with ${OLD_REF} (Agent Connect ${OLD_VERSION}) and tar are required`}));process.exitCode=2;}
