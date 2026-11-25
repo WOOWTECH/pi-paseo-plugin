@@ -537,3 +537,40 @@ test('host status opens each target\'s official app and reports no bundled web c
     assert.equal(typeof host.web, 'undefined');
   }
 });
+
+// An in-place upgrade keeps the package root. The supervisor still runs the code it started with, and
+// would start that version's own managed release when the daemon exits.
+const PLUGIN_VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+function supervisorRecord(f) { return JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'supervisor.json'), 'utf8')); }
+for (const recorded of [undefined, '0.1.23'])
+test(`restore replaces a same-root supervisor recorded ${recorded ? 'as ' + recorded : 'without a version (0.1.23 and earlier)'}`, async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const old = f.owned();
+  if (recorded) f.write('supervisor', { ...supervisorRecord(f), version: recorded });
+  assert.equal((await f.load('src/host-api.mjs').restore()).phase, 'starting');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'signal'), [['signal', old, 'SIGTERM']]);
+  assert.equal(f.processes.has(old), false);
+  const record = supervisorRecord(f);
+  assert.equal(record.version, PLUGIN_VERSION); assert.notEqual(record.pid, old); assert.equal(f.processes.has(record.pid), true);
+  assert.equal(f.calls.some(c => c[0] === 'deactivate'), false, 'replacing the supervisor is not a user disable');
+});
+
+test('restore keeps a same-root supervisor of this version, and never signals a recorded PID it cannot verify', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  const current = f.owned();
+  f.write('supervisor', { ...supervisorRecord(f), version: PLUGIN_VERSION });
+  const supervisor = f.load('src/supervisor.mjs');
+  const kept = await supervisor.startSupervisor();
+  assert.equal(kept.running, true); assert.equal(kept.pid, current);
+  assert.equal(f.calls.some(c => c[0] === 'signal' || c[0] === 'spawn'), false);
+  // A version-less record whose PID now belongs to another process: not ours to stop, so only a new one starts.
+  const reused = f.owned({ identity: 'reused', recordedIdentity: 'original' });
+  const started = await supervisor.startSupervisor();
+  assert.equal(f.calls.some(c => c[0] === 'signal'), false);
+  assert.equal(f.processes.has(reused), true); assert.notEqual(started.pid, reused);
+  assert.equal(supervisorRecord(f).version, PLUGIN_VERSION);
+});

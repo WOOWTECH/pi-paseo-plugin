@@ -8,6 +8,10 @@ import {SUPERVISOR_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {processIdentity, assertSafePath} from './state.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+// A supervisor keeps running the code it was started with. After an in-place upgrade (the same
+// packageRoot) one recorded under another plugin version, or under none (0.1.23 and earlier), would
+// still call its own activate() when the daemon exits, and start the release it shipped with.
+const VERSION=(()=>{try{const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;return typeof version==='string'?version:null;}catch{return null;}})();
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function alive(pid) {try{process.kill(pid,0);return true;}catch{return false;}}
 function sameProcess(record) {
@@ -73,7 +77,9 @@ export async function startSupervisor({cwd}={}) {
   if(!packageEnabled(loc,{cwd}))return {running:false};
   const old=readRecord(file);
   if(sameProcess(old)) {
-   if(old.packageRoot===root)return {running:true,pid:old.pid};
+   // Kept only when it runs this root at this version. A version this module cannot read leaves the
+   // previous rule (same root) in place. Replacement goes through the same ownership checks.
+   if(old.packageRoot===root&&(VERSION===null||old.version===VERSION))return {running:true,pid:old.pid};
    await stopOwnedSupervisor(old,SUPERVISOR_STOP_TIMEOUT_MS);
   }
   const logFile=path.join(loc.stateDir,'supervisor.log');
@@ -85,7 +91,7 @@ export async function startSupervisor({cwd}={}) {
    child=spawn(process.execPath,[path.join(root,'bin/cli.mjs'),'supervise'],{cwd:cwd||readRecord(path.join(loc.stateDir,'host-registration.json')).cwd||process.cwd(),detached:true,stdio:['ignore',log,log],env:process.env});
   } finally {fs.closeSync(log);}
   await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
-  writeRecord(file,{pid:child.pid,identity:processIdentity(child.pid),packageRoot:root,startedAt:new Date().toISOString()});child.unref();
+  writeRecord(file,{pid:child.pid,identity:processIdentity(child.pid),packageRoot:root,...(VERSION===null?{}:{version:VERSION}),startedAt:new Date().toISOString()});child.unref();
   return {running:true,pid:child.pid};
  });
 }
