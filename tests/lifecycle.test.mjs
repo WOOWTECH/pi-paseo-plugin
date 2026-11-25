@@ -537,13 +537,33 @@ test('default supervisor shutdown remains bounded and never force-kills a proces
 });
 // The supervisor stops the daemon itself when it ends for a disable (supervise()'s finally), and the host only waits
 // for that process to end. Whether the stop worked is written down in supervisor-stop.json.
-test('a disable whose supervisor already failed to stop the daemon reports that, and does not stop it a second time',async t=>{
+test('a disable whose supervisor failed to stop a daemon that is still running reports that, and does not stop it a second time',async t=>{
  const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);f.owned();
+ f.runtime.daemonRunning=async()=>{f.calls.push(['daemonRunning']);return true;};
  f.setSignalHandler((pid,signal)=>{assert.equal(signal,'SIGTERM');f.processes.delete(pid);f.write('supervisor-stop',{pid,ok:false,code:'STOP_NOT_CONFIRMED',at:new Date(clock.now+1).toISOString()});});
  const start=clock.now;
  await assert.rejects(f.load('src/host-api.mjs').lifecycle({action:'disable'}),error=>error.code==='STOP_NOT_CONFIRMED');
  assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,0,'no second wait for the same daemon');
+ assert.equal(f.calls.filter(c=>c[0]==='daemonRunning').length,1,'the daemon was looked at once');
  assert.ok(clock.now-start<timeouts.DAEMON_STOP_TIMEOUT_MS,'the failure is reported at once');
+});
+// The daemon stopped, and the supervisor's own stop then failed on something after it (upstream writes the closing
+// records once the daemon is down: a full disk, permissions). Nothing is left to wait for: the host finishes the disable.
+test('a disable whose supervisor failed after the daemon was already gone is finished by the host in one go',async t=>{
+ const clock={now:Date.now()},f=fixture(t,{clock});f.packages([root]);f.owned();
+ f.runtime.daemonRunning=async()=>{f.calls.push(['daemonRunning']);return false;};
+ f.setSignalHandler((pid,signal)=>{assert.equal(signal,'SIGTERM');f.processes.delete(pid);f.write('supervisor-stop',{pid,ok:false,code:'OPERATION_FAILED',at:new Date(clock.now+1).toISOString()});});
+ const start=clock.now,result=await f.load('src/host-api.mjs').lifecycle({action:'disable'});
+ assert.equal(result.phase,'disabled');
+ assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1,'the host\'s own deactivate finds no daemon and marks it disabled');
+ assert.equal(f.calls.filter(c=>c[0]==='daemonRunning').length,1);
+ assert.ok(clock.now-start<timeouts.DAEMON_STOP_TIMEOUT_MS,'and it does not wait');
+});
+test('the daemon is only looked at when the supervisor reported a failure',async t=>{
+ const f=fixture(t);f.packages([root]);f.owned();
+ f.runtime.daemonRunning=async()=>assert.fail('a supervisor that stopped the daemon needs no second look');
+ assert.equal((await f.load('src/host-api.mjs').lifecycle({action:'disable'})).phase,'disabled');
+ assert.equal(f.calls.filter(c=>c[0]==='deactivate').length,1);
 });
 for(const [name,record]of [
  ['the stop of another supervisor',(pid,clock)=>({pid:pid+1,ok:false,code:'STOP_NOT_CONFIRMED',at:new Date(clock.now+1).toISOString()})],
