@@ -21,7 +21,8 @@
 //          worker. Then a host whose ps stops working while that terminal is open: the stop completes with
 //          TERMINAL_CLEANUP_NOT_CONFIRMED as a warning and nothing is signaled (the terminal worker is still
 //          running); a start without a usable ps works and the daemon reports what it could not close; once ps
-//          works again, the next start's own cleanup closes the orphan.
+//          works again, the next start's own cleanup closes the orphan. And a ps that runs but exits non-zero
+//          before the terminal opens: upstream does not record the terminal, the stop passes without the warning.
 //
 // It prints only facts that are not secret (never an offer, a key, a server id or an environment value).
 // SIGINT, SIGTERM, SIGHUP and SIGQUIT (a second one too) end the running phase and let the cleanup run first; only
@@ -233,7 +234,7 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
   check((steps['deactivate-old']||[]).filter(row=>row.release===facts.oldRevision).length>0,'the old daemon was stopped through its own release');
   log('new.module-routing',{activateUpgrade:(steps['activate-upgrade']||[]).map(row=>row.release===facts.oldRevision?'old':'new'+':'+row.module.split('/').pop()),statusWithOldDaemon:(steps['status-with-old-daemon']||[]).map(row=>row.release===facts.oldRevision?'old':'new')});
  }
- if(mode==='fresh') await failingPs(runtime,state,load,loc,healthReport);
+ if(mode==='fresh') await failingPs(runtime,state,load,loc,healthReport,{release,workspaceId});
  marker('deactivate-final');
  const done=await runtime.deactivate();
  check(done.daemon.running===false&&done.phase==='disabled'&&done.warnings.length===0,'final stop is clean: '+JSON.stringify(done.warnings));
@@ -244,7 +245,7 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
 /** A host whose ps stops working while a terminal is open. The shim ps in PATH (see the scenario setup) delegates to
  * the real one until the flag file exists, and then fails like a ps that does not know the arguments: the process
  * table cannot be read, so Paseo can identify no terminal process and signals none. */
-async function failingPs(runtime,state,load,loc,healthReport) {
+async function failingPs(runtime,state,load,loc,healthReport,{release,workspaceId}) {
  const flag=process.env.PI_PASEO_SMOKE_PS_FLAG;check(flag,'the ps shim flag');
  const [worker]=terminalWorkers(loc.home);check(worker,'a terminal worker to leave open');
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),before=await runtime.status();
@@ -279,6 +280,31 @@ async function failingPs(runtime,state,load,loc,healthReport) {
  check((await waitGone([worker.pid],30000)).length===0&&closingRecords()===0,'the new daemon closed the orphaned terminal worker and retired its record');
  check(state.readState().terminalCleanup===null&&before.daemon.pid!==again.daemon.pid,'the warning is cleared');
  log('fresh.ps-recovered',{phase:again.phase,warnings:again.warnings.length,orphanClosedByNextStart:true});
+ // The other way to break ps: it runs, and exits non-zero for upstream's arguments, before the terminal is opened.
+ // Upstream reads that as "no such process" and does not record the terminal at all: the stop has nothing to confirm
+ // and passes without the cleanup warning. Only the host check says anything.
+ fs.writeFileSync(flag,'');
+ try {
+  const diagnosis=await runtime.diagnose();
+  check(diagnosis.warnings.some(row=>row.code==='PS_INCOMPATIBLE'),'the host check warns');
+  const {connectToDaemon}=await import(pathToFileURL(path.join(release,'node_modules/@getpaseo/cli/dist/utils/client.js')).href);
+  const client=await connectToDaemon({target:{kind:'instance',home:loc.paseoHome},timeout:10000});
+  try {
+   const created=await client.createTerminal(path.join(loc.home,'smoke-project'),'agent-connect-smoke-2',undefined,{workspaceId});
+   check(created?.terminal?.id,'a terminal opened while ps exits non-zero: '+String(created?.error).slice(0,200));
+  } finally {await client.close().catch(()=>{});}
+  let workers=[];for(let i=0;i<50&&!workers.length;i++){workers=terminalWorkers(loc.home);if(!workers.length)await delay(200);}
+  check(workers.length>0,'a terminal worker is running');
+  const record=readJson(path.join(loc.paseoHome,'terminal-worker',workers[0].pid+'.json'));
+  check(Array.isArray(record.terminals)&&record.terminals.length===0,'the terminal is not in the worker record');
+  const stopped=await runtime.deactivate(),codes=stopped.warnings.map(row=>row.code);
+  check(stopped.phase==='disabled'&&!codes.includes('TERMINAL_CLEANUP_NOT_CONFIRMED'),'the stop passes without the cleanup warning: '+codes);
+  check((await waitGone([workers[0].pid],10000)).length===0&&closingRecords()===0,'the worker closed its own terminal and left no closing record');
+  log('fresh.ps-exit-status',{hostCheckWarns:true,terminalRecorded:false,stopPhase:stopped.phase,cleanupWarning:false,workerClosed:true,closingRecords:closingRecords()});
+ } finally {fs.rmSync(flag,{force:true});}
+ // Back to a running daemon for the final stop.
+ const last=await runtime.activate();
+ check(last.phase==='running'&&last.daemon.reachable===true,'started again: '+last.phase);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

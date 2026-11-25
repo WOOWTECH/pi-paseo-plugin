@@ -492,8 +492,8 @@ async function daemonStopped(lifecycle, loc, instance, identity) {
  * Resolves to the non-fatal warning to record, or null. Every stop of a daemon goes through here.
  *
  * 0.17.4's stopDaemonInstance waits for the supervisor to exit, releases the PID lock, and only then closes the
- * terminal workers once more (reapTerminalWorkers). Where that cannot confirm every terminal process gone (no
- * usable `ps`, a process that outlives SIGKILL) it throws TERMINAL_CLEANUP_NOT_CONFIRMED and keeps a closing
+ * terminal workers once more (reapTerminalWorkers). Where that cannot confirm every terminal process gone (a `ps`
+ * that cannot run or read the process table, a process that outlives SIGKILL) it throws TERMINAL_CLEANUP_NOT_CONFIRMED and keeps a closing
  * record that the next stop or start retries; nothing is signaled on a guess. By then the daemon is stopped, so
  * the stop is done once that is verified here: the supervisor is gone and the PID lock is released. Any other
  * outcome stays an error: DAEMON_STILL_PRESENT when the daemon, its supervisor or a lock file is still there after

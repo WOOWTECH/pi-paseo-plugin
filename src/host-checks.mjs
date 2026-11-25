@@ -4,9 +4,12 @@ import {execFile} from 'node:child_process';
 // On Linux it runs, both with LC_ALL=C and from the PATH of that process:
 //   ps -A -ww -o pid= -o ppid= -o sid= -o lstart=      dist/server/terminal/terminal-worker-processes.js (listPosixProcesses)
 //   ps -ww -p <pid> -o lstart= -o command=              dist/server/server/managed-processes/managed-processes.js (inspectPosix)
-// Birth times are compared as the strings `ps` prints, cut to 24 characters. With no `ps`, or one that does not
-// take these arguments (busybox, some slim images), terminal processes cannot be identified: nothing is
-// signaled, and a stop reports TERMINAL_CLEANUP_NOT_CONFIRMED (runtime.mjs treats that as a warning).
+// Birth times are compared as the strings `ps` prints, cut to 24 characters. A `ps` that is not there or cannot run
+// leaves a terminal program recorded without a birth time, which is never signaled, so a stop cannot confirm it
+// and reports TERMINAL_CLEANUP_NOT_CONFIRMED (runtime.mjs treats that as a warning). A `ps` that runs but exits
+// non-zero for these arguments (busybox, some slim images) is read by upstream as "no such process": the terminal is
+// not recorded at all (terminal-worker-process.js, recordTerminalProgram), so a stop confirms nothing and fails at
+// nothing. That silence is why this check exists: it is the only sign of that host.
 // This check runs the same two commands on this process once, at a bounded time. It never blocks a start.
 export const PS_UNAVAILABLE = 'PS_UNAVAILABLE';
 export const PS_INCOMPATIBLE = 'PS_INCOMPATIBLE';
