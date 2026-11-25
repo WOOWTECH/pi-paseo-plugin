@@ -6,7 +6,8 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {withPidTransition} from '../src/pid-transition.mjs';
 import {patchPidLockSource,applyPidLockPatch,pidLockPatchReady,PID_LOCK_COPIES,ORIGINAL_PID_LOCK_SHA256,PATCHED_PID_LOCK_SHA256,PID_LOCK_PATCH_ID,PID_LOCK_0112} from '../src/pid-lock-patch.mjs';
-import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
+import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,priorRuntimeDirectory,PRIOR_RUNTIME_REVISIONS,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
+import {BRAND_SERVER_PATH} from '../src/brand-identity-patch.mjs';
 import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO} from './helpers/runtime-pid-files.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const original=fs.readFileSync(new URL('./fixtures/paseo-0.17.4/pid-lock.js',import.meta.url),'utf8');
@@ -70,14 +71,19 @@ test('official release/refresh missing home semantics do not create a directory'
  const dir=path.join(home(t),'missing');assert.equal(await withPidTransition(dir,()=>true),true);assert.equal(fs.existsSync(dir),false);
 });
 
-// Every 0.11.2 release an earlier Agent Connect left behind: r4 is what 0.1.18-0.1.23 run.
-for(const [generation,lockSha256] of [['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112],['r2',LOCK_0112_HONO]])
+// Every 0.11.2 release an earlier Agent Connect shipped: r4 is what 0.1.18-0.1.23 run.
+const SHIPPED=[['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112]];
+test('the prior releases are exactly the shipped 0.11.2 revisions, newest first',()=>{
+ assert.deepEqual(PRIOR_RUNTIME_REVISIONS,SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`));
+});
+for(const [generation,lockSha256] of SHIPPED)
 test(`0.11.2-${generation}-${lockSha256.slice(0,12)} supports verified offline control beside the 0.17.4 release`,t=>{
  const {loc}=runtime(t);markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);
  const old=seedPriorRelease(loc,{generation,lockSha256});
- assert.equal(previousRuntimeDirectory(loc),old);
+ assert.equal(previousRuntimeDirectory(loc),old);assert.equal(priorRuntimeDirectory(loc,path.basename(old)),old);
  const patched=generation!=='r2';
- const files=['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.flatMap(p=>['pid-lock.js',...(patched?['pi-paseo-pid-transition.mjs']:[])].map(n=>'node_modules/@getpaseo/server/'+p+'/'+n))];
+ const branded=generation==='r4'?[BRAND_SERVER_PATH,path.join(path.dirname(BRAND_SERVER_PATH),'pi-paseo-brand-identity.mjs')]:[];
+ const files=['.pi-paseo-runtime.json','node_modules/@getpaseo/cli/package.json','node_modules/@getpaseo/server/package.json',...PID_LOCK_COPIES.flatMap(p=>['pid-lock.js',...(patched?['pi-paseo-pid-transition.mjs']:[])].map(n=>'node_modules/@getpaseo/server/'+p+'/'+n)),...branded];
  for(const relative of files){
   const file=path.join(old,relative),bytes=fs.readFileSync(file);fs.writeFileSync(file,'{}');assert.equal(previousRuntimeDirectory(loc),null,relative);fs.writeFileSync(file,bytes);
  }
@@ -99,11 +105,12 @@ test('prior releases are verified with the frozen 0.11.2 writer, never this rele
  for(const copy of PID_LOCK_COPIES)fs.writeFileSync(path.join(r2,'node_modules/@getpaseo/server',copy,'pid-lock.js'),original);
  assert.equal(previousRuntimeDirectory(loc),null);
 });
-test('the release a running daemon names is preferred among verified prior releases',t=>{
+test('only the exact release a running daemon names qualifies for its control',t=>{
  const {loc}=runtime(t);
  const r4=seedPriorRelease(loc,{generation:'r4'}),r3=seedPriorRelease(loc,{generation:'r3',lockSha256:LOCK_0112});
- assert.equal(previousRuntimeDirectory(loc),r4);
- assert.equal(previousRuntimeDirectory(loc,path.basename(r3)),r3);
- assert.equal(previousRuntimeDirectory(loc,'0.11.2-r9-unknown'),r4);
- fs.writeFileSync(path.join(r3,'.pi-paseo-runtime.json'),'{}');assert.equal(previousRuntimeDirectory(loc,path.basename(r3)),r4);
+ assert.equal(previousRuntimeDirectory(loc),r4);assert.equal(previousRuntimeDirectory(loc,{unrecordedOnly:true}),r3);
+ assert.equal(priorRuntimeDirectory(loc,path.basename(r3)),r3);assert.equal(priorRuntimeDirectory(loc,path.basename(r4)),r4);
+ for(const revision of ['0.11.2-r9-unknown','0.11.2-r1-b60170bb6826','0.11.2-r2-4cf9d40940bf',RUNTIME_REVISION,'0.17.5-r1-000000000000',undefined])assert.equal(priorRuntimeDirectory(loc,revision),null,String(revision));
+ // An unverifiable copy of the named release is not replaced by another verified release.
+ fs.writeFileSync(path.join(r3,'.pi-paseo-runtime.json'),'{}');assert.equal(priorRuntimeDirectory(loc,path.basename(r3)),null);assert.equal(previousRuntimeDirectory(loc,{unrecordedOnly:true}),null);
 });

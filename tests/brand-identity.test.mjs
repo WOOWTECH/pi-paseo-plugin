@@ -8,7 +8,7 @@ import {gunzipSync} from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {selectedBrand} from '../src/brand-identity.mjs';
 import {targetEnvironment} from '../src/connection-targets.mjs';
-import {patchBrandIdentitySource, applyBrandIdentityPatch, brandIdentityPatchReady, BRAND_SERVER_PATH,
+import {patchBrandIdentitySource, applyBrandIdentityPatch, brandIdentityPatchReady, BRAND_SERVER_PATH, BRAND_0112,
   ORIGINAL_BRAND_SERVER_SHA256, PATCHED_BRAND_SERVER_SHA256} from '../src/brand-identity-patch.mjs';
 import {runtimeDirectory, markRuntimeReady, runtimeReady, previousRuntimeDirectory, PASEO_VERSION} from '../src/runtime-layout.mjs';
 import {seedPidFiles, seedPriorRelease} from './helpers/runtime-pid-files.mjs';
@@ -75,7 +75,17 @@ for(const generation of ['r3','r4'])test(generation+' (0.11.2) daemon remains av
   // Preparing the 0.17.4 release beside it leaves the old release byte-for-byte.
   seedPidFiles(loc);const cli=path.join(root,'node_modules/@getpaseo/cli');
   fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:PASEO_VERSION}));
+  const server=path.join(old,BRAND_SERVER_PATH),helper=path.join(path.dirname(server),'pi-paseo-brand-identity.mjs');
+  const before=[server,helper].map(file=>fs.existsSync(file)?fs.readFileSync(file):null);
   markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);assert.equal(previousRuntimeDirectory(loc),old);
-  assert.equal(fs.readFileSync(path.join(old,BRAND_SERVER_PATH),'utf8'),source0112);
-  assert.equal(fs.existsSync(path.join(path.dirname(path.join(old,BRAND_SERVER_PATH)),'pi-paseo-brand-identity.mjs')),false);
+  assert.deepEqual([server,helper].map(file=>fs.existsSync(file)?fs.readFileSync(file):null),before);
+  // As 0.1.18-0.1.23 left them: r4 carries the 0.11.2 brand patch, r3 the plain upstream server.
+  if(generation==='r4'){assert.equal(sha(fs.readFileSync(server)),BRAND_0112.patched);assert.equal(brandIdentityPatchReady(old,BRAND_0112),true);}
+  else {assert.equal(fs.readFileSync(server,'utf8'),source0112);assert.equal(before[1],null);}
+});
+test('the 0.11.2 brand patch literals reproduce what 0.1.18-0.1.23 applied',()=>{
+  assert.equal(sha(source0112),BRAND_0112.original);
+  const patched=patchBrandIdentitySource(source0112,BRAND_0112);assert.equal(sha(patched),BRAND_0112.patched);
+  assert.equal(patchBrandIdentitySource(patched,BRAND_0112),patched);
+  assert.throws(()=>patchBrandIdentitySource(source,BRAND_0112),{code:'BRAND_IDENTITY_SOURCE_MISMATCH'});
 });

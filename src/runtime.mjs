@@ -13,7 +13,7 @@ import {DAEMON_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
-import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -42,7 +42,7 @@ function inheritedEnv() {
   env.PI_PASEO_CONNECTION_PROFILE_VERSION = '1';
   return env;
 }
-async function cli(args, options = {}, root = controlRuntimeDirectory() || runtimeDirectory(locations())) {
+async function cli(args, options, root) {
   const result = await runProcess(process.execPath, [cliPath(root), '--home', locations().paseoHome, '--json', ...args], { env: inheritedEnv(), ...options });
   try { return JSON.parse(result); } catch { throw new RuntimeError('INVALID_COMMAND_OUTPUT'); }
 }
@@ -62,41 +62,60 @@ function ownsHome() {
   try { const marker = JSON.parse(fs.readFileSync(ownerFile(), 'utf8')); return marker.installationId === readState().installationId && marker.home === locations().paseoHome; } catch { return false; }
 }
 function legacyVersion() {try{return JSON.parse(fs.readFileSync(path.join(locations().runtimeDir,'node_modules/@getpaseo/cli/package.json'))).version;}catch{return null;}}
-function earlierRuntimeDirectory(loc,revision) {return previousRuntimeDirectory(loc,revision)||(legacyVersion()===LEGACY_PASEO_VERSION?loc.runtimeDir:null);}
 const REVISION_ENTRY='PI_PASEO_RUNTIME_REVISION=';
-// The revision of an earlier release whose daemon holds this home's PID file, as far as the
-// plugin can tell without upstream modules: Linux reads the revision pinned in that live
-// process's environment, other platforms the one recorded when this plugin started that PID.
-// It only picks control modules; ownership is still verified before any action.
-function earlierDaemonRevision(loc) {
- let lock;
- try {lock=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'paseo.pid'),'utf8'));} catch {return null;}
- if(!Number.isInteger(lock?.pid)||lock.pid<=1)return null;
+// Upstream readPidLock (pid-lock.js PID_LOCK_READ_RETRY_ATTEMPTS/_DELAY_MS) reads an empty or partial
+// lock again: updatePidLock truncates the file before it writes.
+const PID_READ_ATTEMPTS=10,PID_READ_DELAY_MS=50;
+async function readPidLockFile(file) {
+ for(let attempt=1;;attempt++){
+  try {
+   const lock=JSON.parse(fs.readFileSync(file,'utf8'));
+   if(Number.isInteger(lock?.pid)&&lock.pid>1)return lock;
+  } catch(error) {if(error.code==='ENOENT')return null;}
+  if(attempt>=PID_READ_ATTEMPTS)return null;
+  await delay(PID_READ_DELAY_MS);
+ }
+}
+// Which release a live daemon of this home runs, as far as the plugin can tell without upstream
+// modules: Linux reads the revision pinned in that process's environment, other platforms the one
+// recorded when this plugin started that PID. null: no live process of this home holds the PID lock.
+async function daemonRelease(loc) {
+ const lock=await readPidLockFile(path.join(loc.paseoHome,'paseo.pid'));
+ if(!lock)return null;
  let revision;
  if(process.platform==='linux'){
-  try {
-   const env=fs.readFileSync(`/proc/${lock.pid}/environ`,'utf8').split('\0');
-   if(!env.includes(`PASEO_HOME=${loc.paseoHome}`))return null;
-   revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
-  } catch {return null;}
+  let env;
+  try {env=fs.readFileSync(`/proc/${lock.pid}/environ`,'utf8').split('\0');} catch {return null;}
+  if(!env.includes(`PASEO_HOME=${loc.paseoHome}`))return null;
+  revision=env.find(entry=>entry.startsWith(REVISION_ENTRY))?.slice(REVISION_ENTRY.length);
  } else {
   const state=readState();
   if(state.daemonPid!==lock.pid||state.daemonStartedAt!==lock.startedAt)return null;
   revision=state.daemonRuntimeRevision;
  }
- return revision===RUNTIME_REVISION?null:revision||'unrecorded';
+ return {pid:lock.pid,revision:revision||null};
 }
-// Daemon control (read, verify, client, stop, live config) runs through the release that
-// started the daemon: an upgrade never stops, queries or reconfigures an older daemon through
-// newer upstream modules. Without a daemon, this release. Starting always uses this release.
-function controlRuntimeDirectory() {
- const loc=locations();
- if(!runtimeReady(loc))return earlierRuntimeDirectory(loc);
- const earlier=earlierDaemonRevision(loc);
- return (earlier&&earlierRuntimeDirectory(loc,earlier))||runtimeDirectory(loc);
+// Daemon control (read, verify, client, pair, stop, live config) runs through the release that
+// started the daemon: an upgrade never stops, queries or reconfigures an older daemon through newer
+// upstream modules. Resolved once per operation, so reading and stopping use the same release.
+//  * This release's daemon, or none: this release (before it is installed, the newest verified earlier
+//    release still reads the PID lock, so a foreign owner is reported instead of ignored).
+//  * A daemon of exactly one of the verified earlier releases: that release. Every Linux release since
+//    0.1.1 pins its revision in the daemon's environment; elsewhere 0.1.18+ (r4) record it, and a daemon
+//    without one was started by 0.1.4-0.1.17, all of them r2/r3 releases of 0.11.2.
+//  * Anything else (no verified release of that revision, an unknown or newer one): refused with
+//    DAEMON_RELEASE_UNAVAILABLE, never controlled through another release's modules.
+async function resolveControl(loc=locations()) {
+ const daemon=await daemonRelease(loc);
+ if(!daemon||daemon.revision===RUNTIME_REVISION){
+  if(runtimeReady(loc))return {root:runtimeDirectory(loc),version:PASEO_VERSION};
+  if(!daemon){const root=previousRuntimeDirectory(loc)||(legacyVersion()===LEGACY_PASEO_VERSION?loc.runtimeDir:null);return {root,version:root&&LEGACY_PASEO_VERSION};}
+ }
+ const root=daemon.revision?priorRuntimeDirectory(loc,daemon.revision)
+  :process.platform!=='linux'?previousRuntimeDirectory(loc,{unrecordedOnly:true}):null;
+ return root?{root,version:LEGACY_PASEO_VERSION}:{root:null,refused:'DAEMON_RELEASE_UNAVAILABLE',pid:daemon.pid};
 }
-async function serverModule(relative, root = controlRuntimeDirectory() || runtimeDirectory(locations())) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
-async function controlModule() { return serverModule('dist/server/server/daemon-instance.js'); }
+async function serverModule(relative, root) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
 // config.json goes through the persisted-config module of the release that reads it next, the same read
 // path its daemon loads with: readPersistedConfig applies that release's compatibility normalization
 // (0.17.4 folds providers.openai into the speech settings that use it, gives speech settings without a
@@ -120,7 +139,12 @@ function readDaemonConfig(config, loc = locations()) {
     throw new RuntimeError('CONFIG_INCOMPATIBLE');
   }
 }
-async function currentInstance() { if (!controlRuntimeDirectory() || !ownsHome()) return null; return (await controlModule()).readDaemonInstance(locations().paseoHome); }
+async function currentInstance(control) {
+  if (!ownsHome()) return null;
+  if (control.refused) throw new RuntimeError(control.refused);
+  if (!control.root) return null;
+  return (await serverModule('dist/server/server/daemon-instance.js', control.root)).readDaemonInstance(locations().paseoHome);
+}
 function instanceNeedsRuntimeRestart(instance) {
  if(process.platform!=='linux'){
    const state=readState();
@@ -131,7 +155,7 @@ function instanceNeedsRuntimeRestart(instance) {
    return !env.includes(`PI_PASEO_RUNTIME_REVISION=${RUNTIME_REVISION}`) || !env.includes('PI_PASEO_CONNECTION_PROFILE_VERSION=1');
  } catch { return true; }
 }
-function verifyInstanceOwnership(instance) {
+function verifyInstanceOwnership(instance, control) {
   if (!ownsHome() || !instance || !processIdentity(instance.pid)) throw new RuntimeError('DAEMON_NOT_OWNED');
   if (instance.uid !== (process.getuid?.() ?? instance.uid)) throw new RuntimeError('DAEMON_NOT_OWNED');
   // Linux metadata additionally checks argv and the home actually inherited by this PID.
@@ -139,7 +163,7 @@ function verifyInstanceOwnership(instance) {
     try {
       const args = fs.readFileSync(`/proc/${instance.pid}/cmdline`, 'utf8').split('\0');
       const env = fs.readFileSync(`/proc/${instance.pid}/environ`, 'utf8').split('\0');
-      const entry = path.join(controlRuntimeDirectory()||runtimeDirectory(locations()), 'node_modules/@getpaseo/server/dist/scripts/supervisor-entrypoint.js');
+      const entry = path.join(control.root, 'node_modules/@getpaseo/server/dist/scripts/supervisor-entrypoint.js');
       const executable = fs.realpathSync(`/proc/${instance.pid}/exe`);
       const expectedNode = fs.realpathSync(process.execPath);
       // Paseo sets process.title, which replaces its original argv on Linux.
@@ -197,18 +221,21 @@ async function applyAgentCollaboration(enabled) {
   const loc = locations(), file = path.join(loc.paseoHome, 'config.json');
   // Not this installation's daemon home, or no config yet: the next start applies the saved choice.
   if (!ownsHome() || !fs.existsSync(file)) return 'next-start';
-  // Written for the daemon that reloads it: through the persisted-config module of its own release.
-  const module = await persistedConfig(controlRuntimeDirectory() || runtimeDirectory(loc));
+  // Written for the daemon that reloads it, through the persisted-config module of its own release;
+  // with no daemon this release can control, for this release's next start.
+  const control = await resolveControl(loc), root = control.root || (runtimeReady(loc) ? runtimeDirectory(loc) : null);
+  if (!root) return 'next-start';
+  const module = await persistedConfig(root);
   const config = readDaemonConfig(module, loc);
   if (config.daemon?.mcp?.injectIntoAgents === enabled && config.daemon?.mcp?.enabled === true) return 'unchanged';
   try { module.savePersistedConfig(loc.paseoHome, { ...config, daemon: { ...config.daemon, mcp: collaborationMcp(config.daemon?.mcp, enabled) } }); fs.chmodSync(file, 0o600); }
   catch { throw new RuntimeError('CONFIG_INVALID'); }
   let instance = null;
-  try { instance = await currentInstance(); if (instance) verifyInstanceOwnership(instance); }
+  try { instance = await currentInstance(control); if (instance) verifyInstanceOwnership(instance, control); }
   catch { instance = null; }
   if (!instance) return 'next-start';
   try {
-    const reload = await withClient(client => client.reloadDaemonConfig(), 15000);
+    const reload = await withClient(client => client.reloadDaemonConfig(), 15000, control);
     const owns = paths => Array.isArray(paths) && paths.some(p => p === COLLABORATION_PATH || COLLABORATION_PATH.startsWith(p + '.'));
     if (!Array.isArray(reload?.restartRequiredPaths) || !Array.isArray(reload?.overrideControlledPaths) || owns(reload.restartRequiredPaths) || owns(reload.overrideControlledPaths)) throw new RuntimeError('RESTART_REQUIRED');
     return 'applied';
@@ -256,8 +283,10 @@ async function checkNextStartConfig(launchers) {
 function safeProvider(entry) {
   return { provider: entry.provider, label: entry.label || entry.provider, status: entry.status || (entry.available === true ? 'ready' : entry.available === false ? 'unavailable' : 'unknown'), enabled: entry.enabled !== false, defaultModeId: entry.defaultModeId || null, modes: (entry.modes || []).map(mode => ({ id: mode.id, label: mode.label || mode.id })), chatVerified: readState().acceptance?.providers?.some(row => row.provider === entry.provider && row.passed) || false };
 }
-async function withClient(fn, timeoutMs = 30000) {
-  const { connectToDaemon } = await import(pathToFileURL(path.join(controlRuntimeDirectory()||runtimeDirectory(locations()), 'node_modules/@getpaseo/cli/dist/utils/client.js')).href);
+async function withClient(fn, timeoutMs = 30000, control) {
+  control ??= await resolveControl();
+  if (!control.root) throw new RuntimeError(control.refused || 'DAEMON_UNREACHABLE');
+  const { connectToDaemon } = await import(pathToFileURL(path.join(control.root, 'node_modules/@getpaseo/cli/dist/utils/client.js')).href);
   const client = await connectToDaemon({ target: { kind: 'instance', home: locations().paseoHome }, timeout: 5000 });
   let timer;
   try {
@@ -287,19 +316,20 @@ export async function activate(options = {}) {
       // Before the runtime install, so a host short of disk gets the retired copy's space back first.
       removeRetiredWebClient(locations());
       await installRuntime();
-      let existing = await currentInstance();
+      let control = await resolveControl();
+      let existing = await currentInstance(control);
       if (existing) {
-        try { verifyInstanceOwnership(existing); }
+        try { verifyInstanceOwnership(existing, control); }
         catch (error) {
           if (error.code !== 'DAEMON_NOT_OWNED') throw error;
           await recoverStaleInstance(locations(), existing);
-          existing = await currentInstance();
-          if (existing) verifyInstanceOwnership(existing);
+          control = await resolveControl(); existing = await currentInstance(control);
+          if (existing) verifyInstanceOwnership(existing, control);
         }
       }
       const launchers = await detectLaunchers({ installMissing: true });
       if (existing) {
-        await verifyInstanceOwnership(existing);
+        verifyInstanceOwnership(existing, control);
         const configurationPending = readState().configurationPending === true;
         if (configurationPending || instanceNeedsRuntimeRestart(existing)) {
           // Only an explicit stop and start applies this, and that start writes this release's config:
@@ -313,7 +343,7 @@ export async function activate(options = {}) {
         const needsApply = await writeConfig(locations().port, launchers) || (pending?.pid === existing.pid && pending?.startedAt === existing.startedAt);
         updateState({ providerReloadPending: { pid: existing.pid, startedAt: existing.startedAt } });
         try {
-          const reload = await withClient(client => client.reloadDaemonConfig());
+          const reload = await withClient(client => client.reloadDaemonConfig(), 30000, control);
           if (!Array.isArray(reload?.appliedPaths) || !Array.isArray(reload?.restartRequiredPaths) || !Array.isArray(reload?.overrideControlledPaths) ||
               reload.restartRequiredPaths.length || reload.overrideControlledPaths.some(p => p === 'agents.providers' || p.startsWith('agents.providers.')) ||
               (needsApply && !reload.appliedPaths.includes('agents.providers'))) throw new RuntimeError('RESTART_REQUIRED');
@@ -323,15 +353,17 @@ export async function activate(options = {}) {
         const port = await choosePort(locations().port); await writeConfig(port, launchers);
         updateState({ phase: 'starting' });
         await cli(['daemon', 'start', '--timeout', '90'], { timeoutMs: 105000 }, runtimeDirectory(locations()));
-        const instance = await currentInstance(); await verifyInstanceOwnership(instance);
+        // The daemon this release just started is controlled by this release.
+        control = { root: runtimeDirectory(locations()), version: PASEO_VERSION };
+        const instance = await currentInstance(control); verifyInstanceOwnership(instance, control);
         updateState({ phase: 'running', providerReloadPending: null, daemonPid: instance.pid, daemonStartedAt: instance.startedAt, daemonRuntimeRevision: RUNTIME_REVISION, activeTarget: connectionPreferences(locations()).target, configurationPending: false });
       }
-      const healthy = await currentInstance();
-      const observation = await observeOwnedInstance(locations(), healthy, verifyInstanceOwnership);
+      const healthy = await currentInstance(control), verify = instance => verifyInstanceOwnership(instance, control);
+      const observation = await observeOwnedInstance(locations(), healthy, verify);
       const result = await status();
       if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
       if (!healthy || healthy.pid !== result.daemon.pid) throw new RuntimeError('DAEMON_STATE_CHANGED');
-      await rememberOwnedInstance(locations(), healthy, verifyInstanceOwnership, observation);
+      await rememberOwnedInstance(locations(), healthy, verify, observation);
       updateState({ lastDiagnostic: { checkedAt: new Date().toISOString(), daemonReachable: true, providers: result.providers.map(row => ({ provider: row.provider, status: row.status })) } });
       return status();
     } catch (error) { updateState({ phase: error.code === 'RESTART_REQUIRED' ? 'restart_required' : 'error', lastError: { code: safeCode(error), at: new Date().toISOString() } }); throw new RuntimeError(safeCode(error)); }
@@ -340,12 +372,13 @@ export async function activate(options = {}) {
 export async function deactivate() {
   return withRuntimeLock(async () => {
     updateState({ desiredEnabled: false });
-    const instance = await currentInstance();
+    // One resolution: the release that read the instance is the one that stops it.
+    const control = await resolveControl(), instance = await currentInstance(control);
     if (instance) {
-      await verifyInstanceOwnership(instance);
-      const control = await controlModule();
+      verifyInstanceOwnership(instance, control);
+      const lifecycle = await serverModule('dist/server/server/daemon-instance.js', control.root);
       // The official lifecycle rechecks PID plus startedAt immediately before signaling.
-      try { await control.stopDaemonInstance(locations().paseoHome, { instance, timeoutMs: DAEMON_STOP_TIMEOUT_MS, force: false }); }
+      try { await lifecycle.stopDaemonInstance(locations().paseoHome, { instance, timeoutMs: DAEMON_STOP_TIMEOUT_MS, force: false }); }
       catch (error) { throw new RuntimeError(safeCode(error)); }
     }
     updateState({ phase: 'disabled', daemonPid: null, daemonStartedAt: null });
@@ -359,8 +392,12 @@ export async function status() {
  * Paseo answers each status request by running `--version` of every enabled provider, uncached; at the supervisor's
  * 15 s poll that was about 60% of the idle CPU of a 4-core H618 board. */
 export async function daemonRunning() {
-  try { const instance = await currentInstance(); if (!instance) return false; verifyInstanceOwnership(instance); return true; }
-  catch { return false; }
+  try {
+    const control = await resolveControl();
+    // A live daemon of this home that no verified release can control is still running: status reports why.
+    if (control.refused) return ownsHome();
+    const instance = await currentInstance(control); if (!instance) return false; verifyInstanceOwnership(instance, control); return true;
+  } catch { return false; }
 }
 // Pi builds its model list from these files in the agent directory the Pi provider is given. The daemon caches that
 // list until a refresh or a restart, so a provider configured after the daemon started (LiteLLM written to
@@ -376,7 +413,7 @@ function piCatalogFiles() {
  * it never throws, so a models read cannot fail because of it. */
 export async function refreshPiCatalogIfChanged() {
   try {
-    const instance = await currentInstance(); if (!instance) return false; verifyInstanceOwnership(instance);
+    const control = await resolveControl(), instance = await currentInstance(control); if (!instance) return false; verifyInstanceOwnership(instance, control);
     const files = piCatalogFiles(), fingerprint = files.map(file => file.id).join('|');
     const seen = readState().piCatalog;
     const sameDaemon = seen?.pid === instance.pid && seen?.startedAt === instance.startedAt;
@@ -386,34 +423,40 @@ export async function refreshPiCatalogIfChanged() {
     // Recorded before asking: one attempt per change. A refresh starts Pi, so a failing one must not repeat every poll.
     updateState({ piCatalog: { pid: instance.pid, startedAt: instance.startedAt, fingerprint } });
     if (!stale) return false;
-    await withClient(client => client.refreshProvidersSnapshot({ providers: ['pi'] }), 150000);
+    await withClient(client => client.refreshProvidersSnapshot({ providers: ['pi'] }), 150000, control);
     return true;
   } catch { return false; }
 }
 const CONFIG_BLOCKERS = new Set(['CONFIG_CORRUPT', 'CONFIG_INCOMPATIBLE', 'CONFIG_INVALID']);
 async function readStatus() {
-  const state = readState(); const installed = !!controlRuntimeDirectory(); const owned = ownsHome();
-  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
+  const state = readState(), loc = locations(), control = await resolveControl(loc), owned = ownsHome();
+  const installed = runtimeReady(loc) || !!control.root;
+  // daemon.version: the Paseo release serving it (0.11.2 until an upgrade's explicit stop and start).
+  const daemon = { running: false, reachable: false, owned, pid: null, listen: null, version: null, relayEnabled: false, relayConnected: null, relayVerified: state.relayVerification?.verified === true, relayVerifiedAt: state.relayVerification?.checkedAt || null };
   // A config the next start cannot write outranks RESTART_REQUIRED: stopping would only take Paseo down.
   const configBlocker = state.phase === 'error' && CONFIG_BLOCKERS.has(state.lastError?.code) ? state.lastError.code : null;
   let providers = [], diagnosticCode = configBlocker || (state.lastError?.code === 'RESTART_REQUIRED' ? 'RESTART_REQUIRED' : null);
-  if (installed && owned) {
+  if (owned && (control.root || control.refused)) {
     try {
-      const instance = await currentInstance();
+      const instance = await currentInstance(control);
       if (instance) {
-        await verifyInstanceOwnership(instance); daemon.running = true; daemon.pid = instance.pid; daemon.listen = instance.listen;
+        verifyInstanceOwnership(instance, control); daemon.running = true; daemon.pid = instance.pid; daemon.listen = instance.listen; daemon.version = control.version;
         if(instanceNeedsRuntimeRestart(instance))diagnosticCode=configBlocker||'RESTART_REQUIRED';
-        const key=JSON.stringify([locations().paseoHome,instance.pid,instance.startedAt,state.updatedAt]);
-        const sample = await daemonStatusWindow(key,()=>withClient(client => client.getDaemonStatus({ timeout: 5000 }), 8000));
+        const key=JSON.stringify([loc.paseoHome,instance.pid,instance.startedAt,state.updatedAt]);
+        const sample = await daemonStatusWindow(key,()=>withClient(client => client.getDaemonStatus({ timeout: 5000 }), 8000, control));
         const result=sample.value;
         daemon.statusCheckedAt=new Date(sample.checkedAt).toISOString();daemon.statusMaxAgeMs=3000;
         daemon.reachable = true; daemon.workerPid = result.pid; daemon.relayEnabled = result.relay?.enabled === true; daemon.relayConnected = typeof result.relay?.connected === 'boolean' ? result.relay.connected : null;
         providers = (result.providers || []).filter(row => PROVIDERS.includes(row.provider)).map(safeProvider);
       }
-    } catch (error) { diagnosticCode = safeCode(error); }
+    } catch (error) {
+      diagnosticCode = safeCode(error);
+      if (control.refused) { daemon.running = true; daemon.pid = control.pid; }
+    }
   }
   const phase = state.phase === 'running' && !daemon.running ? 'stopped' : state.phase || 'not_installed';
-  return { installed, version: installed ? PASEO_VERSION : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), agentCollaboration: agentCollaborationEnabled(), diagnosticCode, state };
+  // version: the managed Paseo release installed for the next start (0.11.2 only before 0.17.4 is installed).
+  return { installed, version: runtimeReady(loc) ? PASEO_VERSION : control.root ? control.version : null, enabled: state.desiredEnabled === true, phase, daemon, providers, chatVerified: state.acceptance?.passed === true, pairingAvailable: fs.existsSync(path.join(locations().stateDir, 'pairing.private.json')), agentCollaboration: agentCollaborationEnabled(), diagnosticCode, state };
 }
 export async function diagnose() {
   const snapshot = await status(); const launchers = await detectLaunchers();
@@ -461,7 +504,8 @@ export async function pair() {
     const target = connectionPreferences(locations()).target;
     if (readState().configurationPending === true || (readState().activeTarget || 'paseo') !== target) throw new RuntimeError('CONFIGURATION_PENDING');
     const result = await status(); if (!result.daemon.reachable) throw new RuntimeError('DAEMON_UNREACHABLE');
-    const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 });
+    const control = await resolveControl(); if (!control.root) throw new RuntimeError(control.refused || 'DAEMON_UNREACHABLE');
+    const offer = await cli(['daemon', 'pair', '--relay'], { timeoutMs: 15000 }, control.root);
     if (!offer.url || !offer.relayEnabled) throw new RuntimeError('PAIRING_UNAVAILABLE');
     const pairing = { url: targetPairUrl(offer.url, target), target, createdAt: new Date().toISOString() };
     atomicJson(path.join(locations().stateDir, 'pairing.private.json'), pairing);

@@ -41,7 +41,7 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:layout.PASEO_VERSION}));
  fs.mkdirSync(path.join(server,'dist/server/web-ui'),{recursive:true});fs.writeFileSync(path.join(server,'dist/server/web-ui/index.html'),'fixture');seedPidFiles(loc);layout.markRuntimeReady(loc);
  const pidFile=path.join(loc.paseoHome,'paseo.pid'),proofFile=path.join(loc.stateDir,'daemon-instance.private.json');
- const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false,protectedOffers=false;
+ const bootId='11111111-1111-1111-1111-111111111111',processes=new Map();let nextPid=900000,starts=0,stops=0,allowStop=false,protectedOffers=false,emptyPidReads=0;const hooks={};
  // Which release supplied each upstream module or CLI call: <runtimeDir>/releases/<revision>.
  const releaseOf=file=>String(fileURLToPath(new URL(String(file),'file:///'))).split('/node_modules/@getpaseo/')[0];
  const used={modules:[],cli:[],stoppedVia:null};
@@ -51,8 +51,11 @@ function fixture(t, { platform = process.platform } = {}) {
  fs.writeFileSync(path.join(loc.paseoHome,'agents.db'),'retain-data',{mode:0o600});
  fs.writeFileSync(path.join(loc.stateDir,'pairing.private.json'),'retain-pairing',{mode:0o600});
  const verifyProc=()=>{for(const [pid,p]of processes)if(p.role==='owned'&&p.home===loc.paseoHome)throw new state.RuntimeError('DAEMON_ALREADY_RUNNING');};
- const identity=identityModule.createDaemonIdentity?.({readBirth:pid=>{const p=processes.get(pid);if(p?.unreadable)throw new state.RuntimeError('DAEMON_IDENTITY_UNVERIFIABLE');return p?{bootId:p.bootId,startTicks:p.startTicks,uid:p.uid}:null;},assertNoSupervisor:verifyProc});
- const fakeFs={...fs,readFileSync(file,...args){const m=/^\/proc\/(\d+)\/(cmdline|environ)$/.exec(String(file));if(m){const p=processes.get(Number(m[1]));if(!p)throw Object.assign(new Error('gone'),{code:'ENOENT'});return m[2]==='cmdline'?(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0'):`PASEO_HOME=${p.home}\0PI_PASEO_RUNTIME_REVISION=${p.revision||layout.RUNTIME_REVISION}\0${p.noConnectionProfile?'':'PI_PASEO_CONNECTION_PROFILE_VERSION=1\0'}`;}return fs.readFileSync(file,...args);},realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);}};
+ const identity=identityModule.createDaemonIdentity?.({platform,readBirth:pid=>{const p=processes.get(pid);if(p?.unreadable)throw new state.RuntimeError('DAEMON_IDENTITY_UNVERIFIABLE');return p?{bootId:p.bootId,startTicks:p.startTicks,uid:p.uid}:null;},assertNoSupervisor:verifyProc});
+ const fakeFs={...fs,readFileSync(file,...args){const m=/^\/proc\/(\d+)\/(cmdline|environ)$/.exec(String(file));if(m){const p=processes.get(Number(m[1]));if(!p)throw Object.assign(new Error('gone'),{code:'ENOENT'});return m[2]==='cmdline'?(p.role==='owned'?'Paseo Supervisor\0':'foreign-fixture\0'):`PASEO_HOME=${p.home}\0${p.noRevision?'':`PI_PASEO_RUNTIME_REVISION=${p.revision||layout.RUNTIME_REVISION}\0`}${p.noConnectionProfile?'':'PI_PASEO_CONNECTION_PROFILE_VERSION=1\0'}`;}
+  // updatePidLock truncates before it writes: a reader can meet the empty file.
+  if(String(file)===pidFile&&emptyPidReads>0){emptyPidReads--;return '';}
+  return fs.readFileSync(file,...args);},realpathSync(file,...args){if(/^\/proc\/\d+\/exe$/.test(String(file)))return fs.realpathSync(process.execPath);return fs.realpathSync(file,...args);}};
  const loadInstance=()=>fs.existsSync(pidFile)?JSON.parse(fs.readFileSync(pidFile)):null;
  let reloads=0,reloadResult={appliedPaths:['agents.providers'],restartRequiredPaths:[],overrideControlledPaths:[]};
  const client={reloadDaemonConfig:async()=>{reloads++;return reloadResult;},getDaemonStatus:async()=>({pid:loadInstance().pid+1,providers:[],relay:{enabled:true}}),close:async()=>{}};
@@ -72,14 +75,14 @@ function fixture(t, { platform = process.platform } = {}) {
   if(spec==='./provider-launchers.mjs')return {resolveProviderLaunchers:async()=>({}),configureProviders:previous=>previous||{}};
   if(spec==='./process.mjs')return {findExecutable:()=>assert.fail('No npm install'),runProcess:async(_cmd,args,options)=>{if(args.length===2&&args[1]==='--version'){assert.equal(releaseOf(args[0]),root);return layout.PASEO_VERSION;}used.cli.push({release:releaseOf(args[0]),command:args.slice(4).join(' ')});if(args.includes('pair')){const target=connectionTargets.connectionTarget(connectionTargets.connectionPreferences(loc).target);const hash='#offer='+Buffer.from(JSON.stringify({v:2,serverId:'srv_fixture12345',daemonPublicKeyB64:'public-key',relay:{endpoint:target.relayEndpoint,useTls:true},...(protectedOffers?{minimumSecurityMode:'protected'}:{})})).toString('base64url');return JSON.stringify({url:target.appUrl+'/'+hash,relayEnabled:true});}assert.ok(args.includes('start'));starts++;publish();return '{}';}};
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
-  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
+  if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();hooks.read?.();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:async(_home,{instance})=>{assert.equal(allowStop,true,'No foreign signal');assert.equal(processes.get(instance.pid)?.role,'owned');stops++;used.stoppedVia=releaseOf(spec);processes.delete(instance.pid);fs.unlinkSync(pidFile);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
   if(spec.endsWith('/server/persisted-config.js'))return releaseOf(spec)===root?config0174:config0112;
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
  vm.runInNewContext(`(function(require,module,exports){${code}\n})`,{process:{...process,platform},URL,setTimeout,clearTimeout,console})(localRequire,module,module.exports);
- return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},protectedOffers:value=>{protectedOffers=value;},used,
+ return{loc,initial,initialBytes,pidFile,proofFile,installation,processes,runtime:module.exports,identity,starts:()=>starts,stops:()=>stops,reloads:()=>reloads,setReload:r=>{reloadResult=r;},permitStop:()=>{allowStop=true;},protectedOffers:value=>{protectedOffers=value;},emptyPidReads:count=>{emptyPidReads=count;},hooks,used,
  // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
  // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
  prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
@@ -343,6 +346,50 @@ test('while a 0.11.2 daemon serves, the collaboration switch writes config.json 
  assert.deepEqual(config.providers,LEGACY_CONFIG.providers,'0.11.2 keeps its own shapes; the 0.17.4 start folds them later');
  assert.deepEqual(f.used.modules.filter(m=>m.module==='persisted-config.js').map(m=>m.release),[old]);
  assert.equal(f.stops(),0);assert.equal(f.starts(),0);f.keep();
+});
+for(const [name,change] of [
+ ['a newer release',f=>{f.processes.get(f.initial.pid).revision='0.17.5-r1-000000000000';}],
+ ['an unsupported 0.11.2-r1 release',f=>{f.processes.get(f.initial.pid).revision='0.11.2-r1-b60170bb6826';}],
+ ['no recorded release (Linux)',f=>{f.processes.get(f.initial.pid).noRevision=true;}],
+ ['a shipped release whose directory no longer verifies',f=>{const old=f.prior({generation:'r4',prepared:true});fs.writeFileSync(path.join(old,'.pi-paseo-runtime.json'),'{}');}],
+])test(`a daemon started by ${name} is refused with DAEMON_RELEASE_UNAVAILABLE, never controlled through 0.17.4`,async t=>{
+ const f=fixture(t);change(f);f.permitStop();f.used.modules.length=0;const before=fs.readFileSync(f.pidFile);
+ const reported=await f.runtime.status();
+ assert.equal(reported.diagnosticCode,'DAEMON_RELEASE_UNAVAILABLE');assert.equal(reported.daemon.running,true);assert.equal(reported.daemon.pid,f.initial.pid);assert.equal(reported.daemon.reachable,false);
+ assert.equal(await f.runtime.daemonRunning(),true,'the supervisor sees a running daemon, not one to start');
+ await assert.rejects(f.runtime.activate(),{code:'DAEMON_RELEASE_UNAVAILABLE'});
+ await assert.rejects(f.runtime.deactivate(),{code:'DAEMON_RELEASE_UNAVAILABLE'});
+ await assert.rejects(f.runtime.pair(),{code:'DAEMON_UNREACHABLE'});
+ assert.deepEqual(f.used.modules,[],'no release module read, queried or stopped it');assert.deepEqual(f.used.cli,[]);
+ assert.equal(f.stops(),0);assert.equal(f.starts(),0);assert.deepEqual(fs.readFileSync(f.pidFile),before);
+});
+test('a PID lock read while upstream rewrites it is read again: the 0.11.2 daemon keeps its own release',async t=>{
+ const f=fixture(t);const old=f.prior({generation:'r4',prepared:true});
+ f.emptyPidReads(3);
+ const reported=await f.runtime.status();
+ assert.equal(reported.diagnosticCode,'RESTART_REQUIRED');assert.equal(reported.daemon.reachable,true);
+ assert.deepEqual(f.used.modules.map(m=>m.release),f.used.modules.map(()=>old));assert.ok(f.used.modules.length>0);
+ // The serving release, not only the installed one, is reported.
+ assert.equal(reported.version,layout.PASEO_VERSION);assert.equal(reported.daemon.version,layout.LEGACY_PASEO_VERSION);
+});
+test('one operation reads and stops the daemon through the same release',async t=>{
+ const f=fixture(t);const old=f.prior({generation:'r4',prepared:true});
+ // After the instance is read, the environment would name this release: the stop must not switch releases.
+ f.hooks.read=()=>{f.processes.get(f.initial.pid).revision=layout.RUNTIME_REVISION;};
+ await f.runtime.deactivate();assert.equal(f.used.stoppedVia,old);assert.equal(f.stops(),1);
+ f.hooks.read=undefined;assert.equal((await f.runtime.activate()).daemon.version,layout.PASEO_VERSION);f.keep();
+});
+test('darwin: a daemon that 0.1.4-0.1.17 started without recording its release is controlled by an r3/r2 release, never r4 or 0.17.4',async t=>{
+ const f=fixture(t,{platform:'darwin'});const r3=f.prior({generation:'r3',prepared:true});seedPriorRelease(f.loc,{generation:'r4'});
+ state.updateState({daemonPid:f.initial.pid,daemonStartedAt:f.initial.startedAt,daemonRuntimeRevision:null});
+ const hidden=r3+'.hidden';fs.renameSync(r3,hidden);
+ assert.equal((await f.runtime.status()).diagnosticCode,'DAEMON_RELEASE_UNAVAILABLE','r4 recorded its revision, so it did not start this daemon');
+ fs.renameSync(hidden,r3);f.used.modules.length=0;
+ const reported=await f.runtime.status();assert.equal(reported.diagnosticCode,'RESTART_REQUIRED');assert.equal(reported.daemon.reachable,true);
+ assert.deepEqual([...new Set(f.used.modules.map(m=>m.release))],[r3]);
+ await f.runtime.deactivate();assert.equal(f.used.stoppedVia,r3);
+ assert.equal((await f.runtime.activate()).phase,'running');assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
+ assert.equal(fs.existsSync(f.proofFile),false,'darwin keeps no Linux birth proof');f.keep();
 });
 test('darwin: a stale 0.11.2-r4 PID record never starts the old release',async t=>{
  const f=fixture(t,{platform:'darwin'});const old=f.prior({generation:'r4',prepared:true});
