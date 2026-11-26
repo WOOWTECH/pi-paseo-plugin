@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 const source=fs.readFileSync(new URL('../bin/cli.mjs',import.meta.url),'utf8').replace(/^#!.*\n/,'').replace(/^import .*;\r?\n/gm,'');
-async function run(action,runtime){
- let stdout='',stderr='';const process={argv:['node','cli.mjs',action],env:{},stdout:{write:x=>stdout+=x},stderr:{write:x=>stderr+=x}};
+async function run(action,runtime,...more){
+ let stdout='',stderr='';const process={argv:['node','cli.mjs',action,...more],env:{},stdout:{write:x=>stdout+=x},stderr:{write:x=>stderr+=x}};
  await vm.runInNewContext(`(async()=>{${source}\n})()`,{process,runtime,host:runtime});
  return {exitCode:process.exitCode||0,stdout,stderr};
 }
@@ -23,4 +23,28 @@ test('CLI exposes actionable safe resource code and stage without command output
 test('CLI rejects arbitrary error names codes and stage strings',async()=>{
  const r=await run('status',{status:async()=>{throw {name:'PRIVATE_SECRET_NAME',code:'PRIVATE_SECRET_CODE',stage:'PRIVATE_SECRET_STAGE'};}});
  assert.doesNotMatch(r.stderr,/PRIVATE_SECRET/);assert.equal(JSON.parse(r.stderr).code,'OPERATION_FAILED');
+});
+test('CLI names the upgrade config, release control and Smart pairing security codes',async()=>{
+ for(const code of ['CONFIG_INCOMPATIBLE','PAIRING_SECURITY_UNSUPPORTED','DAEMON_RELEASE_UNAVAILABLE']){
+  const r=await run('status',{status:async()=>{throw Object.assign(Error('private detail'),{name:'RuntimeError',code});}});
+  assert.equal(r.exitCode,1);assert.equal(JSON.parse(r.stderr).code,code);assert.doesNotMatch(r.stderr,/private detail/);
+ }
+});
+test('CLI names the stop failure codes, and no longer the one the stop warns with',async()=>{
+ for(const code of ['STOP_NOT_CONFIRMED','DAEMON_REPLACED','DAEMON_STILL_PRESENT']){
+  const r=await run('status',{status:async()=>{throw Object.assign(Error('private detail'),{name:'RuntimeError',code});}});
+  assert.equal(r.exitCode,1);assert.equal(JSON.parse(r.stderr).code,code);assert.doesNotMatch(r.stderr,/private detail/);
+ }
+ // TERMINAL_CLEANUP_NOT_CONFIRMED is a warning of a completed stop now, never an error code.
+ const warning=await run('status',{status:async()=>{throw Object.assign(Error('x'),{name:'RuntimeError',code:'TERMINAL_CLEANUP_NOT_CONFIRMED'});}});
+ assert.equal(JSON.parse(warning.stderr).code,'OPERATION_FAILED');
+});
+test('CLI names the two lock-wait codes with their own hint, also for pair',async()=>{
+ for(const [code,hint] of [['RUNTIME_BUSY',/runtime lock/],['LOCK_BUSY',/lifecycle operation is running/]]){
+  const busy=async()=>{throw Object.assign(Error('private detail'),{name:'RuntimeError',code});};
+  for(const [action,runtime,more] of [['status',{status:busy},[]],['stop',{lifecycle:busy},[]],['pair',{pair:busy},['--reveal']]]){
+   const r=await run(action,runtime,...more),error=JSON.parse(r.stderr);
+   assert.equal(r.exitCode,1);assert.equal(error.code,code,action);assert.match(error.message,hint,action);assert.doesNotMatch(r.stderr,/private detail|Pairing requires/);
+  }
+ }
 });

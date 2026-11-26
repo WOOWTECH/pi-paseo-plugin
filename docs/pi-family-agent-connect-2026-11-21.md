@@ -31,7 +31,7 @@ native 與 k3s 使用 Pi Web 0.10.0 的 combined adapter；HA 已使用官方 Pi
 |---|---|---|---|
 | `woowtech` | Woowtech Smart | `https://smart.woowtech.io` | `relay.woowtech.io:443` |
 | `apporo` | Apporo Smart | `https://smart.apporo.ai` | `relay.apporo.ai:443` |
-| `paseo` | Paseo | 官方 `https://app.paseo.sh`；Pi 內提供 `/paseo-web` | `relay.paseo.sh:443` |
+| `paseo` | Paseo | 官方 `https://app.paseo.sh`（0.1.9–0.1.22 另在 Pi 內提供 `/paseo-web`，0.1.23 移除） | `relay.paseo.sh:443` |
 
 三者使用 V2 offer，含 server ID、daemon public key 與 TLS relay endpoint。共用 Paseo 0.11.2 runtime 的實際設定 schema 已驗證接受 `app.baseUrl`、`daemon.relay`、CORS 設定。
 

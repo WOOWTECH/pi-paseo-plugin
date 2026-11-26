@@ -22,7 +22,7 @@ function fixture(t) {
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const loc={home:dir,agentDir:path.join(dir,'agent'),stateDir:dir,runtimeDir:path.join(dir,'runtime'),paseoHome:path.join(dir,'daemon'),port:6769};
  const pkg=path.join(runtimeLayout.runtimeDirectory(loc),'node_modules/@getpaseo/cli');fs.mkdirSync(pkg,{recursive:true});fs.mkdirSync(loc.paseoHome);fs.mkdirSync(loc.agentDir);
- fs.writeFileSync(path.join(pkg,'package.json'),'{"version":"0.11.2"}');
+ fs.writeFileSync(path.join(pkg,'package.json'),JSON.stringify({version:runtimeLayout.PASEO_VERSION}));
  seedPidFiles(loc);runtimeLayout.markRuntimeReady(loc);
  fs.writeFileSync(path.join(loc.paseoHome,'.pi-paseo-owner.json'),JSON.stringify({installationId:'fixture',home:loc.paseoHome}));
  let state={installationId:'fixture',phase:'running',desiredEnabled:true},running=true,failRefresh=false,failState=false;

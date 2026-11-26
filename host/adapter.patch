@@ -1,9 +1,9 @@
 diff --git a/app/api/plugin-paseo/route.test.mjs b/app/api/plugin-paseo/route.test.mjs
 new file mode 100644
-index 0000000..0315651
+index 0000000..ab336fe
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.test.mjs
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,442 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import os from "node:os";
@@ -39,7 +39,7 @@ index 0000000..0315651
 +    async diagnostics() { calls.push("diagnostics"); return snapshot; },
 +    async listModels(provider) { calls.push(`models:${provider}`); return { models: [{ id: "fixture-model", label: "Fixture model" }] }; },
 +    async lifecycle(input) { calls.push(input.action); return { phase: "disabled" }; },
-+    async pair() { calls.push("pair"); return { url: "https://app.paseo.sh/pair#fixture-private-value" }; },
++    async pair() { calls.push("pair"); return { url: "https://app.paseo.sh/#offer=fixture-private-value", target: "paseo" }; },
 +    async saveConfig(config) { calls.push("config"); snapshot.settings = config; return { saved: true }; },
 +    ...options.api,
 +  };
@@ -117,26 +117,18 @@ index 0000000..0315651
 +  assert.equal(res.headers.get("referrer-policy"), "no-referrer");
 +});
 +
-+test("managed Web client route requires login and an enabled installed plugin", async (t) => {
-+  const f = fixture(t, { routeFile: "app/paseo-web/[[...path]]/route.ts", api: { web: async () => new Response("managed-client") } });
-+  assert.equal((await f.dispatch(f.request(undefined, { auth: false }))).status, 307);
-+  assert.deepEqual(f.calls, []);
-+  const result = await f.dispatch(f.request());
-+  assert.equal(result.status, 200);
-+  assert.equal(await result.text(), "managed-client");
-+  const disabled = fixture(t, { routeFile: "app/paseo-web/[[...path]]/route.ts", disabled: true });
-+  assert.equal((await disabled.dispatch(disabled.request())).status, 404);
-+  const old = fixture(t, { routeFile: "app/paseo-web/[[...path]]/route.ts" });
-+  assert.equal((await old.dispatch(old.request())).status, 503);
-+});
-+
-+test("pairing accepts only the fixed managed client path and keeps it out of status", async (t) => {
-+  const f = fixture(t, { api: { pair: async () => ({ url: "/paseo-web/welcome#private-marker" }) } });
++test("pairing accepts only the selected target's official app and keeps it out of status", async (t) => {
++  const f = fixture(t, { api: { pair: async () => ({ url: "https://app.paseo.sh/#offer=private-marker", target: "paseo" }) } });
 +  const response = await f.dispatch(f.request({ action: "pair" }));
 +  assert.equal(response.status, 200);
-+  assert.equal((await response.json()).url, "/paseo-web/welcome#private-marker");
++  assert.equal((await response.json()).url, "https://app.paseo.sh/#offer=private-marker");
 +  assert.equal(response.headers.get("cache-control"), "private, no-store");
 +  assert.doesNotMatch(await (await f.dispatch(f.request())).text(), /private-marker/);
++  // The bundled /paseo-web client is retired: a link to it is refused, without echoing it.
++  const retired = fixture(t, { api: { pair: async () => ({ url: "/paseo-web/welcome#offer=private-marker", target: "paseo" }) } });
++  const refused = await retired.dispatch(retired.request({ action: "pair" }));
++  assert.equal(refused.status, 502);
++  assert.doesNotMatch(await refused.text(), /private-marker/);
 +});
 +
 +test("Paseo rejects malformed inputs before discovering packages or invoking runtime", async (t) => {
@@ -427,12 +419,39 @@ index 0000000..0315651
 +    assert.doesNotMatch(await denied.text(), /#offer=/);
 +  }
 +});
++
++test("connection API saves the agent collaboration switch only as a boolean", async t => {
++  const f = fixture(t);
++  for (const agentCollaboration of [true, false]) {
++    const saved = await f.dispatch(f.request({ action: "config", config: { name: "Pi", target: "paseo", agentCollaboration } }));
++    assert.equal(saved.status, 200);
++    assert.deepEqual((await saved.json()).configuration, { name: "Pi", target: "paseo", agentCollaboration });
++  }
++  const before = f.calls.length;
++  for (const agentCollaboration of ["true", 1, null]) {
++    const invalid = await f.dispatch(f.request({ action: "config", config: { agentCollaboration } }));
++    assert.equal(invalid.status, 400);
++  }
++  assert.equal(f.calls.length, before);
++});
++
++test("connection API returns only a validated agent-collaboration outcome", async t => {
++  const f = fixture(t);
++  for (const [returned, expected] of [["applied", "applied"], ["next-start", "next-start"], ["restart-required", "restart-required"], ["unchanged", "unchanged"], ["/secret/path", undefined], [undefined, undefined]]) {
++    f.api.saveConfig = async (config) => { f.calls.push("config"); f.snapshot.settings = config; return { saved: true, ...(returned === undefined ? {} : { agentCollaborationApplied: returned }) }; };
++    const saved = await f.dispatch(f.request({ action: "config", config: { agentCollaboration: true } }));
++    assert.equal(saved.status, 200);
++    const body = await saved.json();
++    assert.equal(body.agentCollaborationApplied, expected, String(returned));
++    assert.doesNotMatch(JSON.stringify(body), /secret/);
++  }
++});
 diff --git a/app/api/plugin-paseo/route.ts b/app/api/plugin-paseo/route.ts
 new file mode 100644
-index 0000000..c4d449c
+index 0000000..69af13e
 --- /dev/null
 +++ b/app/api/plugin-paseo/route.ts
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,110 @@
 +import { NextResponse } from "next/server";
 +import { readJsonObject, RequestBodyError } from "@/lib/json-request";
 +import { homedir } from "node:os";
@@ -443,7 +462,7 @@ index 0000000..c4d449c
 +import { configuredPaseoPackages, loadPaseoHostApi } from "@/lib/paseo-plugin";
 +import { paseoLifecycleResult } from "@/lib/paseo-plugin-lifecycle";
 +import { serializePluginPackageOperation } from "@/lib/plugin-package-lock";
-+import { isConnectionTarget, paseoDiagnosticChecks, paseoModelCatalog, paseoPublicStatus, readPaseoConfig, safePaseoPairUrl } from "@/lib/paseo-ui";
++import { agentCollaborationResult, isConnectionTarget, paseoDiagnosticChecks, paseoModelCatalog, paseoPublicStatus, readPaseoConfig, safePaseoPairUrl } from "@/lib/paseo-ui";
 +
 +export const dynamic = "force-dynamic";
 +export const runtime = "nodejs";
@@ -464,17 +483,17 @@ index 0000000..c4d449c
 +
 +async function context(cwd: unknown) {
 +  // A directory named by the client must be one Pi Web already serves. The server's own fallback (PI_PASEO_CWD, else
-+  // the user's home) is trusted: the managed Web client route and startup recovery already read it without that
-+  // check, and requiring it made this panel unreachable on a fresh install that has no conversation and no
-+  // selected project (the project picker only registers a child directory of home).
++  // the user's home) is trusted: startup recovery already reads it without that check, and requiring it made this
++  // panel unreachable on a fresh install that has no conversation and no selected project (the project picker only
++  // registers a child directory of home).
 +  const requested = typeof cwd === "string" && cwd ? cwd : undefined;
 +  const configured = process.env.PI_PASEO_CWD;
 +  const directory = requested ?? (configured || homedir());
 +  if (!validCwd(directory) || !directoryExists(directory)) return null;
 +  const served = isExistingFilePathAllowed(directory, await getAllowedFileRoots());
 +  if (!served && requested) return null;
-+  // Outside the served roots only the global package is read, like the managed Web client route, unless the
-+  // operator named a project explicitly with PI_PASEO_CWD.
++  // Outside the served roots only the global package is read, unless the operator named a project explicitly
++  // with PI_PASEO_CWD.
 +  const packages = configuredPaseoPackages(directory, !served && !configured);
 +  const target = packages.find((pkg) => !pkg.disabled) ?? packages[0];
 +  if (!target) return null;
@@ -503,7 +522,7 @@ index 0000000..c4d449c
 +    if (!validCwd(body.cwd)) return response({ error: "Invalid working directory" }, 400);
 +    if (body.action === "models" && (typeof body.provider !== "string" || !["claude", "codex", "pi"].includes(body.provider))) return response({ error: "Unsupported provider" }, 400);
 +    const config = body.action === "config" ? readPaseoConfig(body.config) : undefined;
-+    if (body.action === "config" && !config) return response({ error: "設定只接受有效的主機備註與連線標的。" }, 400);
++    if (body.action === "config" && !config) return response({ error: "設定只接受有效的主機備註、連線標的與代理協作開關。" }, 400);
 +    const operation = async () => {
 +      const current = await context(body.cwd);
 +      if (!current) return response({ error: "Agent Connect 插件尚未安裝，或工作目錄無法存取。" }, 404);
@@ -525,8 +544,10 @@ index 0000000..c4d449c
 +        return response({ url, target: pairTarget, ...(typeof result.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(result.expiresAt) ? { expiresAt: result.expiresAt } : {}) });
 +      }
 +      if (body.action === "config") {
-+        await api.saveConfig(config!);
-+        return response(await publicStatus());
++        const saved = await api.saveConfig(config!);
++        // Only the validated outcome of a collaboration change crosses the boundary.
++        const applied = agentCollaborationResult(saved?.agentCollaborationApplied);
++        return response({ ...await publicStatus(), ...(applied ? { agentCollaborationApplied: applied } : {}) });
 +      }
 +      if (body.action === "activate" && target.disabled) return response({ error: "請先在插件設定啟用 Agent Connect。" }, 409);
 +      const result = await api.lifecycle({ action: body.action === "disable" ? "disable" : "enable", cwd, source: target.source, scope: target.scope, packages: body.action === "disable" ? [] : packages });
@@ -924,35 +945,6 @@ index 1c0670c..851a3b9 100644
 +    return response({ error: "Plugin operation could not be completed; check installation and settings" }, { status: 500 });
    }
  }
-diff --git a/app/paseo-web/[[...path]]/route.ts b/app/paseo-web/[[...path]]/route.ts
-new file mode 100644
-index 0000000..3087ee9
---- /dev/null
-+++ b/app/paseo-web/[[...path]]/route.ts
-@@ -0,0 +1,23 @@
-+import { homedir } from "node:os";
-+import { configuredPaseoPackages, loadPaseoHostApi } from "@/lib/paseo-plugin";
-+import { isApiRequestHostAllowed } from "@/lib/request-security";
-+
-+export const dynamic = "force-dynamic";
-+export const runtime = "nodejs";
-+const headers = { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" };
-+
-+export async function GET(request: Request) {
-+  if (!isApiRequestHostAllowed(request)) return new Response("Untrusted request", { status: 403, headers });
-+  try {
-+    const directory = process.env.PI_PASEO_CWD || homedir();
-+    const pkg = configuredPaseoPackages(directory, !process.env.PI_PASEO_CWD).find((entry) => !entry.disabled);
-+    if (!pkg) return new Response("請先在插件設定啟用 Paseo。", { status: 404, headers });
-+    const api = await loadPaseoHostApi(pkg);
-+    if (!api.web) return new Response("請更新 Paseo 插件以啟用修正版網頁。", { status: 503, headers });
-+    return await api.web(request);
-+  } catch {
-+    return new Response("Paseo 網頁尚未就緒，請到 Pi Web 設定 > 插件檢查服務。", { status: 503, headers });
-+  }
-+}
-+
-+export const HEAD = GET;
 diff --git a/app/paseo/setup/page.tsx b/app/paseo/setup/page.tsx
 new file mode 100644
 index 0000000..fa8d06c
@@ -1004,10 +996,10 @@ index c50b18f..1abc647 100644
  
 diff --git a/components/PaseoPluginPanel.behavior.test.mjs b/components/PaseoPluginPanel.behavior.test.mjs
 new file mode 100644
-index 0000000..0e5ef85
+index 0000000..13a5fb1
 --- /dev/null
 +++ b/components/PaseoPluginPanel.behavior.test.mjs
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,408 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import { fileURLToPath } from "node:url";
@@ -1048,7 +1040,7 @@ index 0000000..0e5ef85
 +      }
 +    },
 +  };
-+  const blocks = Object.fromEntries(["ConfigButton", "ConfigDetailActions", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigFooterStatus", "ConfigSectionTitle"].map((name) => [name, name]));
++  const blocks = Object.fromEntries(["ConfigButton", "ConfigDetailActions", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigFooterStatus", "ConfigSectionTitle", "ConfigSwitch"].map((name) => [name, name]));
 +  const sandbox = vm.createContext({
 +    fetch: async (url, options) => { requests.push({ url, options }); return fetch ? fetch(url, options) : Response.json(status); },
 +    document: { hidden: false }, navigator: {}, console, AbortController, Date: { now: () => now },
@@ -1252,7 +1244,7 @@ index 0000000..0e5ef85
 +});
 +
 +test("Paseo pairing lives in plugin Settings without a conversation shortcut", async (t) => {
-+  const f = fixture(t, { fetch: async (_url, options) => Response.json(options?.method === "POST" ? { url: "/paseo-web/welcome#fixture-private" } : { enabled: true, packageEnabled: true, daemon: { healthy: true } }) });
++  const f = fixture(t, { fetch: async (_url, options) => Response.json(options?.method === "POST" ? { url: "https://app.paseo.sh/#offer=fixture-private", target: "paseo" } : { enabled: true, packageEnabled: true, daemon: { healthy: true } }) });
 +  await f.settle();
 +  assert.equal(f.button("產生配對連結").props.disabled, false);
 +  assert.doesNotMatch(f.text(), /開啟初始化對話|設定 Paseo/);
@@ -1260,7 +1252,7 @@ index 0000000..0e5ef85
 +  f.button("產生配對連結").props.onClick();
 +  await f.settle();
 +  assert.deepEqual(f.requests.filter((request) => request.options?.method === "POST").map((request) => JSON.parse(request.options.body).action), ["pair"]);
-+  assert.ok(f.elements().some((element) => element.type === "a" && element.props?.href === "/paseo-web/welcome#fixture-private"));
++  assert.ok(f.elements().some((element) => element.type === "a" && element.props?.href === "https://app.paseo.sh/#offer=fixture-private"));
 +});
 +
 +test("target selection stays unsaved through polling and blocks pairing until applied", async t => {
@@ -1330,24 +1322,103 @@ index 0000000..0e5ef85
 +  assert.equal(f.elements().find(node => node.type === "input").props.value, "Pi Agent");
 +});
 +
-+test("Paseo pairing waits for its local web client while brand pairing is independent", async t => {
-+  for (const target of ["paseo", "apporo"]) {
++test("every target pairs once the service is ready and opens its official app", async t => {
++  for (const [target, appUrl] of [["paseo", "https://app.paseo.sh/"], ["woowtech", "https://smart.woowtech.io/"], ["apporo", "https://smart.apporo.ai/"]]) {
++    // An older runtime may still report the retired bundled client; it no longer gates pairing.
 +    const f = fixture(t, { status: { enabled: true, configuration: { target }, daemon: { healthy: true }, webClient: { ready: false } } });
 +    await f.settle();
-+    assert.equal(f.button("產生配對連結").props.disabled, target === "paseo");
++    assert.equal(f.button("產生配對連結").props.disabled, false, target);
++    assert.ok(f.elements().some((element) => element.type === "a" && element.props?.href === appUrl), target);
++    assert.doesNotMatch(f.text(), /修正版 Paseo 網頁|Paseo 網頁準備中|paseo-web/);
 +  }
++});
++
++test("agent collaboration starts off, explains the risk, survives polling and saves on request", async t => {
++  let saved = false;
++  const bodies = [];
++  const f = fixture(t, { fetch: async (_url, options) => {
++    let applied;
++    if (options?.method === "POST") {
++      const body = JSON.parse(options.body);
++      bodies.push(body);
++      if (body.action === "config" && body.config.agentCollaboration !== undefined) { saved = body.config.agentCollaboration; applied = "applied"; }
++    }
++    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: saved }, daemon: { healthy: true }, ...(applied ? { agentCollaborationApplied: applied } : {}) });
++  } });
++  await f.settle();
++  const toggle = () => f.elements().find(node => node.type === "ConfigSwitch");
++  assert.equal(toggle().props.checked, false);
++  assert.equal(toggle().props.label, "允許代理彼此協作");
++  assert.equal(toggle().props.describedBy, "paseo-agent-collaboration-risk");
++  assert.ok(f.elements().find(node => node.props?.id === "paseo-agent-collaboration-risk"), "the risk text is the switch description");
++  for (const phrase of [/建立代理、終端機和排程/, /任何代理/, /替它批准權限請求/, /終端機可以直接執行指令，不經權限確認/, /已建立的排程不會自動停止/]) assert.match(f.text(), phrase);
++  toggle().props.onChange(true); f.render();
++  for (const poll of f.timers.values()) poll();
++  await f.settle();
++  assert.equal(toggle().props.checked, true, "a poll keeps the unsaved draft");
++  assert.match(f.text(), /代理協作設定尚未儲存/);
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Pi", target: "paseo", agentCollaboration: true });
++  assert.equal(toggle().props.checked, true);
++  assert.doesNotMatch(f.text(), /尚未儲存/);
++  assert.match(f.text(), /代理協作已開啟：之後新開的對話才有協作工具/);
++  toggle().props.onChange(false); f.render();
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.equal(saved, false);
++  assert.match(f.text(), /代理協作已關閉/);
++  assert.match(f.text(), /請停止再啟動 Agent Connect 服務，並檢查 Paseo 裡的排程/);
++});
++
++test("a stale tab saving its name never sends the collaboration value it last saw", async t => {
++  const bodies = [];
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") bodies.push(JSON.parse(options.body));
++    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: true }, daemon: { healthy: true } });
++  } });
++  await f.settle();
++  const input = f.elements().find(node => node.type === "input" && node.props.maxLength === 100);
++  input.props.onChange({ target: { value: "Renamed" } }); f.render();
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Renamed", target: "paseo" });
++  assert.equal(f.elements().find(node => node.type === "ConfigSwitch")?.props.checked, true, "the switch still shows the daemon value");
++  assert.doesNotMatch(f.text(), /代理協作已(開啟|關閉)/);
++});
++
++test("collaboration outcomes that did not reach the running daemon say what to do", async t => {
++  for (const [applied, message] of [["next-start", /下次啟動服務時套用/], ["restart-required", /服務沒有即時套用代理協作的變更；請停止再啟動/]]) {
++    const f = fixture(t, { fetch: async (_url, options) => Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi", agentCollaboration: options?.method === "POST" }, daemon: { healthy: true }, ...(options?.method === "POST" ? { agentCollaborationApplied: applied } : {}) }) });
++    await f.settle();
++    f.elements().find(node => node.type === "ConfigSwitch").props.onChange(true); f.render();
++    f.button("儲存設定").props.onClick(); await f.settle();
++    assert.match(f.text(), message, applied);
++  }
++});
++
++test("a runtime that does not report agent collaboration gets no switch and saves name and target only", async t => {
++  const bodies = [];
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") bodies.push(JSON.parse(options.body));
++    return Response.json({ enabled: true, configuration: { target: "paseo", name: "Pi" }, daemon: { healthy: true } });
++  } });
++  await f.settle();
++  assert.equal(f.elements().some(node => node.type === "ConfigSwitch"), false);
++  assert.doesNotMatch(f.text(), /允許代理彼此協作/);
++  f.button("儲存設定").props.onClick(); await f.settle();
++  assert.deepEqual(bodies.find(body => body.action === "config").config, { name: "Pi", target: "paseo" });
++  assert.match(f.text(), /設定已儲存。/);
++  assert.doesNotMatch(f.text(), /代理協作已/);
 +});
 diff --git a/components/PaseoPluginPanel.tsx b/components/PaseoPluginPanel.tsx
 new file mode 100644
-index 0000000..fa2ca3f
+index 0000000..d1e80bf
 --- /dev/null
 +++ b/components/PaseoPluginPanel.tsx
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,249 @@
 +"use client";
 +
 +import { useCallback, useEffect, useRef, useState } from "react";
-+import { ConfigButton, ConfigDetailActions, ConfigDetailGrid, ConfigDetailGridRow, ConfigFooterStatus, ConfigSectionTitle } from "./SettingsUi";
-+import { PASEO_APP_URL, PASEO_PROVIDERS, CONNECTION_TARGETS, connectionTarget, isConnectionTarget, type ConnectionTarget, paseoModelCatalog, paseoProviderLabel, paseoPublicStatus, safePaseoPairUrl, type PaseoModelCatalog, type PaseoPublicStatus } from "@/lib/paseo-ui";
++import { ConfigButton, ConfigDetailActions, ConfigDetailGrid, ConfigDetailGridRow, ConfigFooterStatus, ConfigSectionTitle, ConfigSwitch } from "./SettingsUi";
++import { PASEO_PROVIDERS, CONNECTION_TARGETS, connectionTarget, isConnectionTarget, type ConnectionTarget, paseoModelCatalog, paseoProviderLabel, paseoPublicStatus, safePaseoPairUrl, agentCollaborationResult, type PaseoConfigInput, type PaseoModelCatalog, type PaseoPublicStatus } from "@/lib/paseo-ui";
 +
 +const STATUS_FRESH_MS = 15_000;
 +
@@ -1357,7 +1428,7 @@ index 0000000..fa2ca3f
 +  not_installed: "尚未安裝", stopped: "服務已停止", ready: "服務已啟動", running: "服務已啟動", paired: "已配對", complete: "服務已就緒", error: "需要處理", failed: "需要處理",
 +};
 +
-+async function request(cwd: string, action?: string, config?: Record<string, string>, provider?: string): Promise<Record<string, unknown>> {
++async function request(cwd: string, action?: string, config?: PaseoConfigInput, provider?: string): Promise<Record<string, unknown>> {
 +  const response = action
 +    ? await fetch("/api/plugin-paseo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, action, ...(config ? { config } : {}), ...(provider ? { provider } : {}) }), cache: "no-store" })
 +    : await fetch(`/api/plugin-paseo${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { cache: "no-store" });
@@ -1377,14 +1448,21 @@ index 0000000..fa2ca3f
 +  const [checks, setChecks] = useState<Array<{ name: string; status: string; message?: string }>>([]);
 +  const [name, setName] = useState("");
 +  const [target, setTarget] = useState<ConnectionTarget>("paseo");
++  const [collaboration, setCollaboration] = useState(false);
 +  const [catalogs, setCatalogs] = useState<PaseoModelCatalog[]>([]);
 +  const [statusCurrent, setStatusCurrent] = useState(false);
 +  const requestVersions = useRef({ workspace: 0, refresh: 0, action: 0, mutation: false, pendingRefresh: 0 });
 +  const nameEdited = useRef(false);
 +  const targetEdited = useRef(false);
++  const collaborationEdited = useRef(false);
 +  const observedTarget = useRef("paseo");
 +  const savedTarget = connectionTarget(status.configuration?.target ?? status.selectedTarget);
 +  const targetDirty = target !== savedTarget.id;
++  // Older Agent Connect runtimes do not report the switch; they get neither the
++  // control nor the field, so their saves stay exactly as before.
++  const collaborationSupported = typeof status.configuration?.agentCollaboration === "boolean";
++  const savedCollaboration = status.configuration?.agentCollaboration === true;
++  const collaborationDirty = collaborationSupported && collaboration !== savedCollaboration;
 +  const lastStatusAt = useRef(0);
 +
 +  const refresh = useCallback(async () => {
@@ -1404,6 +1482,7 @@ index 0000000..fa2ca3f
 +      setError("");
 +      if (!nameEdited.current) setName(next.configuration?.name ?? "");
 +      if (!targetEdited.current) setTarget(next.configuration?.target ?? next.selectedTarget ?? "paseo");
++      if (!collaborationEdited.current) setCollaboration(next.configuration?.agentCollaboration === true);
 +    } catch (failure) {
 +      if (workspace !== versions.workspace || version !== versions.refresh) return;
 +      setStatusCurrent(false);
@@ -1421,7 +1500,9 @@ index 0000000..fa2ca3f
 +    versions.mutation = false;
 +    nameEdited.current = false;
 +    targetEdited.current = false;
++    collaborationEdited.current = false;
 +    setTarget("paseo");
++    setCollaboration(false);
 +    observedTarget.current = "paseo";
 +    lastStatusAt.current = 0;
 +    setPairUrl(null); setChecks([]); setCatalogs([]); setName(""); setStatus({}); setStatusCurrent(false); setBusy(""); setError(""); setNotice("");
@@ -1452,7 +1533,9 @@ index 0000000..fa2ca3f
 +    setError("");
 +    setNotice("");
 +    try {
-+      const config = kind === "config" ? { name: name.trim(), target } : undefined;
++      // Sent only after the user touched the switch: a stale tab saving its name must not flip the daemon.
++      const sendCollaboration = kind === "config" && collaborationSupported && collaborationEdited.current;
++      const config = kind === "config" ? { name: name.trim(), target, ...(sendCollaboration ? { agentCollaboration: collaboration } : {}) } : undefined;
 +      const result = await request(cwd, kind, config, provider);
 +      if (!current()) return;
 +      if (kind === "pair") {
@@ -1475,8 +1558,16 @@ index 0000000..fa2ca3f
 +        }));
 +        setNotice("診斷已更新。提供者仍需各自完成登入與實際對話驗證。");
 +      } else {
-+        if (kind === "config") { nameEdited.current = false; targetEdited.current = false; }
-+        setNotice(kind === "config" ? "設定已儲存。" : kind === "disable" ? "已要求停止 Agent Connect 服務。" : "Agent Connect 服務已排入背景啟動；可在此頁查看狀態並配對。" );
++        if (kind === "config") { nameEdited.current = false; targetEdited.current = false; collaborationEdited.current = false; }
++        const applied = agentCollaborationResult(result.agentCollaborationApplied);
++        const turnedOn = paseoPublicStatus(result).configuration?.agentCollaboration === true;
++        setNotice(kind !== "config" ? (kind === "disable" ? "已要求停止 Agent Connect 服務。" : "Agent Connect 服務已排入背景啟動；可在此頁查看狀態並配對。")
++          : applied === "applied" ? (turnedOn
++            ? "設定已儲存。代理協作已開啟：之後新開的對話才有協作工具，已開著的對話維持原樣。"
++            : "設定已儲存。代理協作已關閉：之後新開的對話不再有協作工具。已在執行的代理和已建立的排程不受影響；要立即全部停用，請停止再啟動 Agent Connect 服務，並檢查 Paseo 裡的排程。")
++          : applied === "next-start" ? "設定已儲存。代理協作的變更會在下次啟動服務時套用。"
++          : applied === "restart-required" ? "設定已儲存，但服務沒有即時套用代理協作的變更；請停止再啟動 Agent Connect 服務。"
++          : "設定已儲存。");
 +      }
 +      versions.mutation = false;
 +      await refresh();
@@ -1488,7 +1579,6 @@ index 0000000..fa2ca3f
 +
 +  const packageDisabled = disabled || status.packageEnabled === false;
 +  const serviceReady = statusCurrent && !packageDisabled && status.enabled !== false && status.daemon?.healthy === true && status.phase !== "restart_required" && !status.configurationPending && !targetDirty;
-+  const pairingReady = serviceReady && (savedTarget.id !== "paseo" || !status.webClient || status.webClient.ready);
 +  const mutationBusy = Boolean(busy) && !["diagnose", "models"].includes(busy);
 +  return (
 +    <section className="paseo-plugin-panel" aria-label="Agent Connect 連線設定">
@@ -1515,10 +1605,9 @@ index 0000000..fa2ca3f
 +        <ConfigButton onClick={() => void action("diagnose")} disabled={Boolean(busy)}>{busy === "diagnose" ? "診斷中…" : "檢查診斷"}</ConfigButton>
 +        <ConfigButton onClick={() => void action("activate")} disabled={Boolean(busy) || packageDisabled}>{busy === "activate" ? "啟動中…" : "啟動服務"}</ConfigButton>
 +        <ConfigButton onClick={() => void action("disable")} disabled={mutationBusy || packageDisabled || (status.enabled === false && status.daemon?.running !== true)}>{busy === "disable" ? "停止中…" : "停止 Agent Connect 服務"}</ConfigButton>
-+        <a href={savedTarget.id === "paseo" && status.webClient ? PASEO_APP_URL : savedTarget.appUrl} target="_blank" rel="noopener noreferrer" className="config-button config-button-secondary config-button-default">開啟 {savedTarget.label}</a>
++        <a href={savedTarget.appUrl} target="_blank" rel="noopener noreferrer" className="config-button config-button-secondary config-button-default">開啟 {savedTarget.label}</a>
 +      </ConfigDetailActions>
 +      {packageDisabled && <p style={{ fontSize: 12, margin: 0 }}>請先在 Pi Web 插件設定啟用 Agent Connect，再進行配對。</p>}
-+      {savedTarget.id === "paseo" && status.webClient && <p style={{ fontSize: 12, margin: 0 }}>{status.webClient.ready ? "修正版 Paseo 網頁已就緒。" : "Paseo 網頁準備中；請按「啟動服務」。"}</p>}
 +          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
 +            <ConfigSectionTitle>連線設定</ConfigSectionTitle>
 +            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>連線標的
@@ -1533,6 +1622,16 @@ index 0000000..fa2ca3f
 +            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>主機備註（僅供此設定頁使用）
 +              <input className="config-add-source-input" value={name} onChange={(event) => { nameEdited.current = true; setName(event.target.value); }} maxLength={100} placeholder="例如：Pi Agent 主機" disabled={Boolean(busy)} />
 +            </label>
++            {collaborationSupported && <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
++              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
++                <ConfigSwitch checked={collaboration} disabled={Boolean(busy)} label="允許代理彼此協作" describedBy="paseo-agent-collaboration-risk" onChange={(checked) => { collaborationEdited.current = true; setCollaboration(checked); }} />
++                <span>允許代理彼此協作（預設關閉）</span>
++              </div>
++              <p id="paseo-agent-collaboration-risk" style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.7, margin: 0 }}>
++                開啟後，透過 Agent Connect 執行的代理可以使用 Paseo 的管理工具：建立代理、終端機和排程，對這台主機上任何代理傳訊息、切換它的權限模式、替它批准權限請求。終端機可以直接執行指令，不經權限確認。只要有一段對話被惡意內容誘導，就可能藉此控制這台主機上的其他對話，所以只在信任這台主機上所有對話內容時開啟。變更只影響之後新開的對話；關閉時，已在執行的代理和已建立的排程不會自動停止。
++              </p>
++              {collaborationDirty && <p role="status" style={{ fontSize: 12, margin: 0 }}>代理協作設定尚未儲存。</p>}
++            </div>}
 +            {cwd && <p style={{ fontSize: 12, margin: 0, overflowWrap: "anywhere" }}>工作目錄：{cwd}</p>}
 +            <ConfigDetailActions><ConfigButton onClick={() => void action("config")} disabled={Boolean(busy)}>{busy === "config" ? "儲存中…" : "儲存設定"}</ConfigButton></ConfigDetailActions>
 +          </div>
@@ -1540,7 +1639,7 @@ index 0000000..fa2ca3f
 +            <ConfigSectionTitle>連接 {savedTarget.label}</ConfigSectionTitle>
 +            <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>透過 {savedTarget.label} 的 relay 加密配對。產生連結後開啟 {savedTarget.label}，接著選擇這台主機、提供者與模型。</p>
 +            <ConfigDetailActions>
-+              <ConfigButton variant="primary" onClick={() => void action("pair")} disabled={Boolean(busy) || !pairingReady}>{busy === "pair" ? "產生中…" : "產生配對連結"}</ConfigButton>
++              <ConfigButton variant="primary" onClick={() => void action("pair")} disabled={Boolean(busy) || !serviceReady}>{busy === "pair" ? "產生中…" : "產生配對連結"}</ConfigButton>
 +              {pairUrl && <a href={pairUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="config-button config-button-secondary config-button-default">使用配對連結開啟 {savedTarget.label}</a>}
 +              {pairUrl && <ConfigButton onClick={() => {
 +                void (navigator.clipboard?.writeText(new URL(pairUrl, window.location.href).href) ?? Promise.reject()).then(() => setNotice(`配對連結已複製。請只交給你自己的 ${savedTarget.label} 裝置。`), () => setError("無法存取剪貼簿，請使用配對按鈕開啟連線平台。"));
@@ -1604,7 +1703,7 @@ index 83fddc9..53252fc 100644
                                {updateStatuses[packageKey(pkg)]?.state === "update-available" && (
                                  <span title={t("i18n.updateAvailable")} className="skill-update-indicator">
 diff --git a/docs/agents/settings-ui.md b/docs/agents/settings-ui.md
-index 274b438..cf87cd8 100644
+index 274b438..8e3a406 100644
 --- a/docs/agents/settings-ui.md
 +++ b/docs/agents/settings-ui.md
 @@ -2,6 +2,7 @@
@@ -1624,7 +1723,7 @@ index 274b438..cf87cd8 100644
 +
 +- Settings > Plugins uses its existing `.config-detail` scroller for Paseo. Keep the Paseo panel in that detail area without a nested vertical scroller. Verify physical touch/wheel access to bottom controls, expanded catalogs and back to the heading with the mobile scroll regression against a deployed Settings > Plugins panel.
 +
-+- Agent Connect is the display name of the existing `@woowtech/pi-paseo` package. Keep package identity, routes, tool IDs, and persisted keys compatible. Its selector accepts only `paseo`, `woowtech`, and `apporo`; absent legacy settings mean Paseo. Draft selection must not change the saved platform's app link or permit pairing. A target change clears visible pairing/model results; `configurationPending` blocks pairing until the user stops and starts the service. Keep the selected target intact across polls and failed saves. Validate pairing against the receipt's target on the server and the saved target in the browser, using fixed origins and strict offer entry paths. Never project runtime state, secrets, or arbitrary target URLs into public status.
++- Agent Connect is the display name of the existing `@woowtech/pi-paseo` package. Keep package identity, routes, tool IDs, and persisted keys compatible. Its selector accepts only `paseo`, `woowtech`, and `apporo`; absent legacy settings mean Paseo. Draft selection must not change the saved platform's app link or permit pairing. A target change clears visible pairing/model results; `configurationPending` blocks pairing until the user stops and starts the service. Keep the selected target intact across polls and failed saves. Validate pairing against the receipt's target on the server and the saved target in the browser, using fixed origins and strict offer entry paths. Never project runtime state, secrets, or arbitrary target URLs into public status. The 允許代理彼此協作 switch (`agentCollaboration`, a strict boolean) gives agents Paseo's management tools: agents, terminals and schedules, and messaging, mode changes and permission approvals for any agent on the host; terminals run commands without permission prompts. It stays off by default and its visible risk text is the switch's description. The status shows the daemon's actual value (a Paseo client can change it too). A save sends the field only after the user touched the switch, so a stale tab saving a name cannot flip it, and the notice follows the runtime's validated `agentCollaborationApplied` outcome. Turning it off reaches newly opened conversations only; say that running agents and existing schedules need a service stop and start and a schedule check. The switch appears only when the runtime reports the setting, so an older runtime keeps the exact name/target save.
 diff --git a/e2e/paseo-mobile-scroll-runner.mjs b/e2e/paseo-mobile-scroll-runner.mjs
 new file mode 100644
 index 0000000..342a54b
@@ -1866,10 +1965,10 @@ index 0000000..5fba2c0
 +}
 diff --git a/lib/paseo-name.test.mjs b/lib/paseo-name.test.mjs
 new file mode 100644
-index 0000000..9e535fd
+index 0000000..235f4e6
 --- /dev/null
 +++ b/lib/paseo-name.test.mjs
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,65 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import os from "node:os";
@@ -1882,6 +1981,8 @@ index 0000000..9e535fd
 +
 +const root = path.resolve(process.env.PI_PASEO_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
 +const runtimeLayout = await import(pathToFileURL(path.join(root, "src/runtime-layout.mjs")).href);
++// The managed Paseo version follows the plugin under test (0.1.24 moved it to 0.17.4).
++const paseoVersion = runtimeLayout.PASEO_VERSION ?? "0.11.2";
 +const require = createRequire(import.meta.url);
 +
 +test("the host note remains visible without entering the strict Paseo daemon configuration", async (t) => {
@@ -1890,7 +1991,7 @@ index 0000000..9e535fd
 +  const loc = { home, agentDir: path.join(home, "agent"), stateDir: path.join(home, "state"), runtimeDir: path.join(home, "runtime"), paseoHome: path.join(home, "daemon"), port: 6769 };
 +  const runtimeDir = runtimeLayout.runtimeDirectory(loc);
 +  for (const dir of [loc.stateDir, loc.paseoHome, path.join(runtimeDir, "node_modules/@getpaseo/cli"), path.join(runtimeDir, "node_modules/@getpaseo/server/dist/server/web-ui")]) fs.mkdirSync(dir, { recursive: true });
-+  fs.writeFileSync(path.join(runtimeDir, "node_modules/@getpaseo/cli/package.json"), '{"version":"0.11.2"}');
++  fs.writeFileSync(path.join(runtimeDir, "node_modules/@getpaseo/cli/package.json"), JSON.stringify({ version: paseoVersion }));
 +  fs.writeFileSync(path.join(runtimeDir, "node_modules/@getpaseo/server/dist/server/web-ui/index.html"), "fixture");
 +  // This non-Linux VM tests display preferences, with no real official daemon.
 +  // Real patch/readiness/proof validation belongs to the plugin runtime tests.
@@ -1901,12 +2002,11 @@ index 0000000..9e535fd
 +  const writeRecord = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
 +  const stubs = {
 +    "./state.mjs": { RuntimeError, locations: () => loc, readState: () => state, updateState: (value) => (state = { ...state, ...value }), withRuntimeLock: async (fn) => fn(), processIdentity: () => "fixture", privateDirectory: (dir) => fs.mkdirSync(dir, { recursive: true }), atomicJson: writeRecord },
-+    "./process.mjs": { findExecutable: () => assert.fail("No installers may execute"), runProcess: async (_command, args) => { assert.ok(args.includes("--version"), "Only fixture version detection is allowed"); assert.equal(args[0], path.join(runtimeDir, "node_modules/@getpaseo/cli/bin/paseo")); return "0.11.2"; } },
++    "./process.mjs": { findExecutable: () => assert.fail("No installers may execute"), runProcess: async (_command, args) => { assert.ok(args.includes("--version"), "Only fixture version detection is allowed"); assert.equal(args[0], path.join(runtimeDir, "node_modules/@getpaseo/cli/bin/paseo")); return paseoVersion; } },
 +    "./runtime-layout.mjs": { ...runtimeLayout, runtimeReady: () => true, markRuntimeReady: () => {} },
 +    "./provider-launchers.mjs": { resolveProviderLaunchers: async () => ({}), configureProviders: () => ({}) },
 +    "./onboarding.mjs": { readRecord, writeRecord },
 +    "./supervisor.mjs": {},
-+    "./web-client.mjs": { WEB_BASE_PATH: "/paseo-web", ensureWebClient: async () => {}, webClientStatus: () => ({ ready: false }) },
 +  };
 +  const client = { getDaemonStatus: async () => ({ providers: [], relay: { enabled: true } }), reloadDaemonConfig: async () => ({ appliedPaths: ["agents.providers"], restartRequiredPaths: [], overrideControlledPaths: [] }), close: async () => {} };
 +  const sandbox = vm.createContext({ process: { env: { HOME: home, PI_CODING_AGENT_DIR: loc.agentDir, PI_PASEO_STATE_DIR: loc.stateDir, PI_PASEO_RUNTIME_DIR: loc.runtimeDir }, versions: process.versions, platform: "fixture", getuid: () => 1000, execPath: process.execPath }, setTimeout, clearTimeout, console });
@@ -2022,10 +2122,10 @@ index 0000000..b8ab47d
 +});
 diff --git a/lib/paseo-plugin-lifecycle.ts b/lib/paseo-plugin-lifecycle.ts
 new file mode 100644
-index 0000000..1149fd5
+index 0000000..7d92f43
 --- /dev/null
 +++ b/lib/paseo-plugin-lifecycle.ts
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,84 @@
 +/** A confirmed Pi package operation, after its settings write succeeded. */
 +export type PaseoLifecycleAction = "install" | "enable" | "update" | "disable" | "remove";
 +export const PASEO_PACKAGE_NAME = "@woowtech/pi-paseo";
@@ -2056,7 +2156,6 @@ index 0000000..1149fd5
 +  status: () => Promise<Record<string, unknown>>;
 +  diagnostics: () => Promise<Record<string, unknown>>;
 +  pair: () => Promise<{ url: string; target?: string; expiresAt?: string }>;
-+  web?: (request: Request) => Response | Promise<Response>;
 +  listModels?: (provider: string) => Promise<Record<string, unknown>>;
 +  saveConfig: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 +};
@@ -2113,10 +2212,10 @@ index 0000000..1149fd5
 +}
 diff --git a/lib/paseo-plugin.test.mjs b/lib/paseo-plugin.test.mjs
 new file mode 100644
-index 0000000..7aa302e
+index 0000000..2cd0f20
 --- /dev/null
 +++ b/lib/paseo-plugin.test.mjs
-@@ -0,0 +1,360 @@
+@@ -0,0 +1,359 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import path from "node:path";
@@ -2249,8 +2348,7 @@ index 0000000..7aa302e
 +      SettingsManager: { create: () => ({ projectTrusted: true, getGlobalSettings: () => ({ packages: globals.map(entry) }), getProjectSettings: () => ({ packages: projects.map(entry) }) }) },
 +    },
 +    "./runtime.mjs": runtime,
-+    "./connection-targets.mjs": { CONNECTION_TARGETS: [], connectionPreferences: () => ({ target: "paseo" }), connectionTarget: () => ({ openUrl: "/paseo-web" }) },
-+    "./web-client.mjs": { WEB_BASE_PATH: "/paseo-web", webClientStatus: () => ({ ready: false }) },
++    "./connection-targets.mjs": { CONNECTION_TARGETS: [], connectionPreferences: () => ({ target: "paseo" }), connectionTarget: () => ({ openUrl: "https://app.paseo.sh/" }) },
 +    "./state.mjs": { assertSafePath() {}, processIdentity: (pid) => processes.get(pid)?.identity ?? null },
 +    "./onboarding.mjs": {
 +      readRecord: (file) => ({ ...records.get(recordName(file)) }),
@@ -2591,20 +2689,20 @@ index 0000000..4106d1d
 +}
 diff --git a/lib/paseo-ui.test.mjs b/lib/paseo-ui.test.mjs
 new file mode 100644
-index 0000000..a72d766
+index 0000000..25fa186
 --- /dev/null
 +++ b/lib/paseo-ui.test.mjs
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,63 @@
 +import assert from "node:assert/strict";
 +import test from "node:test";
 +import { paseoDiagnosticChecks, paseoPublicStatus, readPaseoConfig, safePaseoPairUrl } from "./paseo-ui.ts";
 +
 +test("pairing opens only the official app and stays out of public status", () => {
-+  assert.equal(safePaseoPairUrl("/paseo-web/welcome#secret"), "/paseo-web/welcome#secret");
-+  for (const url of ["//evil.example/paseo-web/#secret", "/paseo-web/#secret", "/paseo-web/pair?redirect=evil#secret", "/paseo-web/../pair#secret", "/paseo-web/welcome#bad\nvalue", "/paseo-web/welcome#bad\\value"]) assert.equal(safePaseoPairUrl(url), null);
-+  assert.equal(safePaseoPairUrl("https://app.paseo.sh/pair#secret"), "https://app.paseo.sh/pair#secret");
-+  for (const url of ["javascript:alert(1)", "https://app.paseo.sh.evil.example/pair", "https://user:secret@app.paseo.sh", "http://app.paseo.sh", "https://app.paseo.sh:444"]) assert.equal(safePaseoPairUrl(url), null);
-+  assert.deepEqual(paseoPublicStatus({ phase: "ready", privateTimestamp: { readAt: 1234, value: "secret" }, statusReadAt: 1234, pairUrl: "secret", url: "secret", providers: [{ id: "codex", available: true, apiKey: "secret", status: "https://secret" }] }), { phase: "ready", providers: [{ id: "codex", available: true }] });
++  assert.equal(safePaseoPairUrl("https://app.paseo.sh/#offer=abc_DEF-123"), "https://app.paseo.sh/#offer=abc_DEF-123");
++  // The bundled /paseo-web client is retired; its links and any other entry are refused.
++  for (const url of ["/paseo-web/welcome#offer=x", "//evil.example/#offer=x", "https://app.paseo.sh/pair#offer=x", "https://app.paseo.sh/welcome#offer=x", "https://app.paseo.sh/#secret", "https://app.paseo.sh/#offer=x&next=evil", "https://app.paseo.sh/#offer=", "https://app.paseo.sh/?redirect=evil#offer=x", "https://app.paseo.sh/#offer=bad\nvalue", "https://app.paseo.sh/#offer=bad\\value"]) assert.equal(safePaseoPairUrl(url), null, url);
++  for (const url of ["javascript:alert(1)", "https://app.paseo.sh.evil.example/#offer=x", "https://user:secret@app.paseo.sh/#offer=x", "http://app.paseo.sh/#offer=x", "https://app.paseo.sh:444/#offer=x"]) assert.equal(safePaseoPairUrl(url), null, url);
++  assert.deepEqual(paseoPublicStatus({ phase: "ready", privateTimestamp: { readAt: 1234, value: "secret" }, statusReadAt: 1234, pairUrl: "secret", url: "secret", webClient: { ready: true, version: "0.13.0-woow.1" }, providers: [{ id: "codex", available: true, apiKey: "secret", status: "https://secret" }] }), { phase: "ready", providers: [{ id: "codex", available: true }] });
 +});
 +
 +test("configuration accepts only the official-relay display name", () => {
@@ -2632,14 +2730,14 @@ index 0000000..a72d766
 +  for (const target of [null, "", "other", "__proto__", {}, 1]) assert.equal(readPaseoConfig({ target }), null);
 +});
 +
-+test("branded pairing is bound to the selected target and exact offer entry", () => {
-+  for (const [target, origin] of [["woowtech", "https://smart.woowtech.io"], ["apporo", "https://smart.apporo.ai"]]) {
++test("pairing is bound to the selected target's official app and exact offer entry", () => {
++  const origins = { woowtech: "https://smart.woowtech.io", apporo: "https://smart.apporo.ai", paseo: "https://app.paseo.sh" };
++  for (const [target, origin] of Object.entries(origins)) {
 +    assert.equal(safePaseoPairUrl(`${origin}/#offer=abc_DEF-123`, target), `${origin}/#offer=abc_DEF-123`);
-+    for (const url of [`${origin}/pair#offer=x`, `${origin}/?redirect=x#offer=x`, `${origin}/#token=x`, `${origin}/#offer=x&next=evil`, `${origin}/#offer=`, "https://app.paseo.sh/#offer=x", "/paseo-web/welcome#offer=x"])
++    const others = Object.entries(origins).filter(([id]) => id !== target).map(([, other]) => `${other}/#offer=x`);
++    for (const url of [`${origin}/pair#offer=x`, `${origin}/?redirect=x#offer=x`, `${origin}/#token=x`, `${origin}/#offer=x&next=evil`, `${origin}/#offer=`, "/paseo-web/welcome#offer=x", ...others])
 +      assert.equal(safePaseoPairUrl(url, target), null, url);
 +  }
-+  assert.equal(safePaseoPairUrl("https://smart.apporo.ai/#offer=x", "woowtech"), null);
-+  assert.equal(safePaseoPairUrl("https://smart.woowtech.io/#offer=x", "apporo"), null);
 +  assert.equal(safePaseoPairUrl("https://smart.apporo.ai/#offer=x"), null);
 +});
 +
@@ -2649,16 +2747,24 @@ index 0000000..a72d766
 +  });
 +  assert.deepEqual(paseoPublicStatus({ settings: { target: "evil" }, selectedTarget: "evil", activeTarget: "evil", configurationPending: "yes" }), {});
 +});
++
++test("agent collaboration is an explicit boolean in settings and public status", () => {
++  assert.deepEqual(readPaseoConfig({ agentCollaboration: true }), { agentCollaboration: true });
++  assert.deepEqual(readPaseoConfig({ name: " Pi ", target: "woowtech", agentCollaboration: false }), { name: "Pi", target: "woowtech", agentCollaboration: false });
++  for (const value of ["true", 1, 0, null, {}, []]) assert.equal(readPaseoConfig({ agentCollaboration: value }), null, JSON.stringify(value));
++  assert.deepEqual(paseoPublicStatus({ settings: { target: "paseo", agentCollaboration: true } }).configuration, { target: "paseo", agentCollaboration: true });
++  assert.deepEqual(paseoPublicStatus({ settings: { target: "paseo", agentCollaboration: false } }).configuration, { target: "paseo", agentCollaboration: false });
++  for (const value of ["yes", 1, null]) assert.deepEqual(paseoPublicStatus({ settings: { target: "paseo", agentCollaboration: value } }).configuration, { target: "paseo" });
++});
 diff --git a/lib/paseo-ui.ts b/lib/paseo-ui.ts
 new file mode 100644
-index 0000000..a07cc53
+index 0000000..1054969
 --- /dev/null
 +++ b/lib/paseo-ui.ts
-@@ -0,0 +1,158 @@
-+/** Fixed local client; no caller-provided origins receive pairing material. */
-+export const PASEO_APP_URL = "/paseo-web";
+@@ -0,0 +1,166 @@
 +export const PASEO_PROVIDERS = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }, { id: "pi", label: "Pi" }] as const;
 +
++/** Fixed official apps; no caller-provided origins receive pairing material. */
 +export const CONNECTION_TARGETS = [
 +  { id: "woowtech", label: "Woowtech Smart", appUrl: "https://smart.woowtech.io/" },
 +  { id: "apporo", label: "Apporo Smart", appUrl: "https://smart.apporo.ai/" },
@@ -2673,11 +2779,9 @@ index 0000000..a07cc53
 +}
 +export function safePaseoPairUrl(value: unknown, target: unknown = "paseo"): string | null {
 +  if (!isConnectionTarget(target) || typeof value !== "string" || value.length > 16384 || /[\s\\]/.test(value)) return null;
-+  if (target === "paseo" && /^\/paseo-web\/welcome#[^\s\\]+$/.test(value)) return value;
 +  try {
 +    const url = new URL(value);
-+    if (url.origin !== new URL(connectionTarget(target).appUrl).origin || url.username || url.password || url.search || !url.hash) return null;
-+    if (target === "paseo") return ["/", "/pair"].includes(url.pathname) ? url.href : null;
++    if (url.origin !== new URL(connectionTarget(target).appUrl).origin || url.username || url.password || url.search) return null;
 +    return url.pathname === "/" && /^#offer=[A-Za-z0-9_-]+$/.test(url.hash) ? url.href : null;
 +  } catch { return null; }
 +}
@@ -2707,16 +2811,13 @@ index 0000000..a07cc53
 +  chatCheckedAt?: string;
 +  daemon?: { running?: boolean; healthy?: boolean; installed?: boolean; relayEnabled?: boolean; relayConnected?: boolean; relayVerified?: boolean; relayVerifiedAt?: string };
 +  providers?: PaseoProviderStatus[];
-+  configuration?: { name?: string; target?: ConnectionTarget };
++  configuration?: { name?: string; target?: ConnectionTarget; agentCollaboration?: boolean };
 +  selectedTarget?: ConnectionTarget; activeTarget?: ConnectionTarget; configurationPending?: boolean;
-+  webClient?: { ready: boolean; version?: string };
 +};
 +
 +/** Only named public fields cross the UI boundary; state and pairing never do. */
 +export function paseoPublicStatus(input: unknown): PaseoPublicStatus {
 +  const value = record(input), result: PaseoPublicStatus = {};
-+  const webClient = record(value.webClient);
-+  if (typeof webClient.ready === "boolean") result.webClient = { ready: webClient.ready, ...(text(webClient.version, 60) ? { version: text(webClient.version, 60) } : {}) };
 +  const acceptance = record(record(value.state).acceptance);
 +  const checkedAt = timestamp(value.chatCheckedAt ?? acceptance.checkedAt);
 +  if (checkedAt) result.chatCheckedAt = checkedAt;
@@ -2759,6 +2860,7 @@ index 0000000..a07cc53
 +  const name = text(config.name, 100);
 +  if (name) result.configuration = { name };
 +  if (isConnectionTarget(config.target)) result.configuration = { ...result.configuration, target: config.target };
++  if (typeof config.agentCollaboration === "boolean") result.configuration = { ...result.configuration, agentCollaboration: config.agentCollaboration };
 +  if (isConnectionTarget(value.selectedTarget)) result.selectedTarget = value.selectedTarget;
 +  if (isConnectionTarget(value.activeTarget)) result.activeTarget = value.activeTarget;
 +  if (typeof value.configurationPending === "boolean") result.configurationPending = value.configurationPending;
@@ -2783,11 +2885,19 @@ index 0000000..a07cc53
 +  }) : [] };
 +}
 +
-+export function readPaseoConfig(input: unknown): Record<string, string> | null {
++export type PaseoConfigInput = { name?: string; target?: ConnectionTarget; agentCollaboration?: boolean };
++/** How a saved agent-collaboration change reached the daemon, as the runtime reports it. */
++export const AGENT_COLLABORATION_RESULTS = ["applied", "unchanged", "next-start", "restart-required"] as const;
++export type AgentCollaborationResult = typeof AGENT_COLLABORATION_RESULTS[number];
++export function agentCollaborationResult(value: unknown): AgentCollaborationResult | undefined {
++  return (AGENT_COLLABORATION_RESULTS as readonly unknown[]).includes(value) ? value as AgentCollaborationResult : undefined;
++}
++
++export function readPaseoConfig(input: unknown): PaseoConfigInput | null {
 +  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
 +  const config = input as Record<string, unknown>;
-+  if (Object.keys(config).some((key) => !["name", "target"].includes(key))) return null;
-+  const result: Record<string, string> = {};
++  if (Object.keys(config).some((key) => !["name", "target", "agentCollaboration"].includes(key))) return null;
++  const result: PaseoConfigInput = {};
 +  if (config.target !== undefined) {
 +    if (!isConnectionTarget(config.target)) return null;
 +    result.target = config.target;
@@ -2797,6 +2907,11 @@ index 0000000..a07cc53
 +    const name = config.name.trim();
 +    if (name && !text(name, 100)) return null;
 +    result.name = name;
++  }
++  if (config.agentCollaboration !== undefined) {
++    // Only an explicit boolean opts agents into Paseo's agent-management tools.
++    if (typeof config.agentCollaboration !== "boolean") return null;
++    result.agentCollaboration = config.agentCollaboration;
 +  }
 +  return result;
 +}
@@ -3845,7 +3960,7 @@ index e1e903c..a97b299 100644
    }
  }
 diff --git a/proxy.ts b/proxy.ts
-index 1977e56..9b689cd 100644
+index 1977e56..2e489f4 100644
 --- a/proxy.ts
 +++ b/proxy.ts
 @@ -34,9 +34,9 @@ export function proxy(request: NextRequest) {
@@ -3874,4 +3989,4 @@ index 1977e56..9b689cd 100644
  }
  
 -export const config = { matcher: ["/", "/login", "/api/:path*"] };
-+export const config = { matcher: ["/", "/login", "/paseo/:path*", "/paseo-web/:path*", "/api/:path*"] };
++export const config = { matcher: ["/", "/login", "/paseo/:path*", "/api/:path*"] };

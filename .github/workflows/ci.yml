@@ -21,6 +21,8 @@ jobs:
       - run: npm audit --omit=dev
       - run: npm audit --omit=dev --prefix runtime
       - run: npm test
+      # Ubuntu's default umask for a user with a private group: upstream Paseo's paseo.pid is 0664.
+      - run: umask 002 && node --test tests/daemon-identity.test.mjs
       - run: node --test tests/smart-parity/*.test.mjs tests/smart-parity/provider/*.test.mjs tests/smart-parity/browser/*.test.mjs
       - run: node --test scripts/install-host.test.mjs
       - run: node --test scripts/bootstrap.test.mjs

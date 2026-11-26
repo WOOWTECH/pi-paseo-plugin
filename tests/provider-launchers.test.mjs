@@ -15,6 +15,8 @@ import { privateDirectory, RuntimeError } from '../src/state.mjs';
 import { PROVIDER_PACKAGES, providersPrefix, resolveProviderLaunchers, configureProviders } from '../src/provider-launchers.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 import * as runtimeLayout from '../src/runtime-layout.mjs';
+import { loadPersistedConfig } from './helpers/paseo-config.mjs';
+const config0174 = await loadPersistedConfig(runtimeLayout.PASEO_VERSION);
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-paseo-launchers-'));
@@ -206,7 +208,7 @@ test('runtime applies new private commands with the official reload API and repo
   const cliRoot = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/cli');
   const ui = path.join(runtimeLayout.runtimeDirectory(f.loc), 'node_modules/@getpaseo/server/dist/server/web-ui/index.html');
   fs.mkdirSync(cliRoot, { recursive: true }); fs.mkdirSync(path.dirname(ui), { recursive: true });
-  fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: '0.11.2' })); fs.writeFileSync(ui, 'fixture UI');
+  fs.writeFileSync(path.join(cliRoot, 'package.json'), JSON.stringify({ version: runtimeLayout.PASEO_VERSION })); fs.writeFileSync(ui, 'fixture UI');
   seedPidFiles(f.loc);runtimeLayout.markRuntimeReady(f.loc);
   let state = { installationId: 'owned-fixture', desiredEnabled: true, phase: 'running', daemonPid: 5000, daemonStartedAt: 'fixture-start', daemonRuntimeRevision: runtimeLayout.RUNTIME_REVISION };
   fs.writeFileSync(path.join(f.loc.paseoHome, '.pi-paseo-owner.json'), JSON.stringify({ installationId: state.installationId, home: f.loc.paseoHome }));
@@ -254,7 +256,7 @@ test('runtime applies new private commands with the official reload API and repo
         assert.equal(options.env.PASEO_RELAY_PUBLIC_ENDPOINT,'relay.paseo.sh:443');
         assert.equal(options.env.PASEO_RELAY_USE_TLS,'true');
         assert.equal(options.env.PASEO_RELAY_PUBLIC_USE_TLS,'true');
-        return '0.11.2';
+        return runtimeLayout.PASEO_VERSION;
       },
     };
     if (spec === './provider-launchers.mjs') return {
@@ -266,14 +268,15 @@ test('runtime applies new private commands with the official reload API and repo
     if (spec === './single-flight.mjs') return {singleFlight,daemonStatusWindow:createReadWindow()};
     if (spec === './runtime-layout.mjs') return runtimeLayout;
     if (spec === './lifecycle-timeouts.mjs') return lifecycleTimeouts;
+    // This test models a non-Linux provider reload, where the host's ps is not checked.
+    if (spec === './host-checks.mjs') return { checkProcessTable: async () => ({ checked: false }) };
     // This test models a non-Linux provider reload; Linux birth/transition
     // behavior is exercised with the actual identity module in daemon-identity.
     if (spec === './daemon-identity.mjs') return { observeOwnedInstance: async () => null, rememberOwnedInstance: async () => {}, recoverStaleInstance: () => assert.fail('no recovery on healthy provider reload') };
-    if (spec === './web-client.mjs') return { ensureWebClient: async () => {} };
     if (spec === './acceptance-agent.mjs' || spec === './acceptance-workspace.mjs') return {};
     if (spec.endsWith('/daemon-instance.js')) return { readDaemonInstance: async () => instance, stopDaemonInstance: () => assert.fail('no daemon stop') };
     if (spec.endsWith('/dist/utils/client.js')) return { connectToDaemon: async () => client };
-    if (spec.endsWith('/config.js')) return { savePersistedConfig: (_home, config) => fs.writeFileSync(configFile, JSON.stringify(config)) };
+    if (spec.endsWith('/server/config.js')) return config0174;
     if (spec === 'node:net') return { createServer: () => assert.fail('no live sockets') };
     return require(spec);
   };

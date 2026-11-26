@@ -2,7 +2,7 @@
 
 這些腳本是測試工具，不包含在 npm 套件中。它們會建立工作區、代理、測試 skill、全域 MCP 定義及主機內共享記憶，並產生計費模型回合。只可在已授權、由本次驗收擁有的隔離主機執行。先完成映像、資料卷、主機身分與憑證的外部驗證；這個目錄不負責部署、複製憑證或切換連線品牌。
 
-需要 Node 22.19+、Agent Connect 管理的 Paseo 0.11.2 runtime、啟用中的 shared-runtime 0.1.5，以及可使用兩個不同模型的 Claude Code、Codex、Pi。`PI_SHARED_PACKAGE_ROOT` 與 `PI_PASEO_PLUGIN_ROOT` 可覆寫套件位置；manifest 的 `root`、`cliRoot`、`daemonHome`、`mcpUrl` 可指定受測 runtime。MCP 如有要求驗證，使用環境變數 `PASEO_ACCEPTANCE_BEARER`，不得把憑證寫進 manifest 或命令列。
+需要 Node 22.19+、Agent Connect 管理的 Paseo runtime（0.1.24 起為 0.17.4）、啟用中的 shared-runtime 0.1.5，以及可使用兩個不同模型的 Claude Code、Codex、Pi。`PI_SHARED_PACKAGE_ROOT` 與 `PI_PASEO_PLUGIN_ROOT` 可覆寫套件位置；manifest 的 `root`、`cliRoot`、`daemonHome`、`mcpUrl` 可指定受測 runtime。MCP 如有要求驗證，使用環境變數 `PASEO_ACCEPTANCE_BEARER`，不得把憑證寫進 manifest 或命令列。
 
 ## 腳本與單元驗證
 

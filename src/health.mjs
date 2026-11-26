@@ -1,6 +1,7 @@
 const providers=['claude','codex','pi'];
 const safeCode=value=>/^[A-Z][A-Z0-9_]{0,63}$/.test(value||'')?value:null;
-/** A current operational check, separately reporting historical chat acceptance. */
+/** A current operational check, separately reporting historical chat acceptance.
+ * `codes` block readiness; `warnings` (status.warnings: Paseo works, but the operator should know) never do. */
 export function healthReport(status,{checkedAt=new Date().toISOString()}={}) {
  const s=status||{},codes=[];
  if(!s.installed)codes.push('NOT_INSTALLED');
@@ -16,7 +17,8 @@ export function healthReport(status,{checkedAt=new Date().toISOString()}={}) {
   if(!available)codes.push(`PROVIDER_${provider.toUpperCase()}_UNAVAILABLE`);
   return {provider,available,lastChatPassed:entry?.chatVerified===true};
  });
+ const warnings=[...new Set((Array.isArray(s.warnings)?s.warnings:[]).map(row=>safeCode(row?.code)).filter(Boolean))];
  const acceptance=s.state?.acceptance;
  const chatCheckedAt=typeof acceptance?.checkedAt==='string'&&Number.isFinite(Date.parse(acceptance.checkedAt))?acceptance.checkedAt:null;
- return {schemaVersion:1,checkedAt,ready:codes.length===0,codes:[...new Set(codes)],daemon:{running:s.daemon?.running===true,reachable:s.daemon?.reachable===true,relayEnabled:s.daemon?.relayEnabled===true},providers:rows,chatAcceptance:{passed:acceptance?.passed===true,checkedAt:chatCheckedAt,historical:true}};
+ return {schemaVersion:1,checkedAt,ready:codes.length===0,codes:[...new Set(codes)],warnings,daemon:{running:s.daemon?.running===true,reachable:s.daemon?.reachable===true,relayEnabled:s.daemon?.relayEnabled===true},providers:rows,chatAcceptance:{passed:acceptance?.passed===true,checkedAt:chatCheckedAt,historical:true}};
 }
