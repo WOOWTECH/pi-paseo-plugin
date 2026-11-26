@@ -3,16 +3,19 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Craft } from '../craft.mjs';
 import { evidenceStore } from '../evidence-store.mjs';
-import { contract, validateManifest, validatePairingReport, privateDirectory, readJson, writePrivate, acquireCraftProject } from './common.mjs';
+import { contract, validateManifest, validatePairingReport, privateDirectory, readJson, writePrivate, acquireCraftProject, validatedProductionContext } from './common.mjs';
+import { validateProductionReport } from '../production-scope.mjs';
 import { validateReportRuntime, runtimeBinding } from './runtime.mjs';
 
 const conversationSteps = ['open-model-picker','select-provider-model','type-memory-probe','send-web-message','observe-completed-turn','observe-reconnected-conversation'];
-export function comparisonPlan(manifest, reports, store) {
-  validateManifest(manifest);
+export function comparisonPlan(manifest, reports, store, options = {}) {
+  validateManifest(manifest, { evidenceDirectory:store.root, ...options });
+  const production = validatedProductionContext(manifest);
   const brands = Object.keys(contract.brands), maps = new Map(), owners = new Map();
   for (const brand of brands) {
     const { pairing, conversations } = reports[brand] || {};
-    validatePairingReport(pairing, manifest, brand);
+    validatePairingReport(pairing, manifest, brand, { allowSessions:!!production });
+    if (production) validateProductionReport(conversations, production, { allowSessions:true });
     validateReportRuntime(conversations, manifest);
     if (conversations.brand !== brand || conversations.scope !== manifest.scope || conversations.runId !== manifest.runId ||
       conversations.rows?.length !== manifest.hosts.length * contract.providers.length) throw Error('Incomplete conversation comparison scope');
@@ -61,15 +64,20 @@ export function comparisonPlan(manifest, reports, store) {
 export async function compare(env = process.env) {
   if (!path.isAbsolute(env.SMART_PARITY_EVIDENCE_DIR || '') || !path.isAbsolute(env.SMART_PARITY_CRAFT_CLI || '')) throw Error('Absolute evidence root and Craft CLI paths are required');
   const root = privateDirectory(env.SMART_PARITY_EVIDENCE_DIR), output = privateDirectory(path.join(root, 'web-live'));
-  const manifest = validateManifest(readJson(env.SMART_PARITY_HOST_MANIFEST || path.join(root, 'browser-hosts.private.json')));
+  const manifestFile = env.SMART_PARITY_HOST_MANIFEST || path.join(root, 'browser-hosts.private.json');
+  const options = { evidenceDirectory:root, manifestName:path.relative(root, manifestFile) };
+  const manifest = validateManifest(readJson(manifestFile), options);
   const store = evidenceStore(root), reports = Object.fromEntries(Object.keys(contract.brands).map(brand => [brand, {
     pairing: store.read(`web-live/${brand}-hosts.json`), conversations: store.read(`web-live/${brand}-web-conversations.json`),
   }]));
-  const plan = comparisonPlan(manifest, reports, store);
+  const plan = comparisonPlan(manifest, reports, store, options);
+  const production = validatedProductionContext(manifest);
   const attempt = 'compare-' + Date.now() + '-' + crypto.randomUUID();
   const directory = privateDirectory(path.join(privateDirectory(path.join(output, 'attempts')), attempt));
   const report = { runId: manifest.runId, scope: manifest.scope, ...runtimeBinding(manifest), craftProject: 'web-live/shared.cany', attempt,
     complete: false, rows: [], note: 'Comparison execution is not functional equivalence. Retain differences and review independent semantic provider verification.' };
+  if(production)Object.assign(report,{sourceManifestSha256:production.manifestSha256,
+    provenance:{manifest:production.manifestProof,transport:production.transportProof,...(production.sessionIndex?{sessions:production.sessionIndex}:{})}});
   const save = () => { writePrivate(path.join(directory, 'comparisons.json'), report); writePrivate(path.join(output, 'comparisons.json'), report); };
   const shared = acquireCraftProject(output);
   try {

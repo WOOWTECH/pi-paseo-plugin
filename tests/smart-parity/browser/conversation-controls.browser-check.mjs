@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { bindConversationControls } from './conversation-controls.mjs';
+import { assertCraftOperation, guardedRecordCall } from './guarded-craft.mjs';
 const {chromium}=await import(pathToFileURL(process.env.SMART_PARITY_PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({executablePath:process.env.SMART_PARITY_CHROMIUM_EXECUTABLE_PATH,headless:true,args:['--no-sandbox']});
 const page=await browser.newPage();
@@ -12,6 +13,12 @@ try {
  await page.setContent(pane('main','owned',true,`<style>.inactive{display:none}</style><div class="inactive">${controls}</div>${controls}`)+`<aside hidden>${controls}</aside>`+pane('other','foreign',true,controls));
  const bound=await bindConversationControls(page,'owned',1000);
  for(const key of ['model','composer','send']) assert.equal(await page.evaluate(s=>document.querySelectorAll(s).length,bound.selectors[key]),1);
+ for(const [kind,key] of [['conversation.model-open','model'],['conversation.prompt-fill','composer'],['conversation.send','send']]) {
+  const operation={kind,agentId:'owned',prompt:'owned only'};
+  const action={kind:key==='composer'?'fill':'click',step_id:'owned-control',selector:bound.selectors[key],...(key==='composer'?{value:operation.prompt}:{})};
+  assertCraftOperation([action],operation,'apporo');
+ }
+
  await page.locator(bound.selectors.composer).fill('owned only');
  assert.equal(await page.locator('[data-testid="workspace-pane-other"] textarea').inputValue(),'');
  await page.locator(bound.selectors.model).click();
@@ -31,5 +38,23 @@ try {
    await bindConversationControls(page,'owned',1000);
   } else await assert.rejects(bindConversationControls(page,'owned',50));
  }
- console.log(JSON.stringify({passed:true,cases:6,nativeCss:true,providerRequests:0}));
+ // The production recording adapter must rederive actual DOM scope immediately
+ // before dispatch: a valid old bounded selector is not a lasting permission.
+ let dispatched=0;
+ for(const [name,html] of [
+  ['visible composer moved',pane('main','owned',true,`<div>${controls}</div>`)],
+  ['selected tab changed',pane('main','owned',false,controls)+pane('other','foreign',true,controls)],
+ ]) {
+  await page.setContent(pane('main','owned',true,controls));
+  const old=await bindConversationControls(page,'owned',1000);
+  await page.setContent(html);
+  await assert.rejects(guardedRecordCall({
+   page,phase:'apporo',operation:{kind:'conversation.send',agentId:'owned',prompt:'owned only'},
+   tool:'web-walkthrough-record',params:{actions:[{kind:'click',step_id:'send',selector:old.selectors.send}],action_timeout_ms:1000},
+   name,timeoutMs:5000,guard:{run:async ({execute})=>execute({remainingMs:5000})},
+   call:async ()=>{dispatched++;throw Error('unexpected Craft dispatch');},
+  }));
+ }
+ assert.equal(dispatched,0);
+ console.log(JSON.stringify({passed:true,cases:8,nativeCss:true,providerRequests:0,productionRequests:0,rejectedStaleSelectorDispatches:2}));
 } finally {await browser.close();}

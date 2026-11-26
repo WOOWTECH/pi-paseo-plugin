@@ -1,0 +1,32 @@
+{
+  "schema": "agent-connect-external-adapter-source/v1",
+  "purpose": "Source inventory only; not approval, runtime evidence or an installed npm command",
+  "coordinatingRoot": "/data/pi-agent/home/work/pi-smart-connectors-20261121",
+  "adapterDirectory": "live-acceptance",
+  "reviewedStandardCommit": "1b5a8765e81873abc0e5e75c2555fa5721488db3",
+  "reviewedStandardDirectory": "pi-paseo-production-multisession-20261121",
+  "providerCommit": "de09f3fddbb5bef3a7468dec13fbbabbc5893e59",
+  "providerDirectory": "pi-paseo-provider-canary-sidecar-20261121",
+  "files": {
+    "canary_browser_sessions.py": "3bcd1c409e0baed5a176f405d0358241e4e7be20f1efbe16dc967af156ee517c",
+    "canary_browser_transport.py": "dac52d1cdbbfd3cc73dcb361c5f1d02970a203df030015a50d595e9b117beee6",
+    "canary_claude_auth_readonly.py": "88f30457d593e8fd7983624b7c105548629e049a45fb91792705416433ef9c12",
+    "canary_completion.py": "06e97f3e4374c5a80078070517acb0d8eab080df6c2f45d9e654b2cfcc79fd99",
+    "canary_completion_transport.py": "071259c78ed356db6924d860a81b5cdec132c717752dd7b3c747b7b6fbfa6862",
+    "canary_connector_restoration.py": "ede71abbfbebf4afb2c8282d6a9064ee8ff36c0a0e00e969d686d276f1e24d96",
+    "canary_controlled_stop.py": "52c721195d9fd94ee35569ab53cd882c6a2ceca58cda370b8bca119cd434928b",
+    "canary_evidence_assembly.py": "caa9289d56e75532befe184ed2bdc14db916857c784802f18fef1e3ae2ab97ea",
+    "canary_foreign_keys.py": "f3f4b977f124e312e092668955ed3da2b6dacc345f56160c88f72b90ec873697",
+    "canary_native_activity.py": "58326affdc53b54fd194b347396330d8d54409373f4885588014b1e370fb7acb",
+    "canary_pin.py": "ac93d8857645f9ed8b5d92b1273e8211d02c73127f1f0276e73236ad2adb56f9",
+    "canary_provider_evidence.py": "e9c82dcb65959f24f5c6d05d044e8f88ce3fc5649fcb1185f7354a1ecacf84e9",
+    "canary_provider_harness.py": "93948f311dd02c1ac25f28f7f7bd2ad331eba39d9468978827af9968e4e19ab2",
+    "canary_provider_transport.py": "8306d970cf491a8829d08514821e21b3d33bb8387500b923d17c4508745dda42",
+    "canary_resource_probe.py": "1f1dc909e50f8efb0a3d02e8d7b3eeddeba2170fc103fd8e76182d343125d113",
+    "canary_validation.py": "6358410e4c53cba31aed364b2b92a8bd5facc2c16c3641fcb031aec0c1d74ef4",
+    "canary_fixture_resources.mjs": "ba2abab59bf8051e3b144a130c4b5519a15096c67318d411438aa50960949dbb",
+    "canary_mcp_fixture.mjs": "584caf07e8e70f413c54fb62a954cd737227425471972b1a20e1f82c5511c00c",
+    "canary-validation-sidecar-20261121-r3/mcp-fixture.mjs": "d7a2078a299a23271752acd836482ad9deece052c9824667aad0664b73b586fa",
+    "canary-validation-sidecar-20261121-r3/source-receipt.json": "59e57604b7a88307383aee8ff05099b81dfea04194a9262b28326f299f6f105c"
+  }
+}

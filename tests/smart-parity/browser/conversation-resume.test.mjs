@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { loadConversationResume } from './conversation-resume.mjs';
+import { runConversations } from './conversations.mjs';
 import { runtimeBinding } from './runtime.mjs';
 
 const steps = ['open-model-picker','select-provider-model','type-memory-probe','send-web-message','observe-completed-turn','observe-reconnected-conversation'];
@@ -195,4 +196,35 @@ test('generic binder timeout is eligible only before active-agent verification a
     f.report.rows[1]={...original,[key]:value};f.save();assert.throws(f.load);
   }
   f.report.rows[1]=original;f.report.error='Timed out awaiting other state';f.save();assert.throws(f.load);
+});
+
+
+test('shared conversation flow keeps the isolated completed prefix and original bytes', async t => {
+  const f=fixture(t), original=fs.readFileSync(f.file), previousExit=process.exitCode;
+  const pairing={brand:'paseo',scope:f.config.manifest.scope,runId:f.config.manifest.runId,
+    ...runtimeBinding(f.config.manifest),hostListEvidence:['ev_list'],hosts:f.config.manifest.hosts.map(h=>({
+      host:h.label,initialImage:h.imageId,serverId:'server-'+h.label,status:'paired',visibleInHostPicker:true,
+      confirmationDismissed:true,evidence:['ev_select','ev_start','ev_connect'],
+      connection:{settingsAvailable:true,afterReload:true,route:'/settings/hosts/server-'+h.label+'/agents'},
+      ready:{selectedTarget:'paseo',activeTarget:'paseo',healthy:true,configurationPending:false}}))};
+  f.write(path.join(f.output,'paseo-hosts.json'),pairing);
+  const directory=path.join(f.output,'attempts','test-new-attempt');fs.mkdirSync(directory,{mode:0o700});
+  const navigations=[];let closed=false;
+  const browser={output:directory,attempt:'test-new-attempt',craftProject:'web-live/shared.cany',
+    context:{newPage:async()=>({locator:()=>({ariaSnapshot:async()=>''}),screenshot:async()=>{}})},
+    navigate:async(_page,op)=>{navigations.push(op);throw Error('Synthetic pre-mutation stop');},
+    close:async()=>{closed=true;}};
+  try { await runConversations(f.config,f.jobs,async()=>browser,f.file); }
+  finally { process.exitCode=previousExit; }
+  assert.equal(navigations.length,1);assert.equal(navigations[0].agentId,f.mapping[1].agentId);
+  assert.equal(closed,true);assert.deepEqual(fs.readFileSync(f.file),original);
+  const report=JSON.parse(fs.readFileSync(path.join(directory,'paseo-web-conversations.json')));
+  assert.deepEqual(report.rows[0],f.report.rows[0]);assert.deepEqual(report.resumeFrom,f.load().resumeFrom);
+});
+
+test('production flow refuses isolated resume before reading pairing or opening a browser', async()=>{
+  let opened=false;
+  await assert.rejects(runConversations({manifest:{scope:'production-canary'},productionSession:{}},[],
+    async()=>{opened=true;},'/private/original-attempt.json'),/no replay/);
+  assert.equal(opened,false);
 });
