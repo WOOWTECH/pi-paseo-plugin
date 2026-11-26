@@ -1,6 +1,6 @@
 # Paseo 0.17.5 隔離候選
 
-Agent Connect `0.1.27-rc.4` 固定官方 npm CLI／server `0.17.5`，runtime revision 為 `0.17.5-r4-8664f2c3f8f5`。官方原始碼參考點是 `getpaseo/paseo` 的 `v0.17.5` commit `713b6dbbfe3ea5d395da569dca08fd31b2f8a0f8`；npm 產物以 `runtime/package-lock.json` 的 integrity 驗證，不把原始碼 commit 當成 npm 產物的位元證明。
+Agent Connect `0.1.27-rc.5` 固定官方 npm CLI／server `0.17.5`，runtime revision 為 `0.17.5-r4-8664f2c3f8f5`。官方原始碼參考點是 `getpaseo/paseo` 的 `v0.17.5` commit `713b6dbbfe3ea5d395da569dca08fd31b2f8a0f8`；npm 產物以 `runtime/package-lock.json` 的 integrity 驗證，不把原始碼 commit 當成 npm 產物的位元證明。
 
 保留產品管理的 Better Paseo 1.7.0：Tasks 預設開啟、聊天增強關閉、自行更新關閉，沿用修正後的元件匯出、繁中與 MIT 授權。Devices 新增 Tailscale RPC；History、配對及既有 Tasks 是否能在特定 Web 正常操作，仍由該 Web 的實機驗收決定。
 
@@ -8,14 +8,14 @@ Agent Connect `0.1.27-rc.4` 固定官方 npm CLI／server `0.17.5`，runtime rev
 
 ## 安裝及操作
 
-先核對交付的 `SHA256SUMS`，將 `woowtech-pi-paseo-0.1.27-rc.4.tgz` 解壓到新的空白目錄。使用 Node 22.19 以上、npm、git、procps 與 util-linux flock；建議保留至少 3 GB 可用空間。解壓後的 `package/scripts/candidate.mjs` 直接可用，無須執行 npm install 或套件 postinstall。
+先核對交付的 `SHA256SUMS`，將 `woowtech-pi-paseo-0.1.27-rc.5.tgz` 解壓到新的空白目錄。使用 Node 22.19 以上、npm、git、procps 與 util-linux flock；建議保留至少 3 GB 可用空間。解壓後的 `package/scripts/candidate.mjs` 直接可用，無須執行 npm install 或套件 postinstall。
 
 以下路徑是示例；資料目錄必須是新的空白絕對路徑。既有主機仍在驗收時，等待該線交接後才在該主機操作。
 
 ```sh
 sha256sum --check SHA256SUMS
 mkdir candidate-package
-tar -xzf woowtech-pi-paseo-0.1.27-rc.4.tgz -C candidate-package
+tar -xzf woowtech-pi-paseo-0.1.27-rc.5.tgz -C candidate-package
 node candidate-package/package/scripts/candidate.mjs prepare /tmp/agent-connect-0175-trial
 node candidate-package/package/scripts/candidate.mjs target /tmp/agent-connect-0175-trial paseo
 node candidate-package/package/scripts/candidate.mjs start /tmp/agent-connect-0175-trial
@@ -79,3 +79,11 @@ rc.4 是候選版，不是 stable。官方 Paseo npm CLI/server 仍為 0.17.5，
 新的五檔 payload 來自 Smart commit `a7bfd65a3f39076cf664e28687818c24952e261c`，每檔以 peer build provenance 核對後納入。client SHA-256 為 `68f27211b8fc364ae7b3e58e4b7c6026bdca989cfd2251f27e830d450ad4c922`，server builtin 為 `7baa01803bcf477181169db05e537ecdc3075b295655ba5b2eee5e9a4db98109`，Tasks chunk ID 為 `f9f9101d9d59ec1a`。Smart upstream source commit 為 `e9ac5216185988ce99574b3e2f04f178020204f1`。這次修正只在 phone board builtin；Smart Web 仍使用已驗證的 2b commit，`packages/app/src` 在 a7 相對 2b 沒有變更。peer 的 phone-board regression red/green 與五檔完整 hash 記在同層 provenance receipt。
 
 RC4 的升降版 smoke 預設從 Agent Connect rc.3 commit `88857bd86a4bf982aef6d85122f16b7d4a03d009` 驗證 r3→r4→r3；legacy 仍固定 0.1.26 commit `23026e2`。本文件記載候選來源與驗證範圍；AC 測試及 package 結果以本次執行為準，不可把 peer build 通過當作 AC runtime 驗證。
+
+### rc.5：Pi Web 的 Next.js 安全修補
+
+Pi Web adapter 固定 Next.js 與 eslint-config-next 16.4.6，涵蓋 16.4.5 的安全修補與 16.4.6 的回應壓縮回歸修正。rc.4 配套的 combined graph 使用 Next.js 16.4.3，production build 因 SecurityFatalError 中止。此次更新保留安全檢查。
+
+本次更新 Pi Web 依賴與配套版本。Paseo CLI/server 維持 0.17.5，runtime 維持 0.17.5-r4-8664f2c3f8f5；a7 五檔 payload、Tasks chunk 與 Metadata 政策沿用 rc.4。升降版驗證沿用 r3 回復 fixture。
+
+參考：https://github.com/vercel/next.js/releases/tag/v16.4.5 、https://github.com/vercel/next.js/releases/tag/v16.4.6 。
