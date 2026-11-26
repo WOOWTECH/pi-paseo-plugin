@@ -29,6 +29,7 @@ jobs:
       - run: npm run typecheck
       - run: node --check bin/install-host.mjs && bash -n scripts/install.sh
       - run: node scripts/check-package.mjs
+      - run: node scripts/verify-smart-tasks.mjs
       - run: node scripts/verify-package-install.mjs
   host:
     runs-on: ubuntu-latest

@@ -6,30 +6,37 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {privateDirectory,atomicJson,RuntimeError,assertSafePath} from './state.mjs';
 import {applyPidLockPatch,pidLockPatchReady,PID_LOCK_PATCH_ID,PID_LOCK_COPIES,PID_LOCK_0112} from './pid-lock-patch.mjs';
 import {applyBrandIdentityPatch,brandIdentityPatchReady,BRAND_IDENTITY_PATCH_ID,BRAND_0112} from './brand-identity-patch.mjs';
+import {applySmartTasksPatch,smartTasksPatchReady,SMART_TASKS_PATCH_ID} from './smart-tasks-patch.mjs';
 export const PASEO_VERSION='0.17.4';
-// Every earlier managed release ran Paseo 0.11.2, as did the pre-release runtimeDir layout.
+// Managed releases before this one ran either Paseo 0.17.4 or 0.11.2; the pre-release runtimeDir layout used 0.11.2.
 export const LEGACY_PASEO_VERSION='0.11.2';
 const template=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const lock=fs.readFileSync(path.join(template,'package-lock.json'));
 const lockSha256=createHash('sha256').update(lock).digest('hex');
-export const RUNTIME_REVISION=PASEO_VERSION+'-r1-'+lockSha256.slice(0,12);
+export const RUNTIME_REVISION=PASEO_VERSION+'-r2-'+lockSha256.slice(0,12);
 export const runtimeDirectory=loc=>path.join(loc.runtimeDir,'releases',RUNTIME_REVISION);
 // Existing-daemon control compatibility only; these releases are never started.
 // Frozen 0.11.2 lockfiles: 4cf9d4… shipped with later r3 and all r4 (Agent Connect
 // 0.1.18-0.1.23 run 0.11.2-r4-4cf9d40940bf), 6d8dbe… with r2 and the first r3. These four are
 // every release Agent Connect 0.1.4-0.1.23 shipped, newest first (0.1.1-0.1.3 ran r1: unsupported).
-// Only r4 (0.1.18+) records its revision in state.json for non-Linux daemons.
+// r1 and r4 record their revision in state.json on non-Linux hosts; older r2/r3 daemons do not.
 const LOCK_0112_HONO='4cf9d40940bf5b58301775cb8322866d3bcd605db341125d98bd5218b0dfefc0';
 const LOCK_0112='6d8dbe5154790bbbb0b1281e991871b6f354919022fb55a1235162e969779526';
+const LOCK_0174_R1='a651f42711da045b31e8a2b8993d9b82e7b7cbbef0cffcf48dfdcd5baf9d8530';
+// Frozen Agent Connect 0.1.24 runtime. It has the original 0.17.4 lock plus PID and brand patches,
+// and predates the Smart Tasks integration. These literals only validate its offline control path.
+const PID_0174_R1=Object.freeze({original:'a4e8bc790b27c944847b7bb84694b38d0366d08d7d565409edbc63dd6462b8f7',patched:'194013b387417fb9b6d74b7a305173d8f28478ef268b7a4c073b9882af66bd1b',patchId:'1451c9714ffd86380ff04cbe0219b4a2b0d5a3cd39e152fa5e5fabc0d5403828',helperSha256:'37bdef75ee090452ce946bbf051d411352d51fda95d8121ff0c83a34680e3987'});
+const BRAND_0174_R1=Object.freeze({original:'bfc79901aa7768a51b98385b6f729dac69a1098f4480a66fd3d2be1d6af06b4b',patched:'17ea88357d2f25caab81ad63d32804fe41158c1d70e8e4f549c4fc7173fe8d68',patchId:'20f860e40bfb9d654182fd996f4f1999f2b73fe2f2f924519bc344a5592e89f2',helperSha256:'036471982ccbbb5a7c3418631518025b245ac50e1c0b1a29c3824d16ba069733'});
 const priorReleases=[
- {generation:'r4',sha:LOCK_0112_HONO,patched:true,branded:true},
- {generation:'r3',sha:LOCK_0112_HONO,patched:true},
- {generation:'r3',sha:LOCK_0112,patched:true},
- {generation:'r2',sha:LOCK_0112,patched:false},
-].map(release=>Object.freeze({...release,revision:LEGACY_PASEO_VERSION+'-'+release.generation+'-'+release.sha.slice(0,12)}));
+ {version:'0.17.4',generation:'r1',sha:LOCK_0174_R1,pid:PID_0174_R1,brand:BRAND_0174_R1,recordedRevision:true},
+ {version:LEGACY_PASEO_VERSION,generation:'r4',sha:LOCK_0112_HONO,pid:PID_LOCK_0112,brand:BRAND_0112,recordedRevision:true},
+ {version:LEGACY_PASEO_VERSION,generation:'r3',sha:LOCK_0112_HONO,pid:PID_LOCK_0112},
+ {version:LEGACY_PASEO_VERSION,generation:'r3',sha:LOCK_0112,pid:PID_LOCK_0112},
+ {version:LEGACY_PASEO_VERSION,generation:'r2',sha:LOCK_0112},
+].map(release=>Object.freeze({...release,revision:release.version+'-'+release.generation+'-'+release.sha.slice(0,12)}));
 /** Revisions of the earlier releases, newest first. */
 export const PRIOR_RUNTIME_REVISIONS=Object.freeze(priorReleases.map(release=>release.revision));
-function verifiedPrior(loc,{revision,sha,patched,branded}) {
+function verifiedPrior(loc,{revision,sha,version,pid,brand}) {
  // Never follow state-provided paths or scan arbitrary versions.
  const root=path.join(loc.runtimeDir,'releases',revision);
  try {
@@ -38,15 +45,15 @@ function verifiedPrior(loc,{revision,sha,patched,branded}) {
   if(receipt.revision!==revision||receipt.lockSha256!==sha)return null;
   for(const pkg of ['cli','server']){
    const file=path.join(root,'node_modules/@getpaseo',pkg,'package.json');assertSafePath(file);
-   if(JSON.parse(fs.readFileSync(file)).version!==LEGACY_PASEO_VERSION)return null;
+   if(JSON.parse(fs.readFileSync(file)).version!==version)return null;
   }
-  if(patched){
-   if(receipt.pidLockPatchId!==PID_LOCK_0112.patchId||!pidLockPatchReady(root,PID_LOCK_0112))return null;
+  if(pid){
+   if(receipt.pidLockPatchId!==pid.patchId||!pidLockPatchReady(root,pid))return null;
   }else for(const copy of PID_LOCK_COPIES){
    const file=path.join(root,'node_modules/@getpaseo/server',copy,'pid-lock.js');assertSafePath(file);
    if(createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==PID_LOCK_0112.original)return null;
   }
-  if(branded&&(receipt.brandIdentityPatchId!==BRAND_0112.patchId||!brandIdentityPatchReady(root,BRAND_0112)))return null;
+  if(brand&&(receipt.brandIdentityPatchId!==brand.patchId||!brandIdentityPatchReady(root,brand)))return null;
   return root;
  }catch{return null;} // Unsupported or unsafe releases cannot supply offline control.
 }
@@ -55,10 +62,15 @@ export function priorRuntimeDirectory(loc,revision) {
  const release=priorReleases.find(entry=>entry.revision===revision);
  return release?verifiedPrior(loc,release):null;
 }
+/** The Paseo version of exactly this verified earlier release, or null. */
+export function priorRuntimeVersion(loc,revision) {
+ const release=priorReleases.find(entry=>entry.revision===revision);
+ return release&&verifiedPrior(loc,release)?release.version:null;
+}
 /** The newest verified earlier release; with `unrecordedOnly`, among those that never recorded their revision. */
 export function previousRuntimeDirectory(loc,{unrecordedOnly=false}={}) {
  for(const release of priorReleases){
-  if(unrecordedOnly&&release.generation==='r4')continue;
+  if(unrecordedOnly&&release.recordedRevision)continue;
   const root=verifiedPrior(loc,release);if(root)return root;
  }
  return null;
@@ -69,7 +81,7 @@ export function runtimeReady(loc) {
   const root=runtimeDirectory(loc);
   assertSafePath(path.join(root,'.pi-paseo-runtime.json'));
   const receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));
-  return receipt.lockSha256===lockSha256&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&receipt.brandIdentityPatchId===BRAND_IDENTITY_PATCH_ID&&brandIdentityPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version===PASEO_VERSION;
+  return receipt.lockSha256===lockSha256&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&receipt.brandIdentityPatchId===BRAND_IDENTITY_PATCH_ID&&brandIdentityPatchReady(root)&&receipt.smartTasksPatchId===SMART_TASKS_PATCH_ID&&smartTasksPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version===PASEO_VERSION;
  } catch {return false;}
 }
 export function prepareRuntimeManifest(loc) {
@@ -81,7 +93,7 @@ export function prepareRuntimeManifest(loc) {
  }
  return root;
 }
-export function markRuntimeReady(loc) {const root=runtimeDirectory(loc);applyPidLockPatch(root);applyBrandIdentityPatch(root);atomicJson(path.join(root,'.pi-paseo-runtime.json'),{lockSha256,revision:RUNTIME_REVISION,pidLockPatchId:PID_LOCK_PATCH_ID,brandIdentityPatchId:BRAND_IDENTITY_PATCH_ID});}
+export function markRuntimeReady(loc) {const root=runtimeDirectory(loc);applyPidLockPatch(root);applyBrandIdentityPatch(root);applySmartTasksPatch(root);atomicJson(path.join(root,'.pi-paseo-runtime.json'),{lockSha256,revision:RUNTIME_REVISION,pidLockPatchId:PID_LOCK_PATCH_ID,brandIdentityPatchId:BRAND_IDENTITY_PATCH_ID,smartTasksPatchId:SMART_TASKS_PATCH_ID});}
 
 // ---- Pruning ----
 // Every release is a full install (about 0.6-0.7 GB), and each upgrade leaves the previous one for a rollback and
