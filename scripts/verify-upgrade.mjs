@@ -112,7 +112,7 @@ async function phaseOld(oldRoot,factsFile) {
  let workspaceId,tasksEntry;
  try {
   workspaceId=(await client.createWorkspace({source:{kind:'directory',path:project}})).workspace?.id;
-  if(first.version==='0.17.4')tasksEntry=await client.invokePluginRpc('better-paseo','tasks.dismiss-error',{agentId:'owned-upgrade-fixture',error:'isolated upgrade fixture'});
+  if(['0.17.4','0.17.5'].includes(first.version))tasksEntry=await client.invokePluginRpc('better-paseo','tasks.dismiss-error',{agentId:'owned-upgrade-fixture',error:'isolated upgrade fixture'});
  }finally{await client.close().catch(()=>{});}
  check(typeof workspaceId==='string'&&workspaceId.length>0,'workspace created on the old daemon');
  const pairing=await runtime.pair();check(new URL(pairing.url).origin==='https://app.paseo.sh','old pairing origin');
@@ -253,13 +253,13 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
  log('new.stopped',{remaining:processesUnder(path.dirname(loc.stateDir)).map(row=>row.title)});
 }
 
-/** Return the same isolated home to 0.17.4; no settings or identity backup is restored over it. */
+/** Return the same isolated home to its supported previous runtime; no settings or identity backup is restored over it. */
 async function phaseRollback(oldRoot,factsFile) {
  const facts=readJson(factsFile);
- if(facts.oldPaseo!=='0.17.4'){log('rollback.skipped',{reason:'0.17.4 rollback only'});return;}
+ if(!['0.17.4','0.17.5'].includes(facts.oldPaseo)){log('rollback.skipped',{reason:'unsupported rollback version'});return;}
  const load=loadIn(oldRoot),state=await load('src/state.mjs'),runtime=await load('src/runtime.mjs');
  const loc=state.locations();
- check(!readJson(path.join(loc.paseoHome,'config.json')).daemon.listen.includes(','),'restore single-listener config before a 0.17.4 rollback');
+ if(facts.oldPaseo==='0.17.4')check(!readJson(path.join(loc.paseoHome,'config.json')).daemon.listen.includes(','),'restore single-listener config before a 0.17.4 rollback');
  const started=await runtime.activate();
  check(started.phase==='running'&&started.daemon.reachable&&started.daemon.version===facts.oldPaseo,'old daemon starts on the preserved home');
  const {connectToDaemon}=await import(pathToFileURL(path.join(facts.oldRoot,'node_modules/@getpaseo/cli/dist/utils/client.js')).href);

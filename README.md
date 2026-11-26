@@ -1,6 +1,6 @@
 # Agent Connect
 
-`0.1.27-rc.1` 是 Paseo 0.17.5 的隔離候選，新增 Devices／Tailscale runtime 支援，保留既有 Tasks。試用安裝、範圍與回復限制見[候選說明](docs/runtime-0175-candidate.md)；尚未替換既有 Pi Web／HA／PaaS 發行套件。
+`0.1.27-rc.2` 是 Paseo 0.17.5 的隔離候選，新增 Devices／Tailscale runtime 支援，保留既有 Tasks。試用安裝、範圍與回復限制見[候選說明](docs/runtime-0175-candidate.md)；尚未替換既有 Pi Web／HA／PaaS 發行套件。
 
 Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, settings routes and data directory; the bundled `/paseo-web` client was removed in 0.1.23.
 

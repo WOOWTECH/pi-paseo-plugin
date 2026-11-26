@@ -111,7 +111,7 @@ test('two releases of one version and revision number (two lockfiles): the later
 
 // Two lockfiles under one Paseo version and revision number (r3 shipped that way): by number they tie with this release,
 // so the receipt time that orders the list decides, and a tie is never a reason to remove one of them.
-const SIBLING_A=PASEO_VERSION+'-r1-aaaaaaaaaaaa',SIBLING_B=PASEO_VERSION+'-r1-bbbbbbbbbbbb';
+const SIBLING_A=RUNTIME_REVISION.replace(/[0-9a-f]{12}$/,'aaaaaaaaaaaa'),SIBLING_B=RUNTIME_REVISION.replace(/[0-9a-f]{12}$/,'bbbbbbbbbbbb');
 const stamp=(f,revision,iso)=>{const when=new Date(iso);fs.utimesSync(path.join(f.releases,revision,'.pi-paseo-runtime.json'),when,when);};
 test('a sibling of this release (same Paseo version and revision number, another lockfile) is never pruned for the tie: installed later it is newer, earlier it is the rollback',async t=>{
  // Installed before this release: the rollback, and with it the one that decides which older release goes.

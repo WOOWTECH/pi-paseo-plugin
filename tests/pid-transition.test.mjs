@@ -21,7 +21,7 @@ test('frozen official writer bytes patch deterministically and idempotently',()=
  const patched=patchPidLockSource(original);assert.equal(sha(patched),PATCHED_PID_LOCK_SHA256);
  assert.equal(patchPidLockSource(patched),patched);
  assert.throws(()=>patchPidLockSource(original+'\n'),{code:'PID_LOCK_SOURCE_MISMATCH'});
- assert.match(RUNTIME_REVISION,/^0\.17\.5-r1-[0-9a-f]{12}$/);
+ assert.match(RUNTIME_REVISION,/^0\.17\.5-r2-[0-9a-f]{12}$/);
 });
 test('the 0.11.2 writer is never patched for this release; its frozen constants still describe r3/r4',()=>{
  assert.throws(()=>patchPidLockSource(original0112),{code:'PID_LOCK_SOURCE_MISMATCH'});
@@ -83,7 +83,7 @@ test('official release/refresh missing home semantics do not create a directory'
 // Every 0.11.2 release an earlier Agent Connect shipped: r4 is what 0.1.18-0.1.23 run.
 const SHIPPED=[['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112]];
 test('the prior revisions include frozen 0.17.4-r2/r1 and every shipped 0.11.2 release, newest first',()=>{
- assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.4-r2-a651f42711da','0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
+ assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.5-r1-8664f2c3f8f5','0.17.4-r2-a651f42711da','0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
 });
 test('the exact r1 0.17.4 release stays verifiable for offline control without Smart Tasks',t=>{
  const {loc}=runtime(t),old=seedPriorRelease(loc,{generation:'r1'});
@@ -147,4 +147,19 @@ test('only the exact release a running daemon names qualifies for its control',t
  for(const revision of ['0.11.2-r9-unknown','0.11.2-r1-b60170bb6826','0.11.2-r2-4cf9d40940bf',RUNTIME_REVISION,'0.17.5-r1-000000000000',undefined])assert.equal(priorRuntimeDirectory(loc,revision),null,String(revision));
  // An unverifiable copy of the named release is not replaced by another verified release.
  fs.writeFileSync(path.join(r3,'.pi-paseo-runtime.json'),'{}');assert.equal(priorRuntimeDirectory(loc,path.basename(r3)),null);assert.equal(previousRuntimeDirectory(loc,{unrecordedOnly:true}),null);
+});
+
+test('0.17.5-r1 stays independently verifiable after preparing the new builtin generation',t=>{
+ const {loc,root}=runtime(t),old=seedPriorRelease(loc,{version:'0.17.5',generation:'r1'}),revision=path.basename(old);
+ assert.equal(revision,'0.17.5-r1-8664f2c3f8f5');
+ const oldClient=path.join(old,SMART_TASKS_DIRECTORY,'index.client.ts'),bytes=fs.readFileSync(oldClient);
+ assert.equal(priorRuntimeDirectory(loc,revision),old);assert.equal(priorRuntimeVersion(loc,revision),'0.17.5');
+ markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);assert.notEqual(root,old);
+ assert.deepEqual(fs.readFileSync(oldClient),bytes,'preparing r2 cannot overwrite r1');
+ assert.equal(previousRuntimeDirectory(loc),old);
+ fs.appendFileSync(oldClient,'tampered');assert.equal(priorRuntimeDirectory(loc,revision),null);
+ fs.writeFileSync(oldClient,bytes);assert.equal(priorRuntimeDirectory(loc,revision),old);
+ const receiptFile=path.join(old,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
+ fs.writeFileSync(receiptFile,JSON.stringify({...receipt,smartTasksPatchId:SMART_TASKS_PATCH_ID}));
+ assert.equal(priorRuntimeDirectory(loc,revision),null,'new payload receipt cannot authorize old runtime');
 });
