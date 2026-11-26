@@ -4,9 +4,9 @@ import { RuntimeError } from './state.mjs';
 
 // Verified against WOOWTECH/woowtech-smart 9214c6ea87 brand manifests.
 // These are connection profiles, not replacements for the branded push sender.
-// The Smart apps are built from upstream app 0.10.1, older than protected relay security (Paseo 0.13.0):
-// they speak only the older relay encryption, so for them `protectedRelay` is false. Paseo's own app
-// can negotiate it, and there the daemon setting stays the clients' choice.
+// Smart deployments previously used 0.10.1, before protected relay security. Keep the
+// existing profiles compatible with those clients during managed host upgrades; the
+// newer Smart web deployment alone does not update every installed mobile client.
 export const CONNECTION_TARGETS = Object.freeze([
   Object.freeze({ id: 'paseo', label: 'Paseo', appUrl: 'https://app.paseo.sh', relayEndpoint: 'relay.paseo.sh:443', openUrl: 'https://app.paseo.sh/', protectedRelay: true }),
   Object.freeze({ id: 'woowtech', label: 'Woowtech Smart', appUrl: 'https://smart.woowtech.io', relayEndpoint: 'relay.woowtech.io:443', openUrl: 'https://smart.woowtech.io/', protectedRelay: false }),

@@ -7,8 +7,9 @@ import {spawnSync} from 'node:child_process';
 import {monitorEventLoopDelay} from 'node:perf_hooks';
 import {RUNTIME_REVISION,REMOVAL_BATCH,ownedReleases,prunePlan,claimReleases,removeTree,removeTombs,pruneRuntimeReleases} from '../src/runtime-layout.mjs';
 
-// Revisions of the releases Agent Connect 0.1.4-0.1.23 shipped (see runtime-layout.mjs), and this one.
-const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479',R1='0.11.2-r1-0123456789ab';
+// Revisions earlier Agent Connect releases shipped (see runtime-layout.mjs), and this one.
+const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479';
+const R1='0.17.4-r1-a651f42711da',LEGACY_R1='0.11.2-r1-0123456789ab';
 const lockOf=revision=>revision.slice(-12)+'0'.repeat(52);
 const receipt=revision=>JSON.stringify({revision,lockSha256:lockOf(revision)});
 function fixture(t){
@@ -38,12 +39,12 @@ const EIO=()=>Object.assign(new Error('EIO'),{code:'EIO'});
 const NEWER='0.99.0-r1-bbbbbbbbbbbb';
 test('this release, exactly the newest earlier one and every newer one stay; the other plugin-owned releases go',async t=>{
  const f=fixture(t);
- for(const revision of [RUNTIME_REVISION,R4,R3A,R3B,R2,R1,NEWER])f.release(revision);
+ for(const revision of [RUNTIME_REVISION,R1,R4,R3A,R3B,R2,LEGACY_R1,NEWER])f.release(revision);
  const result=await pruneRuntimeReleases(f.loc);
  // A newer release (a plugin downgrade left it) is no rollback target, and costs 0.7 GB to download again: it stays.
- assert.deepEqual(f.names(),[NEWER,R4,RUNTIME_REVISION].sort());
- assert.deepEqual(result.kept,[NEWER,RUNTIME_REVISION,R4]);
- assert.deepEqual(result.removed.sort(),[R1,R2,R3A,R3B].sort());assert.deepEqual(result.failed,[]);assert.equal(result.skipped,undefined);
+ assert.deepEqual(f.names(),[NEWER,R1,RUNTIME_REVISION].sort());
+ assert.deepEqual(result.kept,[NEWER,RUNTIME_REVISION,R1]);
+ assert.deepEqual(result.removed.sort(),[LEGACY_R1,R2,R3A,R3B,R4].sort());assert.deepEqual(result.failed,[]);assert.equal(result.skipped,undefined);
 });
 
 test('with only newer releases besides this one, the rollback is still the newest earlier release',async t=>{
@@ -110,7 +111,7 @@ test('two releases of one version and revision number (two lockfiles): the later
 
 // Two lockfiles under one Paseo version and revision number (r3 shipped that way): by number they tie with this release,
 // so the receipt time that orders the list decides, and a tie is never a reason to remove one of them.
-const SIBLING_A='0.17.4-r1-aaaaaaaaaaaa',SIBLING_B='0.17.4-r1-bbbbbbbbbbbb';
+const SIBLING_A='0.17.4-r2-aaaaaaaaaaaa',SIBLING_B='0.17.4-r2-bbbbbbbbbbbb';
 const stamp=(f,revision,iso)=>{const when=new Date(iso);fs.utimesSync(path.join(f.releases,revision,'.pi-paseo-runtime.json'),when,when);};
 test('a sibling of this release (same Paseo version and revision number, another lockfile) is never pruned for the tie: installed later it is newer, earlier it is the rollback',async t=>{
  // Installed before this release: the rollback, and with it the one that decides which older release goes.

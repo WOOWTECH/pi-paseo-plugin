@@ -4,13 +4,15 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import {runtimeDirectory,PASEO_VERSION,LEGACY_PASEO_VERSION} from '../../src/runtime-layout.mjs';
-import {patchPidLockSource,PID_LOCK_0112,PID_LOCK_COPIES} from '../../src/pid-lock-patch.mjs';
-import {patchBrandIdentitySource,BRAND_0112,BRAND_SERVER_PATH} from '../../src/brand-identity-patch.mjs';
+import {applyPidLockPatch,patchPidLockSource,PID_LOCK_PATCH_ID,PID_LOCK_0112,PID_LOCK_COPIES} from '../../src/pid-lock-patch.mjs';
+import {applyBrandIdentityPatch,patchBrandIdentitySource,BRAND_IDENTITY_PATCH_ID,BRAND_0112,BRAND_SERVER_PATH} from '../../src/brand-identity-patch.mjs';
 import {createHash} from 'node:crypto';
 const fixtures=path.join(path.dirname(fileURLToPath(import.meta.url)),'../fixtures');
 // Frozen 0.11.2 lockfiles of the releases Agent Connect 0.1.4-0.1.23 installed.
 export const LOCK_0112_HONO='4cf9d40940bf5b58301775cb8322866d3bcd605db341125d98bd5218b0dfefc0';
 export const LOCK_0112='6d8dbe5154790bbbb0b1281e991871b6f354919022fb55a1235162e969779526';
+// Frozen runtime/package-lock.json from Agent Connect 0.1.24 (0.17.4-r1).
+export const LOCK_0174_R1='a651f42711da045b31e8a2b8993d9b82e7b7cbbef0cffcf48dfdcd5baf9d8530';
 function seedServer(root,version,{patched=false}={}) {
  const fixture=path.join(fixtures,'paseo-'+version);
  const server=path.join(root,'node_modules/@getpaseo/server');
@@ -23,6 +25,10 @@ function seedServer(root,version,{patched=false}={}) {
   }
  }
  fs.writeFileSync(path.join(server,'dist/server/server/websocket-server.js'),gunzipSync(fs.readFileSync(path.join(fixture,'websocket-server.js.gz'))));
+ if(version===PASEO_VERSION){
+  const builtin=path.join(server,'dist/server/server/plugins/builtin');fs.mkdirSync(builtin,{recursive:true});
+  fs.copyFileSync(path.join(fixture,'builtin-index.js'),path.join(builtin,'index.js'));
+ }
  fs.writeFileSync(path.join(server,'package.json'),JSON.stringify({type:'module',version}));
  const zod=path.join(root,'node_modules/zod');
  if(!fs.existsSync(zod))fs.symlinkSync(path.dirname(createRequire(import.meta.url).resolve('zod/package.json')),zod,'dir');
@@ -32,10 +38,20 @@ function seedServer(root,version,{patched=false}={}) {
 export function seedPidFiles(loc) {
  return seedServer(runtimeDirectory(loc),PASEO_VERSION);
 }
-/** A verified 0.11.2 release as an earlier Agent Connect left it: r3/r4 with patched writers, r2 with the
- * original ones; r4 also with the brand identity patch 0.1.18-0.1.23 applied. The shipped revisions are r2
- * and the first r3 on lockfile 6d8dbe…, later r3 and r4 on 4cf9d4…. */
-export function seedPriorRelease(loc,{generation='r4',lockSha256=generation==='r2'?LOCK_0112:LOCK_0112_HONO,patched=generation!=='r2'}={}) {
+/** A verified earlier release as Agent Connect left it. 0.17.4-r1 has PID-lock and brand patches but no
+ * Smart Tasks. For 0.11.2, r3/r4 have patched writers, r2 has the original ones, and r4 also has branding. */
+export function seedPriorRelease(loc,{generation='r4',lockSha256=generation==='r1'?LOCK_0174_R1:generation==='r2'?LOCK_0112:LOCK_0112_HONO,patched=generation!=='r2'}={}) {
+ if(generation==='r1'){
+  const revision=PASEO_VERSION+'-r1-'+lockSha256.slice(0,12);
+  const root=path.join(loc.runtimeDir,'releases',revision);
+  seedServer(root,PASEO_VERSION);applyPidLockPatch(root);applyBrandIdentityPatch(root);
+  const cli=path.join(root,'node_modules/@getpaseo/cli');fs.mkdirSync(cli,{recursive:true});
+  fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:PASEO_VERSION}));
+  fs.mkdirSync(path.join(root,'node_modules/@getpaseo/server/dist/server/web-ui'),{recursive:true});
+  fs.writeFileSync(path.join(root,'node_modules/@getpaseo/server/dist/server/web-ui/index.html'),'fixture');
+  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify({lockSha256,revision,pidLockPatchId:PID_LOCK_PATCH_ID,brandIdentityPatchId:BRAND_IDENTITY_PATCH_ID}));
+  return root;
+ }
  const revision=LEGACY_PASEO_VERSION+'-'+generation+'-'+lockSha256.slice(0,12);
  const root=path.join(loc.runtimeDir,'releases',revision);
  seedServer(root,LEGACY_PASEO_VERSION,{patched});

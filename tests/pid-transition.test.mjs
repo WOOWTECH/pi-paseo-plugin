@@ -6,8 +6,9 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {withPidTransition} from '../src/pid-transition.mjs';
 import {patchPidLockSource,applyPidLockPatch,pidLockPatchReady,PID_LOCK_COPIES,ORIGINAL_PID_LOCK_SHA256,PATCHED_PID_LOCK_SHA256,PID_LOCK_PATCH_ID,PID_LOCK_0112} from '../src/pid-lock-patch.mjs';
-import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,priorRuntimeDirectory,PRIOR_RUNTIME_REVISIONS,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
+import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,priorRuntimeDirectory,priorRuntimeVersion,PRIOR_RUNTIME_REVISIONS,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
 import {BRAND_SERVER_PATH} from '../src/brand-identity-patch.mjs';
+import {SMART_TASKS_REGISTRY_PATH,SMART_TASKS_PATCH_ID} from '../src/smart-tasks-patch.mjs';
 import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO} from './helpers/runtime-pid-files.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const original=fs.readFileSync(new URL('./fixtures/paseo-0.17.4/pid-lock.js',import.meta.url),'utf8');
@@ -20,7 +21,7 @@ test('frozen official writer bytes patch deterministically and idempotently',()=
  const patched=patchPidLockSource(original);assert.equal(sha(patched),PATCHED_PID_LOCK_SHA256);
  assert.equal(patchPidLockSource(patched),patched);
  assert.throws(()=>patchPidLockSource(original+'\n'),{code:'PID_LOCK_SOURCE_MISMATCH'});
- assert.match(RUNTIME_REVISION,/^0\.17\.4-r1-[0-9a-f]{12}$/);
+ assert.match(RUNTIME_REVISION,/^0\.17\.4-r2-[0-9a-f]{12}$/);
 });
 test('the 0.11.2 writer is never patched for this release; its frozen constants still describe r3/r4',()=>{
  assert.throws(()=>patchPidLockSource(original0112),{code:'PID_LOCK_SOURCE_MISMATCH'});
@@ -51,6 +52,14 @@ test('readiness requires receipt and patched bytes of BOTH official copies and h
  const file=path.join(root,'node_modules/@getpaseo/server',PID_LOCK_COPIES[0],'pid-lock.js');
  const before=fs.statSync(file);markRuntimeReady(loc);assert.equal(fs.statSync(file).mtimeMs,before.mtimeMs);
 });
+test('current runtime readiness rejects a missing or changed Smart Tasks patch receipt and bytes',t=>{
+ const {loc,root}=runtime(t);markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);
+ const receiptFile=path.join(root,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
+ delete receipt.smartTasksPatchId;fs.writeFileSync(receiptFile,JSON.stringify(receipt));assert.equal(runtimeReady(loc),false);
+ receipt.smartTasksPatchId=SMART_TASKS_PATCH_ID;fs.writeFileSync(receiptFile,JSON.stringify(receipt));assert.equal(runtimeReady(loc),true);
+ const registry=path.join(root,SMART_TASKS_REGISTRY_PATH),bytes=fs.readFileSync(registry);fs.appendFileSync(registry,'\n');
+ assert.equal(runtimeReady(loc),false);fs.writeFileSync(registry,bytes);assert.equal(runtimeReady(loc),true);
+});
 test('async guard remains locked across awaited callback and releases after throw',async t=>{
  const dir=home(t),guard=path.join(dir,'.pi-paseo-pid-transition.guard');
  await assert.rejects(withPidTransition(dir,async()=>{
@@ -73,8 +82,17 @@ test('official release/refresh missing home semantics do not create a directory'
 
 // Every 0.11.2 release an earlier Agent Connect shipped: r4 is what 0.1.18-0.1.23 run.
 const SHIPPED=[['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112]];
-test('the prior releases are exactly the shipped 0.11.2 revisions, newest first',()=>{
- assert.deepEqual(PRIOR_RUNTIME_REVISIONS,SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`));
+test('the prior revisions include frozen 0.17.4-r1 and every shipped 0.11.2 release, newest first',()=>{
+ assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
+});
+test('the exact r1 0.17.4 release stays verifiable for offline control without Smart Tasks',t=>{
+ const {loc}=runtime(t),old=seedPriorRelease(loc,{generation:'r1'});
+ assert.equal(path.basename(old),'0.17.4-r1-a651f42711da');
+ assert.equal(previousRuntimeDirectory(loc),old);assert.equal(priorRuntimeDirectory(loc,path.basename(old)),old);
+ assert.equal(priorRuntimeVersion(loc,path.basename(old)),PASEO_VERSION);
+ const receiptFile=path.join(old,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
+ fs.writeFileSync(receiptFile,JSON.stringify({...receipt,lockSha256:'0'.repeat(64)}));
+ assert.equal(priorRuntimeDirectory(loc,path.basename(old)),null,'the revision prefix cannot authorize a different full lock hash');
 });
 for(const [generation,lockSha256] of SHIPPED)
 test(`0.11.2-${generation}-${lockSha256.slice(0,12)} supports verified offline control beside the 0.17.4 release`,t=>{

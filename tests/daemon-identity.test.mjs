@@ -127,9 +127,8 @@ function fixture(t, { platform = process.platform } = {}) {
  self(extra={},parentExtra={}){processes.set(selfPid,{bootId,startTicks:String(selfPid),uid:process.getuid(),role:'foreign',ppid:selfPid-1,...extra});processes.set(selfPid-1,{bootId,startTicks:String(selfPid-1),uid:process.getuid(),role:'foreign',...parentExtra});},
  /** Runs before every call the deletion of pruned releases makes, with the operation and its path: a test makes it slow or broken, or counts. */
  removal:fn=>{removal=fn;},
- // The running daemon comes from a 0.11.2 release an earlier Agent Connect installed. Prepared:
- // the 0.17.4 release is installed beside it, as after an upgrade's first activation.
- prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
+ // The running daemon comes from an earlier managed release. Prepared: the current release is installed beside it.
+ prior({generation='r4',prepared=false}={}){const oldRoot=seedPriorRelease(loc,{generation});const revision=path.basename(oldRoot);processes.get(initial.pid).revision=revision;if(generation==='r4'||generation==='r1')state.updateState({daemonPid:initial.pid,daemonStartedAt:initial.startedAt,daemonRuntimeRevision:revision});if(generation==='r2'){const lock=JSON.parse(fs.readFileSync(pidFile));delete lock.piPaseoProtocol;fs.writeFileSync(pidFile,JSON.stringify(lock));}allowStop=true;if(!prepared)fs.rmSync(root,{recursive:true});used.modules.length=0;used.cli.length=0;return oldRoot;},reuse(){const p=processes.get(initial.pid);p.startTicks+='9';p.role='foreign';},keep(){assert.equal(state.readState().installationId,installation);assert.equal(state.readState().onboardingSessionId,'keep-session');assert.equal(fs.readFileSync(path.join(loc.paseoHome,'agents.db'),'utf8'),'retain-data');assert.equal(fs.readFileSync(path.join(loc.stateDir,'pairing.private.json'),'utf8'),'retain-pairing');const config=JSON.parse(fs.readFileSync(path.join(loc.paseoHome,'config.json')));assert.equal(config.daemon.appendSystemPrompt,'retain');assert.equal(config.features.dictation.stt.language,'zh');}};
 }
 
 test('healthy adoption records private birth proof with official0644 PID file; status stays read-only',async t=>{
@@ -344,6 +343,27 @@ test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to 0.17.4 on t
  // The 0.11.2 release stays verified for a rollback and is never started.
  assert.equal(layout.previousRuntimeDirectory(f.loc),old);assert.equal(JSON.parse(fs.readFileSync(path.join(old,'.pi-paseo-runtime.json'))).revision,path.basename(old));
  assert.equal((await f.runtime.status()).diagnosticCode,null);await f.runtime.activate();assert.equal(f.starts(),1);
+});
+test('a healthy r1 daemon stays pending on upgrade, reports 0.17.4, and stop/start preserves its home and rollback',async t=>{
+ const f=fixture(t),old=f.prior({generation:'r1',prepared:true});
+ const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');assert.equal(pending.daemon.version,'0.17.4');
+ assert.equal(f.stops(),0);assert.equal(f.starts(),0);
+ f.permitStop();const stopped=await f.runtime.deactivate();assert.equal(stopped.daemon.running,false);assert.equal(f.stops(),1);assert.equal(f.used.stoppedVia,old);
+ const started=await f.runtime.activate();assert.equal(started.phase,'running');assert.equal(f.starts(),1);
+ assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);assert.equal(layout.previousRuntimeDirectory(f.loc),old);
+ assert.equal((await f.runtime.status()).daemon.version,layout.PASEO_VERSION);f.keep();
+});
+test('Darwin state identifies the verified r1 daemon and keeps its upgrade restart pending',async t=>{
+ const f=fixture(t,{platform:'darwin'});f.prior({generation:'r1',prepared:true});
+ const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');
+ assert.equal(pending.daemon.version,layout.PASEO_VERSION);assert.equal(pending.diagnosticCode,'RESTART_REQUIRED');
+ assert.equal(f.starts(),0);assert.equal(f.stops(),0);
+});
+test('a damaged r1 release receipt cannot authorize offline daemon control',async t=>{
+ const f=fixture(t),old=f.prior({generation:'r1'}),file=path.join(old,'.pi-paseo-runtime.json');
+ fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file)),lockSha256:'0'.repeat(64)}));
+ assert.equal((await f.runtime.status()).diagnosticCode,'DAEMON_RELEASE_UNAVAILABLE');
+ await assert.rejects(f.runtime.deactivate(),{code:'DAEMON_RELEASE_UNAVAILABLE'});assert.equal(f.stops(),0);assert.equal(f.starts(),0);
 });
 test('the start after an upgrade loads 0.11.2 speech shapes through 0.17.4 read-path normalization and keeps the other settings',async t=>{
  const f=fixture(t);f.prior({generation:'r4',prepared:true});

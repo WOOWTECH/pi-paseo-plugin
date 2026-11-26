@@ -13,7 +13,7 @@ import {DAEMON_STOP_TIMEOUT_MS,CLOSING_RECORDS_WARNING_AT} from './lifecycle-tim
 import {singleFlight,daemonStatusWindow} from './single-flight.mjs';
 import {usingAcceptanceAgent} from './acceptance-agent.mjs';
 import {acceptanceWorkspace} from './acceptance-workspace.mjs';
-import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,prunePlan,claimReleases,removeTombs,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
+import {runtimeDirectory,runtimeReady,prepareRuntimeManifest,markRuntimeReady,previousRuntimeDirectory,priorRuntimeDirectory,priorRuntimeVersion,prunePlan,claimReleases,removeTombs,RUNTIME_REVISION,PASEO_VERSION,LEGACY_PASEO_VERSION} from './runtime-layout.mjs';
 import { observeOwnedInstance, rememberOwnedInstance, recoverStaleInstance } from './daemon-identity.mjs';
 import { readRecord, writeRecord } from './onboarding.mjs';
 import { connectionPreferences, connectionTarget, targetEnvironment, targetConfiguration, targetPairUrl } from './connection-targets.mjs';
@@ -147,20 +147,20 @@ export function runningRevisions(loc) {
 // upstream modules. Resolved once per operation, so reading and stopping use the same release.
 //  * This release's daemon, or none: this release (before it is installed, the newest verified earlier
 //    release still reads the PID lock, so a foreign owner is reported instead of ignored).
-//  * A daemon of exactly one of the verified earlier releases: that release. Every Linux release since
-//    0.1.1 pins its revision in the daemon's environment; elsewhere 0.1.18+ (r4) record it, and a daemon
-//    without one was started by 0.1.4-0.1.17, all of them r2/r3 releases of 0.11.2.
+//  * A daemon of exactly one of the verified earlier releases: that release. Linux reads its pinned
+//    revision from the environment; elsewhere r1 and r4 recorded it in state, while r2/r3 did not.
 //  * Anything else (no verified release of that revision, an unknown or newer one): refused with
 //    DAEMON_RELEASE_UNAVAILABLE, never controlled through another release's modules.
 async function resolveControl(loc=locations()) {
  const daemon=await daemonRelease(loc);
  if(!daemon||daemon.revision===RUNTIME_REVISION){
   if(runtimeReady(loc))return {root:runtimeDirectory(loc),version:PASEO_VERSION};
-  if(!daemon){const root=previousRuntimeDirectory(loc)||(legacyVersion()===LEGACY_PASEO_VERSION?loc.runtimeDir:null);return {root,version:root&&LEGACY_PASEO_VERSION};}
+  if(!daemon){const root=previousRuntimeDirectory(loc)||(legacyVersion()===LEGACY_PASEO_VERSION?loc.runtimeDir:null);const version=root===loc.runtimeDir?LEGACY_PASEO_VERSION:(root&&priorRuntimeVersion(loc,path.basename(root)));return {root,version};}
  }
  const root=daemon.revision?priorRuntimeDirectory(loc,daemon.revision)
   :process.platform!=='linux'?previousRuntimeDirectory(loc,{unrecordedOnly:true}):null;
- return root?{root,version:LEGACY_PASEO_VERSION}:{root:null,refused:'DAEMON_RELEASE_UNAVAILABLE',pid:daemon.pid};
+ const version=root?(daemon.revision?priorRuntimeVersion(loc,daemon.revision):priorRuntimeVersion(loc,path.basename(root))):null;
+ return root?{root,version}:{root:null,refused:'DAEMON_RELEASE_UNAVAILABLE',pid:daemon.pid};
 }
 async function serverModule(relative, root) { return import(pathToFileURL(path.join(root,'node_modules/@getpaseo/server',relative)).href); }
 // config.json goes through the configuration module (@getpaseo/server/configuration, which re-exports
