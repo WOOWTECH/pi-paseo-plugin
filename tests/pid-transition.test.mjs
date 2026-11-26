@@ -8,10 +8,10 @@ import {withPidTransition} from '../src/pid-transition.mjs';
 import {patchPidLockSource,applyPidLockPatch,pidLockPatchReady,PID_LOCK_COPIES,ORIGINAL_PID_LOCK_SHA256,PATCHED_PID_LOCK_SHA256,PID_LOCK_PATCH_ID,PID_LOCK_0112} from '../src/pid-lock-patch.mjs';
 import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,priorRuntimeDirectory,priorRuntimeVersion,PRIOR_RUNTIME_REVISIONS,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
 import {BRAND_SERVER_PATH} from '../src/brand-identity-patch.mjs';
-import {SMART_TASKS_REGISTRY_PATH,SMART_TASKS_PATCH_ID} from '../src/smart-tasks-patch.mjs';
-import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO} from './helpers/runtime-pid-files.mjs';
+import {SMART_TASKS_REGISTRY_PATH,SMART_TASKS_DIRECTORY,SMART_TASKS_PATCH_ID} from '../src/smart-tasks-patch.mjs';
+import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO,TASKS_0174_R2} from './helpers/runtime-pid-files.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
-const original=fs.readFileSync(new URL('./fixtures/paseo-0.17.4/pid-lock.js',import.meta.url),'utf8');
+const original=fs.readFileSync(new URL('./fixtures/paseo-'+PASEO_VERSION+'/pid-lock.js',import.meta.url),'utf8');
 const original0112=fs.readFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),'utf8');
 function home(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'paseo-transition-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function runtime(t){const loc={runtimeDir:home(t)};seedPidFiles(loc);const root=runtimeDirectory(loc),cli=path.join(root,'node_modules/@getpaseo/cli');fs.mkdirSync(cli,{recursive:true});fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version:PASEO_VERSION}));return{loc,root};}
@@ -21,7 +21,7 @@ test('frozen official writer bytes patch deterministically and idempotently',()=
  const patched=patchPidLockSource(original);assert.equal(sha(patched),PATCHED_PID_LOCK_SHA256);
  assert.equal(patchPidLockSource(patched),patched);
  assert.throws(()=>patchPidLockSource(original+'\n'),{code:'PID_LOCK_SOURCE_MISMATCH'});
- assert.match(RUNTIME_REVISION,/^0\.17\.4-r2-[0-9a-f]{12}$/);
+ assert.match(RUNTIME_REVISION,/^0\.17\.5-r1-[0-9a-f]{12}$/);
 });
 test('the 0.11.2 writer is never patched for this release; its frozen constants still describe r3/r4',()=>{
  assert.throws(()=>patchPidLockSource(original0112),{code:'PID_LOCK_SOURCE_MISMATCH'});
@@ -82,17 +82,33 @@ test('official release/refresh missing home semantics do not create a directory'
 
 // Every 0.11.2 release an earlier Agent Connect shipped: r4 is what 0.1.18-0.1.23 run.
 const SHIPPED=[['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112]];
-test('the prior revisions include frozen 0.17.4-r1 and every shipped 0.11.2 release, newest first',()=>{
- assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
+test('the prior revisions include frozen 0.17.4-r2/r1 and every shipped 0.11.2 release, newest first',()=>{
+ assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.4-r2-a651f42711da','0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
 });
 test('the exact r1 0.17.4 release stays verifiable for offline control without Smart Tasks',t=>{
  const {loc}=runtime(t),old=seedPriorRelease(loc,{generation:'r1'});
  assert.equal(path.basename(old),'0.17.4-r1-a651f42711da');
  assert.equal(previousRuntimeDirectory(loc),old);assert.equal(priorRuntimeDirectory(loc,path.basename(old)),old);
- assert.equal(priorRuntimeVersion(loc,path.basename(old)),PASEO_VERSION);
+ assert.equal(priorRuntimeVersion(loc,path.basename(old)),'0.17.4');
  const receiptFile=path.join(old,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
  fs.writeFileSync(receiptFile,JSON.stringify({...receipt,lockSha256:'0'.repeat(64)}));
  assert.equal(priorRuntimeDirectory(loc,path.basename(old)),null,'the revision prefix cannot authorize a different full lock hash');
+});
+test('the exact 0.17.4-r2 Tasks release is verified for offline control and damaged Tasks bytes are refused',t=>{
+ const {loc}=runtime(t),old=seedPriorRelease(loc,{version:'0.17.4',generation:'r2'}),revision=path.basename(old);
+ assert.equal(revision,'0.17.4-r2-a651f42711da');
+ assert.equal(priorRuntimeDirectory(loc,revision),old);assert.equal(priorRuntimeVersion(loc,revision),'0.17.4');
+ const files=[path.join(old,SMART_TASKS_REGISTRY_PATH),path.join(old,SMART_TASKS_DIRECTORY,'index.client.ts')];
+ const receipt=JSON.parse(fs.readFileSync(path.join(old,'.pi-paseo-runtime.json')));
+ assert.equal(receipt.smartTasksPatchId,TASKS_0174_R2.patchId);
+ assert.equal(sha(fs.readFileSync(files[0])),TASKS_0174_R2.registrySha256,'the deployed registry matches the frozen r2 descriptor');
+ assert.equal(sha(fs.readFileSync(path.join(old,SMART_TASKS_DIRECTORY,'provenance.json'))),TASKS_0174_R2.provenanceSha256,'the deployed Tasks payload matches the frozen r2 descriptor');
+ for(const file of files){
+  const bytes=fs.readFileSync(file);fs.appendFileSync(file,'tampered');
+  assert.equal(priorRuntimeDirectory(loc,revision),null,file+' must fail the frozen r2 Tasks verification');
+  fs.writeFileSync(file,bytes);
+  assert.equal(priorRuntimeDirectory(loc,revision),old,file+' restoration returns the exact verified release');
+ }
 });
 for(const [generation,lockSha256] of SHIPPED)
 test(`0.11.2-${generation}-${lockSha256.slice(0,12)} supports verified offline control beside the 0.17.4 release`,t=>{

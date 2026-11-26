@@ -361,10 +361,14 @@ function managedConfig(config, port, launchers) {
   // belong to the host plugin; remove any legacy injected name while retaining other fields.
   const daemon = { ...config.daemon };
   delete daemon.name;
+  // 0.17.5 manages extra listeners through Devices without changing the main endpoint.
+  // Keep those explicitly saved endpoints across a restart; the managed main stays loopback.
+  const extraListeners = typeof daemon.listen === 'string' ? daemon.listen.split(',').slice(1).map(value => value.trim()).filter(Boolean) : [];
+  const listen = [`127.0.0.1:${port}`, ...extraListeners].join(',');
   const providersChanged = JSON.stringify(config.agents?.providers || {}) !== JSON.stringify(providers);
   const merged = {
     ...config, $schema: 'https://paseo.sh/schemas/paseo.config.v1.json', version: 1,
-    daemon: { ...daemon, listen: `127.0.0.1:${port}`, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, typeof config.daemon?.mcp?.injectIntoAgents === 'boolean' ? config.daemon.mcp.injectIntoAgents : connectionPreferences(loc).agentCollaboration) },
+    daemon: { ...daemon, listen, hostnames: ['localhost', '127.0.0.1', '.localhost'], relay: { ...config.daemon?.relay, enabled: true }, mcp: collaborationMcp(config.daemon?.mcp, typeof config.daemon?.mcp?.injectIntoAgents === 'boolean' ? config.daemon.mcp.injectIntoAgents : connectionPreferences(loc).agentCollaboration) },
     agents: { ...config.agents, providers, metadataGeneration: config.agents?.metadataGeneration || { providers: [] } },
     features: { ...config.features, webUi: { ...config.features?.webUi, enabled: true } },
     log: { ...config.log, console: { level: 'warn' }, file: { level: 'warn', path: 'daemon.log', rotate: { maxSize: '5m', maxFiles: 2 } } },

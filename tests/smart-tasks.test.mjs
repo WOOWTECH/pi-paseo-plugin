@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {PASEO_VERSION} from '../src/runtime-layout.mjs';
 import {applySmartTasksPatch,smartTasksPatchReady,SMART_TASKS_REGISTRY_PATH,SMART_TASKS_DIRECTORY} from '../src/smart-tasks-patch.mjs';
-const source=fileURLToPath(new URL('./fixtures/paseo-0.17.4/builtin-index.js',import.meta.url));
+const source=fileURLToPath(new URL('./fixtures/paseo-'+PASEO_VERSION+'/builtin-index.js',import.meta.url));
 function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-tasks-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

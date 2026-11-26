@@ -30,6 +30,19 @@ jobs:
       - run: node --check bin/install-host.mjs && bash -n scripts/install.sh
       - run: node scripts/check-package.mjs
       - run: node scripts/verify-smart-tasks.mjs
+      - name: Devices RPC and listener confirmation on an isolated loopback daemon
+        run: |
+          mkdir -p "$RUNNER_TEMP/devices-runtime"
+          cp runtime/package.json runtime/package-lock.json "$RUNNER_TEMP/devices-runtime/"
+          npm ci --prefix "$RUNNER_TEMP/devices-runtime" --omit=dev --ignore-scripts --no-audit --no-fund
+          DEVICES_TEST_RUNTIME="$RUNNER_TEMP/devices-runtime" node --input-type=module - <<'JS'
+          import {applyPidLockPatch} from './src/pid-lock-patch.mjs';
+          import {applyBrandIdentityPatch} from './src/brand-identity-patch.mjs';
+          import {applySmartTasksPatch} from './src/smart-tasks-patch.mjs';
+          const root=process.env.DEVICES_TEST_RUNTIME;
+          applyPidLockPatch(root);applyBrandIdentityPatch(root);applySmartTasksPatch(root);
+          JS
+          node scripts/verify-devices.mjs "$RUNNER_TEMP/devices-runtime"
       - run: node scripts/verify-package-install.mjs
   host:
     runs-on: ubuntu-latest

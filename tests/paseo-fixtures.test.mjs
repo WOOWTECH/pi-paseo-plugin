@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 import {configFixture,configProvenance,loadPersistedConfig} from './helpers/paseo-config.mjs';
 import {LOCK_0112_HONO} from './helpers/runtime-pid-files.mjs';
@@ -23,14 +24,26 @@ for(const version of [PASEO_VERSION,LEGACY_PASEO_VERSION])test(`vendored ${versi
  assert.deepEqual(fs.readFileSync(path.join(dir,'server/dist/server/server/private-files.js')),fs.readFileSync(path.join(dir,'../private-files.js')));
 });
 
-test('0.17.4 fixtures come from the tarballs the runtime lockfile pins',()=>{
+test('0.17.5 fixtures come from the tarballs the runtime lockfile pins',()=>{
  for(const [name,pkg] of Object.entries(configProvenance(PASEO_VERSION).packages)){
   const locked=runtimeLock.packages['node_modules/'+name];
   assert.ok(locked,name);assert.equal(locked.version,pkg.version,name);assert.equal(locked.integrity,pkg.tarballIntegrity,name);
  }
- const writer=JSON.parse(fs.readFileSync(path.join(root,'tests/fixtures/paseo-0.17.4/provenance.json'),'utf8'));
+ const fixtureDir=path.join(root,'tests/fixtures/paseo-'+PASEO_VERSION);
+ const writer=JSON.parse(fs.readFileSync(path.join(fixtureDir,'provenance.json'),'utf8'));
+ for(const [file,hash] of Object.entries(writer.files))assert.equal(sha256(path.join(fixtureDir,file)),hash,file);
+ const server=runtimeLock.packages['node_modules/@getpaseo/server'];
+ assert.equal(writer.tarballIntegrity,server.integrity);assert.equal(writer.version,PASEO_VERSION);
  assert.equal(writer.tarballIntegrity,runtimeLock.packages['node_modules/@getpaseo/server'].integrity);
  assert.equal(runtimeLock.packages['node_modules/@getpaseo/cli'].version,PASEO_VERSION);
+});
+
+test('the retained 0.17.4 fixtures keep their frozen release provenance',()=>{
+ const fixtureDir=path.join(root,'tests/fixtures/paseo-0.17.4');
+ const writer=JSON.parse(fs.readFileSync(path.join(fixtureDir,'provenance.json'),'utf8'));
+ assert.equal(writer.version,'0.17.4');
+ assert.equal(sha256(path.join(fixtureDir,'pid-lock.js')),writer.pidLockSha256);
+ assert.equal(createHash('sha256').update(gunzipSync(fs.readFileSync(path.join(fixtureDir,'websocket-server.js.gz')))).digest('hex'),writer.websocketServerSha256);
 });
 
 test('0.11.2 fixtures come from the lockfile of the 0.11.2-r4 release Agent Connect 0.1.18-0.1.23 installed',()=>{

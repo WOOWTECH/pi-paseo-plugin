@@ -12,7 +12,7 @@ import {patchBrandIdentitySource, applyBrandIdentityPatch, brandIdentityPatchRea
   ORIGINAL_BRAND_SERVER_SHA256, PATCHED_BRAND_SERVER_SHA256} from '../src/brand-identity-patch.mjs';
 import {runtimeDirectory, markRuntimeReady, runtimeReady, previousRuntimeDirectory, PASEO_VERSION} from '../src/runtime-layout.mjs';
 import {seedPidFiles, seedPriorRelease} from './helpers/runtime-pid-files.mjs';
-const source = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-0.17.4/websocket-server.js.gz', import.meta.url))).toString();
+const source = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-'+PASEO_VERSION+'/websocket-server.js.gz', import.meta.url))).toString();
 const source0112 = gunzipSync(fs.readFileSync(new URL('./fixtures/paseo-0.11.2/websocket-server.js.gz', import.meta.url))).toString();
 const sha = value => createHash('sha256').update(value).digest('hex');
 function fixture(t) {
@@ -27,7 +27,7 @@ function payload(text, target) {
   // Exercise the actual frozen upstream payload builder, including all feature
   // flags. The remaining class needs real providers/network and runs in CI/live.
   const method=text.slice(text.indexOf('    buildServerInfoStatusPayload(session) {'),text.indexOf('    createServerInfoMessage(session) {'));
-  const object=vm.runInNewContext('({' + method + '})',{WS_PROTOCOL_VERSION:1,getHostName:()=> 'fixture',agentConnectBrand:selectedBrand(target)});
+  const object=vm.runInNewContext('({' + method + '})',{WS_PROTOCOL_VERSION:1,getHostName:()=> 'fixture',getCachedHostMachineKind:()=>undefined,agentConnectBrand:selectedBrand(target)});
   const daemon={serverId:'srv_fixture',daemonVersion:PASEO_VERSION,providerSnapshotManager:{supportsConfigRequiredProvider:()=>false}};
   return object.buildServerInfoStatusPayload.call(daemon,{getPermissions:()=>[],getHostSourceId:()=>'owner'});
 }
