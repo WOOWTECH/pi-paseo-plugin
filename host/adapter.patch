@@ -996,10 +996,10 @@ index c50b18f..1abc647 100644
  
 diff --git a/components/PaseoPluginPanel.behavior.test.mjs b/components/PaseoPluginPanel.behavior.test.mjs
 new file mode 100644
-index 0000000..9493cae
+index 0000000..dc5c30c
 --- /dev/null
 +++ b/components/PaseoPluginPanel.behavior.test.mjs
-@@ -0,0 +1,763 @@
+@@ -0,0 +1,902 @@
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
 +import { fileURLToPath } from "node:url";
@@ -1076,7 +1076,7 @@ index 0000000..9493cae
 +    return (node.props?.summary ?? "") + text(node.props?.children);
 +  }
 +  function button(label) {
-+    const found = elements(tree).find((node) => node.type === "ConfigButton" && text(node) === label);
++    const found = elements(tree).find((node) => node.type === "ConfigButton" && (label instanceof RegExp ? label.test(text(node)) : text(node) === label));
 +    assert.ok(found, `Button ${label} exists`);
 +    return found;
 +  }
@@ -1445,6 +1445,144 @@ index 0000000..9493cae
 +  }
 +});
 +
++test("N1 status GET failures preserve accepted scheduled-start tracking", async (t) => {
++  let activations = 0;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") { activations++; return Response.json({ phase: "starting", scheduled: true }); }
++    if (activations) return Response.json({ error: "Temporary status failure" }, { status: 503 });
++    return Response.json({ phase: "stopped", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button(/啟動/).props.disabled, true, "status failure must preserve the scheduled-start guard");
++  f.button(/啟動/).props.onClick();
++  await f.settle();
++  assert.equal(activations, 1, "a status transport error does not prove the accepted start ended");
++});
++
++test("N2a Stop remains enabled for an accepted start while status still says disabled", async (t) => {
++  const actions = [];
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") {
++      const action = JSON.parse(options.body).action;
++      actions.push(action);
++      return Response.json(action === "activate" ? { phase: "starting", scheduled: true } : { phase: "disabled" });
++    }
++    return Response.json({ phase: "disabled", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button("停止 Agent Connect 服務").props.disabled, false);
++  f.button("停止 Agent Connect 服務").props.onClick();
++  await f.settle();
++  assert.deepEqual(actions, ["activate", "disable"]);
++});
++
++test("N2b receipt releases Start busy and an old Start finally cannot clear Stop busy", async (t) => {
++  let releaseStartStatus, releaseStop;
++  const startStatus = new Promise((resolve) => { releaseStartStatus = resolve; });
++  const stopReceipt = new Promise((resolve) => { releaseStop = resolve; });
++  let activated = false, stopped = false;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") {
++      const action = JSON.parse(options.body).action;
++      if (action === "activate") { activated = true; return Response.json({ phase: "starting", scheduled: true }); }
++      if (action === "disable") return stopReceipt;
++    }
++    if (stopped) return Response.json({ phase: "disabled", enabled: false, packageEnabled: true, daemon: { running: false, healthy: false } });
++    if (!activated) return Response.json({ phase: "running", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", daemon: { running: true, healthy: true } });
++    return startStatus;
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button("停止 Agent Connect 服務").props.disabled, false, "the read-only post-receipt GET must not retain mutation busy");
++  f.button("停止 Agent Connect 服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button("停止中…").props.disabled, true);
++  releaseStartStatus(Response.json({ phase: "starting", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", daemon: { running: true, healthy: false } }));
++  await f.settle();
++  assert.equal(f.button("停止中…").props.disabled, true, "the superseded Start finally must not clear the newer Stop busy state");
++  stopped = true;
++  releaseStop(Response.json({ phase: "disabled" }));
++  await f.settle();
++  assert.equal(f.button("啟動服務").props.disabled, false);
++});
++
++test("N3 target draft round-trip does not discard accepted start tracking", async (t) => {
++  let activations = 0;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") { activations++; return Response.json({ phase: "starting", scheduled: true }); }
++    return Response.json(activations
++      ? { phase: "starting", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", daemon: { running: true, healthy: false } }
++      : { phase: "stopped", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  const select = () => f.elements().find((node) => node.type === "select");
++  select().props.onChange({ target: { value: "apporo" } });
++  f.render();
++  select().props.onChange({ target: { value: "paseo" } });
++  f.render();
++  assert.equal(f.button(/啟動/).props.disabled, true, "draft edits do not clear an accepted lifecycle start");
++  f.button(/啟動/).props.onClick();
++  await f.settle();
++  assert.equal(activations, 1);
++});
++
++test("N4 restart_required is never announced as ready, even with a healthy daemon", async (t) => {
++  let activated = false;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") { activated = true; return Response.json({ phase: "starting", scheduled: true }); }
++    return Response.json(activated
++      ? { phase: "restart_required", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", daemon: { running: true, healthy: true } }
++      : { phase: "stopped", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.doesNotMatch(f.text(), /服務已確認就緒/);
++  assert.match(f.text(), /需要重新啟動/);
++});
++
++test("N4b restart_required resolves tracking even when the daemon is unhealthy", async (t) => {
++  let activated = false;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") { activated = true; return Response.json({ phase: "starting", scheduled: true }); }
++    return Response.json(activated
++      ? { phase: "restart_required", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", daemon: { running: false, healthy: false } }
++      : { phase: "stopped", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button("啟動服務").props.disabled, false, "restart_required is a known recovery state, not an unknown operation");
++  assert.doesNotMatch(f.text(), /等待服務就緒/);
++  assert.match(f.text(), /需要重新啟動/);
++});
++
++test("restart_required with configurationPending remains a startup transition", async (t) => {
++  let activated = false, pending = true;
++  const f = fixture(t, { fetch: async (_url, options) => {
++    if (options?.method === "POST") { activated = true; return Response.json({ phase: "starting", scheduled: true }); }
++    if (!activated) return Response.json({ phase: "stopped", enabled: false, packageEnabled: true, configuration: { target: "paseo" }, daemon: { running: false, healthy: false } });
++    return Response.json({ phase: "restart_required", enabled: true, packageEnabled: true, configuration: { target: "paseo" }, activeTarget: "paseo", configurationPending: pending, daemon: { running: true, healthy: true } });
++  } });
++  await f.settle();
++  f.button("啟動服務").props.onClick();
++  await f.settle();
++  assert.equal(f.button("啟動中，等待就緒…").props.disabled, true, "pending configuration keeps startup tracking active");
++  pending = false;
++  for (const poll of f.timers.values()) poll();
++  await f.settle();
++  assert.equal(f.button("啟動服務").props.disabled, false, "a settled restart requirement is a known recovery state");
++  assert.match(f.text(), /需要重新啟動/);
++  assert.doesNotMatch(f.text(), /服務已確認就緒/);
++});
++
 +test("scheduled start waits visibly, keeps Stop and polling available, then releases on readiness", async (t) => {
 +  const requests = [];
 +  let activated = false, ready = false, releaseStart;
@@ -1729,7 +1867,7 @@ index 0000000..9493cae
 +  assert.doesNotMatch(f.text(), /啟動中，等待服務就緒/);
 +});
 +
-+test("a target change clears scheduled waiting without another lifecycle action", async (t) => {
++test("a target draft change preserves scheduled tracking without another lifecycle action", async (t) => {
 +  const posts = [];
 +  const f = fixture(t, { fetch: async (_url, options) => {
 +    if (options?.method === "POST") { posts.push(JSON.parse(options.body).action); return Response.json({ phase: "starting", scheduled: true }); }
@@ -1741,12 +1879,13 @@ index 0000000..9493cae
 +  assert.equal(f.button("啟動中，等待就緒…").props.disabled, true);
 +  f.elements().find((node) => node.type === "select").props.onChange({ target: { value: "apporo" } });
 +  f.render();
-+  assert.equal(f.button("啟動服務").props.disabled, true, "the unsaved target guard remains active after clearing wait");
++  assert.equal(f.button("啟動中，等待就緒…").props.disabled, true, "the accepted start remains tracked while the unsaved-target guard is active");
 +  assert.match(f.text(), /標的尚未儲存/);
-+  assert.equal(f.deadlines.size, 0);
++  assert.equal(f.deadlines.size, 1, "draft selection does not cancel the accepted start deadline");
 +  await f.advance(120_000);
 +  assert.deepEqual(posts, ["activate"]);
-+  assert.doesNotMatch(f.text(), /結果尚未確認.*不會自動重送/);
++  assert.equal(f.button("啟動結果待確認").props.disabled, true);
++  assert.match(f.text(), /結果尚未確認.*不會自動重送/);
 +});
 +
 +test("scheduled start remains bound to the target selected when activate was clicked", async (t) => {
@@ -1765,7 +1904,7 @@ index 0000000..9493cae
 +});
 diff --git a/components/PaseoPluginPanel.tsx b/components/PaseoPluginPanel.tsx
 new file mode 100644
-index 0000000..666c326
+index 0000000..b83d71b
 --- /dev/null
 +++ b/components/PaseoPluginPanel.tsx
 @@ -0,0 +1,361 @@
@@ -1899,21 +2038,23 @@ index 0000000..666c326
 +        if (tracking?.workspace === workspace) tracking.statusReads++;
 +        const savedChanged = nextTarget !== watchedStart.target;
 +        const terminal = next.phase === "error" || next.phase === "failed";
++        const restartRequired = next.phase === "restart_required" && !next.configurationPending;
 +        // host-api.lifecycle can acknowledge scheduling before runtime.activate
 +        // updates desiredEnabled/phase. Its first status read may still be stale.
 +        const terminalConfirmed = terminal && (!tracking || tracking.statusReads > 1);
 +        const healthy = next.enabled !== false && next.daemon?.healthy === true && !next.configurationPending;
 +        const activeMatches = !next.activeTarget || next.activeTarget === watchedStart.target;
-+        const ready = healthy && activeMatches;
-+        const activeChangedAfterReady = healthy && Boolean(next.activeTarget) && !activeMatches;
++        const ready = next.phase !== "restart_required" && healthy && activeMatches;
++        const activeChangedAfterReady = next.phase !== "restart_required" && healthy && Boolean(next.activeTarget) && !activeMatches;
 +        // A stopped snapshot immediately after `scheduled: true` can be stale.
 +        // Only use it to resolve a direct request timeout's unknown result; the
 +        // accepted background start remains tracked until readiness/error/change/deadline.
 +        const confirmedStopped = !tracking && Boolean(uncertain) && next.enabled === false && next.daemon?.running !== true;
-+        if (savedChanged || terminalConfirmed || ready || activeChangedAfterReady || confirmedStopped) {
++        if (savedChanged || terminalConfirmed || restartRequired || ready || activeChangedAfterReady || confirmedStopped) {
 +          clearStartTracking();
 +          if (savedChanged || activeChangedAfterReady) setNotice("連線標的已變更；已解除啟動等待。請確認目前與已儲存的標的。");
 +          else if (terminalConfirmed) setNotice("啟動服務回報失敗；請檢查診斷後再決定下一步。");
++          else if (restartRequired) setNotice("Agent Connect 需要重新啟動；請先停止服務，再手動啟動。");
 +          else if (ready) setNotice("Agent Connect 服務已確認就緒。");
 +          else if (confirmedStopped) setNotice("已確認服務尚未啟動；檢查狀態後可手動重試。");
 +        }
@@ -1928,9 +2069,6 @@ index 0000000..666c326
 +      if (!collaborationEdited.current) setCollaboration(next.configuration?.agentCollaboration === true);
 +    } catch (failure) {
 +      if (workspace !== versions.workspace || version !== versions.refresh) return;
-+      const requestTimedOut = failure instanceof Error && failure.message === REQUEST_TIMEOUT_MESSAGE;
-+      if (startTracking.current?.workspace === workspace && !requestTimedOut) clearStartTracking();
-+      if (unconfirmedStart.current?.workspace === workspace && !requestTimedOut) clearStartTracking();
 +      setStatusCurrent(false);
 +      setPairUrl(null);
 +      setError(failure instanceof Error ? failure.message : "Agent Connect 狀態暫時無法取得。");
@@ -2024,6 +2162,7 @@ index 0000000..666c326
 +          : "設定已儲存。");
 +      }
 +      versions.mutation = false;
++      if (kind === "activate" && result.scheduled === true) setBusy("");
 +      await refresh();
 +    } catch (failure) {
 +      if (!current()) return;
@@ -2070,7 +2209,7 @@ index 0000000..666c326
 +        <ConfigButton onClick={() => void refresh()} disabled={Boolean(busy)}>重新整理</ConfigButton>
 +        <ConfigButton onClick={() => void action("diagnose")} disabled={Boolean(busy)}>{busy === "diagnose" ? "診斷中…" : "檢查診斷"}</ConfigButton>
 +        <ConfigButton onClick={() => void action("activate")} disabled={Boolean(busy) || packageDisabled || activateBlocked || startWaiting || startUnconfirmed}>{startWaiting ? "啟動中，等待就緒…" : startUnconfirmed ? "啟動結果待確認" : busy === "activate" ? "啟動中…" : "啟動服務"}</ConfigButton>
-+        <ConfigButton onClick={() => void action("disable")} disabled={mutationBusy || packageDisabled || (status.enabled === false && status.daemon?.running !== true)}>{busy === "disable" ? "停止中…" : "停止 Agent Connect 服務"}</ConfigButton>
++        <ConfigButton onClick={() => void action("disable")} disabled={mutationBusy || packageDisabled || (status.enabled === false && status.daemon?.running !== true && !startWaiting && !startUnconfirmed)}>{busy === "disable" ? "停止中…" : "停止 Agent Connect 服務"}</ConfigButton>
 +        <a href={savedTarget.appUrl} target="_blank" rel="noopener noreferrer" className="config-button config-button-secondary config-button-default">開啟 {savedTarget.label}</a>
 +      </ConfigDetailActions>
 +      {packageDisabled && <p style={{ fontSize: 12, margin: 0 }}>請先在 Pi Web 插件設定啟用 Agent Connect，再進行配對。</p>}
@@ -2079,7 +2218,7 @@ index 0000000..666c326
 +            <ConfigSectionTitle>連線設定</ConfigSectionTitle>
 +            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>連線標的
 +              <select aria-label="連線標的" className="config-add-source-input" value={target} disabled={Boolean(busy)} onChange={(event) => {
-+                if (isConnectionTarget(event.target.value)) { clearStartTracking(); targetEdited.current = true; setTarget(event.target.value); setPairUrl(null); setCatalogs([]); }
++                if (isConnectionTarget(event.target.value)) { targetEdited.current = true; setTarget(event.target.value); setPairUrl(null); setCatalogs([]); }
 +              }}>
 +                {CONNECTION_TARGETS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
 +              </select>
