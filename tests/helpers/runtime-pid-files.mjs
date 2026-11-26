@@ -20,19 +20,22 @@ export const BRAND_0174=Object.freeze({original:'bfc79901aa7768a51b98385b6f729da
 export const TASKS_0174_R2=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'08a0cbe942bd3136d983e63f8c723f2b17e21f433d410bddb6faf4b5a1c802c8',patchId:'2250785f3f115705f092c3a0b45ae43386c57ef596a1c9afb65a02a38caeb485'});
 export const LOCK_0175_R1='8664f2c3f8f58c15b8ec264fec9b69c3bc443192efd60365212e532c811f4ce2';
 export const BRAND_0175_R1=Object.freeze({original:'a11dd0366089d25c57c71929c3d56d47dfef3d40cc272c010c4e08bc74d9ac19',patched:'4abdd2bc4f72d5865521b0d5adfca0743b6bd3a7cb8729df42f9b0baa635c523',patchId:'54f658b3f7885b521b6d664efbbd22b5f384c1878d36e45bb988de9ce9ac916b',helperSha256:'036471982ccbbb5a7c3418631518025b245ac50e1c0b1a29c3824d16ba069733'});
-function seedReleasedTasks(root) {
- const frozen=JSON.parse(gunzipSync(fs.readFileSync(path.join(fixtures,'better-paseo-d00161.json.gz'))));
+export const TASKS_0175_R2=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'370a20c236583c6d0780d6fa3bdffc6b4723fb0f2f12b612d56fc5a2af3fae95',patchId:'26edef83f851dbba2147fedc49380ebface9abb635c50f421582cb4886a233db'});
+function seedReleasedTasks(root,release,{fixture='better-paseo-d00161.json.gz'}={}) {
+ const frozen=JSON.parse(gunzipSync(fs.readFileSync(path.join(fixtures,fixture))));
  const dir=path.join(root,SMART_TASKS_DIRECTORY);
  for(const [name,value] of Object.entries(frozen)){
   const file=path.join(dir,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,Buffer.from(value,'base64'));
  }
  const provenance=fs.readFileSync(path.join(dir,'provenance.json'));
- if(createHash('sha256').update(provenance).digest('hex')!==TASKS_0174_R2.provenanceSha256)throw new Error('frozen Tasks provenance changed');
+ if(createHash('sha256').update(provenance).digest('hex')!==release.provenanceSha256)throw new Error('frozen Tasks provenance changed');
  for(const [name,hash] of Object.entries(JSON.parse(provenance).files))if(createHash('sha256').update(fs.readFileSync(path.join(dir,name))).digest('hex')!==hash)throw new Error('frozen Tasks bytes changed');
  const registry=path.join(root,SMART_TASKS_REGISTRY_PATH);
- fs.writeFileSync(registry,fs.readFileSync(registry,'utf8').replace('    "antigravity-provider",','    "antigravity-provider",\n    "better-paseo",'));
- if(createHash('sha256').update(fs.readFileSync(registry)).digest('hex')!==TASKS_0174_R2.registrySha256)throw new Error('frozen registry changed');
+ const registryBytes=fs.readFileSync(registry);
+ fs.writeFileSync(registry,registryBytes.toString().replace('    \"antigravity-provider\",','    \"antigravity-provider\",\n    \"better-paseo\",'));
+ if(createHash('sha256').update(fs.readFileSync(registry)).digest('hex')!==release.registrySha256)throw new Error('frozen registry changed');
 }
+
 function seedServer(root,version,{patched=false}={}) {
  const fixture=path.join(fixtures,'paseo-'+version);
  const server=path.join(root,'node_modules/@getpaseo/server');
@@ -61,9 +64,10 @@ export function seedPidFiles(loc) {
 /** A verified earlier release as Agent Connect left it. 0.17.4-r1 has PID-lock and brand patches but no
  * Smart Tasks. For 0.11.2, r3/r4 have patched writers, r2 has the original ones, and r4 also has branding. */
 export function seedPriorRelease(loc,{generation='r4',version=generation==='r1'?'0.17.4':LEGACY_PASEO_VERSION,lockSha256=(version==='0.17.5'?LOCK_0175_R1:version==='0.17.4'?LOCK_0174_R1:generation==='r2'?LOCK_0112:LOCK_0112_HONO),patched=generation!=='r2'}={}) {
- if((version==='0.17.4'&&(generation==='r1'||generation==='r2'))||(version==='0.17.5'&&generation==='r1')){
+ if((version==='0.17.4'&&(generation==='r1'||generation==='r2'))||(version==='0.17.5'&&(generation==='r1'||generation==='r2'))){
   const brand=version==='0.17.5'?BRAND_0175_R1:BRAND_0174;
   const hasTasks=version==='0.17.5'||generation==='r2';
+  const tasks=version==='0.17.5'&&generation==='r2'?TASKS_0175_R2:TASKS_0174_R2;
   const revision=version+'-'+generation+'-'+lockSha256.slice(0,12);
   const root=path.join(loc.runtimeDir,'releases',revision);
   seedServer(root,version);
@@ -79,12 +83,12 @@ export function seedPriorRelease(loc,{generation='r4',version=generation==='r1'?
   const brandFile=path.join(root,BRAND_SERVER_PATH);
   fs.writeFileSync(brandFile,patchBrandIdentitySource(fs.readFileSync(brandFile,'utf8'),brand));
   fs.writeFileSync(path.join(path.dirname(brandFile),'pi-paseo-brand-identity.mjs'),brandHelper);
-  if(hasTasks)seedReleasedTasks(root);
+  if(hasTasks)seedReleasedTasks(root,tasks,version==='0.17.5'&&generation==='r2'?{fixture:'better-paseo-0175-r2-a61.json.gz'}:{});
   const cli=path.join(root,'node_modules/@getpaseo/cli');fs.mkdirSync(cli,{recursive:true});
   fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version}));
   fs.mkdirSync(path.join(root,'node_modules/@getpaseo/server/dist/server/web-ui'),{recursive:true});
   fs.writeFileSync(path.join(serverRoot,'dist/server/web-ui/index.html'),'fixture');
-  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify({lockSha256,revision,pidLockPatchId:PID_0174.patchId,brandIdentityPatchId:brand.patchId,...(hasTasks?{smartTasksPatchId:TASKS_0174_R2.patchId}:{})}));
+  fs.writeFileSync(path.join(root,'.pi-paseo-runtime.json'),JSON.stringify({lockSha256,revision,pidLockPatchId:PID_0174.patchId,brandIdentityPatchId:brand.patchId,...(hasTasks?{smartTasksPatchId:tasks.patchId}:{})}));
   return root;
  }
  const revision=LEGACY_PASEO_VERSION+'-'+generation+'-'+lockSha256.slice(0,12);

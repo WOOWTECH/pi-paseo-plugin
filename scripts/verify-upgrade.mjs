@@ -2,21 +2,19 @@
 // Opt-in smoke of the real upgrade, with real Paseo daemons. NOT part of CI: it downloads two runtimes (about
 // 1.3 GB), starts real daemons and takes minutes.
 //
-//   PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|fresh]
+//   PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|legacy|fresh]
 //
 // Skipped (exit 0) unless PI_PASEO_UPGRADE_SMOKE=1, and on anything but Linux. It needs git with the old plugin's
-// commit (PI_PASEO_UPGRADE_OLD_REF, default 23026e2 = Agent Connect 0.1.26, which runs Paseo 0.17.4-r2), tar, npm and
+// commit (PI_PASEO_UPGRADE_OLD_REF, default bf563b8 = Agent Connect rc.2 / Paseo 0.17.5-r2; `legacy` pins 23026e2 = 0.1.26 / 0.17.4-r2), tar, npm and
 // access to the npm registry. Everything lives in one temporary directory (isolated HOME, plugin state, runtime
 // directory and PATH with provider commands that fail, so no provider is installed or started); the directory and
 // every process that points into it, terminal workers included, are removed at the end. Nothing of this user's
 // own Paseo or Agent Connect is read or written. The daemons contact their relay (relay.paseo.sh) as any
 // installation does, with throwaway identities.
 //
-// upgrade  the 0.1.26 plugin installs 0.17.4-r2 and starts its daemon, which gets a workspace and a pairing. This tree
-//          then activates: RESTART_REQUIRED with the old daemon still serving through its own release; an explicit
-//          stop and start moves the same PASEO_HOME to 0.17.5 with the same server id, daemon keypair, pairing
-//          record and workspace, and the old release directory stays. A throwaway old release is pruned only after
-//          that start.
+// upgrade  Agent Connect rc.2 installs 0.17.5-r2 and starts its daemon. This tree upgrades it to r3, checks
+//          RESTART_REQUIRED and old-release control, then the rc.2 code starts the same home back on r2.
+// legacy   preserve the 0.1.26 / 0.17.4-r2 upgrade path as a separate smoke.
 // fresh    this tree on an empty host: install, start, ownership, pairing shape, branded handshake, a terminal
 //          worker. Then a host whose ps stops working while that terminal is open: the stop completes with
 //          TERMINAL_CLEANUP_NOT_CONFIRMED as a warning and nothing is signaled (the terminal worker is still
@@ -41,10 +39,12 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const repoRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const self=fileURLToPath(import.meta.url);
-const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||'23026e2442403ddee8df9f764ded6ea1a75b121e',DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
+const DEFAULT_OLD_REF='bf563b8171ba64b38bfb117d57619ec814052714';
+const LEGACY_OLD_REF='23026e2442403ddee8df9f764ded6ea1a75b121e';
+const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||DEFAULT_OLD_REF,DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
 // A commit, tag or branch name: it is passed to git archive, so it may not start like an option.
 const OLD_REF_VALID=/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(OLD_REF);
-const OLD_VERSION='0.1.26',OLD_REVISION='0.17.4-r2-a651f42711da',OLD_PASEO='0.17.4',NEW_PASEO='0.17.5';
+const OLD_VERSION='0.1.27-rc.2',OLD_REVISION='0.17.5-r2-8664f2c3f8f5',OLD_PASEO='0.17.5',NEW_PASEO='0.17.5';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fileSha=file=>fs.existsSync(file)?sha(fs.readFileSync(file)):null;
 const readJson=file=>JSON.parse(fs.readFileSync(file,'utf8'));
@@ -347,7 +347,7 @@ async function failingPs(runtime,state,load,loc,healthReport,{release,workspaceI
 function freePort() {
  return new Promise((resolve,reject)=>{const server=net.createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>resolve(port));});});
 }
-function scenarioEnvironment(base,root,port,token) {
+function scenarioEnvironment(base,root,port,token,oldRef) {
  const env={...process.env};
  for(const key of Object.keys(env))if(/^(PASEO_|PI_PASEO_|PI_WEB_PASSWORD|CODEX_HOME|OMNIGENT_|ANTHROPIC_|OPENAI_|CLAUDE_)/.test(key))delete env[key];
  // Provider commands that fail: no provider is installed or started. A ps that delegates to the real one until the flag exists.
@@ -360,7 +360,7 @@ function scenarioEnvironment(base,root,port,token) {
   PI_PASEO_PORT:String(port),PI_PASEO_SKIP_POSTINSTALL:'1',PI_PASEO_SMOKE_PS_FLAG:flag,npm_config_cache:path.join(base,'npm-cache'),NO_COLOR:'1',
   // Added after the filter above, so the phases get them: the opt-in, the secret that proves this script started them,
   // and a custom old ref (without it a phase assumes the default and fails on any other).
-  PI_PASEO_UPGRADE_SMOKE:'1',PI_PASEO_UPGRADE_SMOKE_TOKEN:token,...(DEFAULT_OLD?{}:{PI_PASEO_UPGRADE_OLD_REF:OLD_REF}),
+  PI_PASEO_UPGRADE_SMOKE:'1',PI_PASEO_UPGRADE_SMOKE_TOKEN:token,...(oldRef===DEFAULT_OLD_REF?{}:{PI_PASEO_UPGRADE_OLD_REF:oldRef}),
   PATH:[shim,providers,path.dirname(process.execPath),env.PATH||''].join(path.delimiter)};
 }
 function prepareScenario(base,name) {
@@ -395,21 +395,23 @@ async function orchestrate(which) {
  const base=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-upgrade-smoke-')),strays={};let failed=false,ok=false;
  const sweep=(dir,label)=>{const left=processesUnder(dir);for(const row of left)try{process.kill(row.pid,'SIGKILL');}catch{}strays[label]=left.map(row=>row.script||row.title);return left.length;};
  const fail=(label,result)=>{failed=true;console.error(JSON.stringify({passed:false,phase:label,exit:result.code,detail:result.err.trim().split('\n').slice(-12).join('\n')}));};
- try {
-  if(['all','upgrade'].includes(which)) {
-   const root=prepareScenario(base,'upgrade'),oldRoot=path.join(base,'plugin-old'),env=scenarioEnvironment(base,root,await freePort(),token);fs.mkdirSync(oldRoot);
-   execFileSync('sh',['-c','git -C "$1" archive "$2" | tar -x -C "$3"','sh',repoRoot,OLD_REF,oldRoot]);
-   const old=await runPhase(['old',oldRoot,path.join(root,'facts.json')],env);
-   if(old.code!==0)fail('old plugin',old);
-   else {
-    const next=await runPhase(['upgrade',path.join(root,'facts.json')],env);
-    if(next.code!==0)fail('upgrade',next);
-    else {const rollback=await runPhase(['rollback',oldRoot,path.join(root,'facts.json')],env);if(rollback.code!==0)fail('rollback',rollback);}
-   }
-   if(sweep(root,'upgrade'))failed=true;
+ const runUpgrade=async(label,oldRef)=>{
+  const root=prepareScenario(base,label),oldRoot=path.join(base,label+'-plugin-old'),env=scenarioEnvironment(base,root,await freePort(),token,oldRef);fs.mkdirSync(oldRoot);
+  execFileSync('sh',['-c','git -C "$1" archive "$2" | tar -x -C "$3"','sh',repoRoot,oldRef,oldRoot]);
+  const old=await runPhase(['old',oldRoot,path.join(root,'facts.json')],env);
+  if(old.code!==0)fail(label+' old plugin',old);
+  else {
+   const next=await runPhase(['upgrade',path.join(root,'facts.json')],env);
+   if(next.code!==0)fail(label+' upgrade',next);
+   else {const rollback=await runPhase(['rollback',oldRoot,path.join(root,'facts.json')],env);if(rollback.code!==0)fail(label+' rollback',rollback);}
   }
+  if(sweep(root,label))failed=true;
+ };
+ try {
+  if(['all','upgrade'].includes(which))await runUpgrade('upgrade',OLD_REF);
+  if(['all','legacy'].includes(which)&&!failed)await runUpgrade('legacy',LEGACY_OLD_REF);
   if(['all','fresh'].includes(which)&&!failed) {
-   const root=prepareScenario(base,'fresh'),result=await runPhase(['fresh'],scenarioEnvironment(base,root,await freePort(),token));
+   const root=prepareScenario(base,'fresh'),result=await runPhase(['fresh'],scenarioEnvironment(base,root,await freePort(),token,DEFAULT_OLD_REF));
    if(result.code!==0)fail('fresh',result);
    if(sweep(root,'fresh'))failed=true;
   }
@@ -445,7 +447,7 @@ if(first==='--phase') {
  console.log(JSON.stringify({skipped:true,reason:'Linux only'}));
 } else {
  const which=first||'all';
- if(!['all','upgrade','fresh'].includes(which)){console.error(JSON.stringify({passed:false,code:'USAGE',message:'node scripts/verify-upgrade.mjs [all|upgrade|fresh]'}));process.exitCode=2;}
+ if(!['all','upgrade','legacy','fresh'].includes(which)){console.error(JSON.stringify({passed:false,code:'USAGE',message:'node scripts/verify-upgrade.mjs [all|upgrade|legacy|fresh]'}));process.exitCode=2;}
  else {
   try {
    if(!OLD_REF_VALID)throw new Error('PI_PASEO_UPGRADE_OLD_REF');

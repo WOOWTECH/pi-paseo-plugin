@@ -1,6 +1,6 @@
 {
   "smartRepository": "https://github.com/WOOWTECH/woowtech-smart",
-  "smartCommit": "a61efefca8dd16e2bbe1df60d5e27c8adcf16b34",
+  "smartCommit": "2b012f9f91377908c75b076c40a5917c712b66aa",
   "upstreamRepository": "https://github.com/RoundRedDot/better-paseo",
   "upstreamCommit": "e9ac5216185988ce99574b3e2f04f178020204f1",
   "version": "1.7.0",
@@ -14,12 +14,12 @@
     "paseo-plugin.json": "f0ea204547a72cb1eb8595209e5d471c6f2fabf16e188f95084ed426a39895ac",
     "package.json": "3748ed6725c04583cd62d0632de4ecebb084747af5b90ed3c186848fab5d3271",
     "index.server.ts": "e2dcac63d3a3c2816b9e3c639e6abb2f71a5a50872af989dd6b83a7299bdcccd",
-    "index.client.ts": "6346c9876b38dfb3d072e08cf48b2652d96f14ef5bd19cf9958d106e04ffe0cb",
-    "server/builtin.js": "a915ed83caacda0bb8da8ac9153521d15d72c99dd074cc290c54b1aa86316494",
+    "index.client.ts": "dc1d2c96ffca78c44946d626008af6d0a245072542b4684d3b0f0672262f6fe2",
+    "server/builtin.js": "ecfd6599fead8aab92a06c12123230c2df76c70ae211b24e5dd0f301e8e4fa2d",
     "assets/icon.png": "510a14d1d3688c1833401768b0b423c5265a50fcbc129228639b64e16863bb3b",
     "LICENSE": "fe3e79455032e8b4acb7d33bfa4643c49c18c76624a35743f628d50905c234d7",
     "THIRD_PARTY_NOTICES.txt": "1d89a0c7fddb8b83545bb727b9c1bb9bac35f1bbc173bc01081bb591ffc2f1e6",
-    "builtin-build.json": "772a487b534013b86acbfcc54cc792f025d20904483ab690f564a39c2a12dc7c",
+    "builtin-build.json": "2629366fb67c8811ed86154ae4c474908ebc4d08535ce38486e6c2ea94fdfb6e",
     "upstream-source.json": "b5ede305c90ee3b1598de35b3eb24d5c4c0d10e99256fb7a73e8111f2895e7a6"
   }
 }

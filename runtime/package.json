@@ -1,6 +1,6 @@
 {
   "name": "pi-paseo-managed-runtime",
-  "version": "0.17.5-r1",
+  "version": "0.17.5-r3",
   "private": true,
   "dependencies": {
     "@getpaseo/cli": "0.17.5"
