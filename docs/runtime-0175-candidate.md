@@ -1,21 +1,21 @@
-# Paseo 0.17.5 隔離候選
+# Paseo 0.17.5 說明與隔離試用
 
-Agent Connect `0.1.27-rc.5` 固定官方 npm CLI／server `0.17.5`，runtime revision 為 `0.17.5-r4-8664f2c3f8f5`。官方原始碼參考點是 `getpaseo/paseo` 的 `v0.17.5` commit `713b6dbbfe3ea5d395da569dca08fd31b2f8a0f8`；npm 產物以 `runtime/package-lock.json` 的 integrity 驗證，不把原始碼 commit 當成 npm 產物的位元證明。
+Agent Connect `0.1.27` 固定官方 npm CLI／server `0.17.5`，runtime revision 為 `0.17.5-r4-8664f2c3f8f5`。官方原始碼參考點是 `getpaseo/paseo` 的 `v0.17.5` commit `713b6dbbfe3ea5d395da569dca08fd31b2f8a0f8`；npm 產物以 `runtime/package-lock.json` 的 integrity 驗證，不把原始碼 commit 當成 npm 產物的位元證明。
 
 保留產品管理的 Better Paseo 1.7.0：Tasks 預設開啟、聊天增強關閉、自行更新關閉，沿用修正後的元件匯出、繁中與 MIT 授權。Devices 新增 Tailscale RPC；History、配對及既有 Tasks 是否能在特定 Web 正常操作，仍由該 Web 的實機驗收決定。
 
-這個候選提供獨立 Linux 實例，不註冊到 Pi Web、不替換既有 Agent Connect／Omnigent，不複製既有登入或配對。候選的 provider 指令停用，適合 Devices／Tasks UI 與協定驗收；真正 AI 回覆、真實 Tailscale 網路、Windows、macOS、HA 與 PaaS 發布不在這個安裝方式的驗收範圍。
+隔離試用提供獨立 Linux 實例，不註冊到 Pi Web、不替換既有 Agent Connect／Omnigent，不複製既有登入或配對。試用實例的 provider 指令停用，適合 Devices／Tasks UI 與協定驗收；真正 AI 回覆、真實 Tailscale 網路、Windows、macOS、HA 與 PaaS 發布不在這個安裝方式的驗收範圍。
 
 ## 安裝及操作
 
-先核對交付的 `SHA256SUMS`，將 `woowtech-pi-paseo-0.1.27-rc.5.tgz` 解壓到新的空白目錄。使用 Node 22.19 以上、npm、git、procps 與 util-linux flock；建議保留至少 3 GB 可用空間。解壓後的 `package/scripts/candidate.mjs` 直接可用，無須執行 npm install 或套件 postinstall。
+先核對交付的 `SHA256SUMS`，將 `woowtech-pi-paseo-0.1.27.tgz` 解壓到新的空白目錄。使用 Node 22.19 以上、npm、git、procps 與 util-linux flock；建議保留至少 3 GB 可用空間。解壓後的 `package/scripts/candidate.mjs` 直接可用，無須執行 npm install 或套件 postinstall。
 
 以下路徑是示例；資料目錄必須是新的空白絕對路徑。既有主機仍在驗收時，等待該線交接後才在該主機操作。
 
 ```sh
 sha256sum --check SHA256SUMS
 mkdir candidate-package
-tar -xzf woowtech-pi-paseo-0.1.27-rc.5.tgz -C candidate-package
+tar -xzf woowtech-pi-paseo-0.1.27.tgz -C candidate-package
 node candidate-package/package/scripts/candidate.mjs prepare /tmp/agent-connect-0175-trial
 node candidate-package/package/scripts/candidate.mjs target /tmp/agent-connect-0175-trial paseo
 node candidate-package/package/scripts/candidate.mjs start /tmp/agent-connect-0175-trial
@@ -87,3 +87,7 @@ Pi Web adapter 固定 Next.js 與 eslint-config-next 16.4.6，涵蓋 16.4.5 的�
 本次更新 Pi Web 依賴與配套版本。Paseo CLI/server 維持 0.17.5，runtime 維持 0.17.5-r4-8664f2c3f8f5；a7 五檔 payload、Tasks chunk 與 Metadata 政策沿用 rc.4。升降版驗證沿用 r3 回復 fixture。
 
 參考：https://github.com/vercel/next.js/releases/tag/v16.4.5 、https://github.com/vercel/next.js/releases/tag/v16.4.6 。
+
+### rc.6／0.1.27：Pi Web JSON 回應壓縮相容
+
+Next.js 16.4.6 會自行處理 HTTP 輸出壓縮；原本 Pi Web 的 JSON helper 先壓縮內容，經 Next 再處理後，`/api/sessions` 雖回 200，一般 `fetch().json()` 卻解析失敗。0.1.27 的 adapter 改回傳 JSON 原文，由 Next 決定壓縮，並加上實際 production server 的 HTTP 回歸測試。同一版修正 `runtimeReady` 只比對鎖定檔雜湊、未檢查收據 revision 的缺口：收據必須記錄與目前相同的 revision 才視為就緒。

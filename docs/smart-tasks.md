@@ -1,6 +1,6 @@
 # Tasks 主機封裝
 
-Agent Connect 0.1.27-rc.5 在官方 npm Paseo 0.17.5 的內建清單加入 Better Paseo，並固定 phone-board selected state 修正。它沿用官方 CLI、server、SDK 與既有身分修補；沒有替換 Smart 網頁，也沒有啟用使用者另外安裝的外掛。
+Agent Connect 0.1.27 在官方 npm Paseo 0.17.5 的內建清單加入 Better Paseo，並固定 phone-board selected state 修正。它沿用官方 CLI、server、SDK 與既有身分修補；沒有替換 Smart 網頁，也沒有啟用使用者另外安裝的外掛。
 
 ## 固定來源與建置
 

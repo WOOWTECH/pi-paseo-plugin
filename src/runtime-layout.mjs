@@ -94,7 +94,7 @@ export function runtimeReady(loc) {
   const root=runtimeDirectory(loc);
   assertSafePath(path.join(root,'.pi-paseo-runtime.json'));
   const receipt=JSON.parse(fs.readFileSync(path.join(root,'.pi-paseo-runtime.json')));
-  return receipt.lockSha256===lockSha256&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&receipt.brandIdentityPatchId===BRAND_IDENTITY_PATCH_ID&&brandIdentityPatchReady(root)&&receipt.smartTasksPatchId===SMART_TASKS_PATCH_ID&&smartTasksPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version===PASEO_VERSION;
+  return receipt.lockSha256===lockSha256&&receipt.revision===RUNTIME_REVISION&&receipt.pidLockPatchId===PID_LOCK_PATCH_ID&&pidLockPatchReady(root)&&receipt.brandIdentityPatchId===BRAND_IDENTITY_PATCH_ID&&brandIdentityPatchReady(root)&&receipt.smartTasksPatchId===SMART_TASKS_PATCH_ID&&smartTasksPatchReady(root)&&JSON.parse(fs.readFileSync(path.join(root,'node_modules/@getpaseo/cli/package.json'))).version===PASEO_VERSION;
  } catch {return false;}
 }
 export function prepareRuntimeManifest(loc) {

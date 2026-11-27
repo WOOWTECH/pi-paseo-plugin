@@ -1,6 +1,6 @@
 # Agent Connect
 
-`0.1.27-rc.5` 是 Paseo 0.17.5 的隔離候選，修補 Pi Web 的 Next.js 安全問題，並包含 Better Paseo phone board 的選取狀態修正。來源、試用安裝、範圍與回復限制見[候選說明](docs/runtime-0175-candidate.md)；尚未替換既有 Pi Web／HA／PaaS 發行套件。
+`0.1.27` 是 Paseo 0.17.5 的正式版（runtime revision `0.17.5-r4-8664f2c3f8f5`）：固定官方 npm CLI／server 0.17.5，內建 Better Paseo Tasks（含 phone board 選取狀態修正），修補 Pi Web 的 Next.js 安全問題，並讓 Pi Web 的 JSON 回應與 Next.js 16.4.6 的輸出壓縮相容。來源、獨立試用安裝、範圍與回復限制見[Paseo 0.17.5 說明](docs/runtime-0175-candidate.md)。
 
 Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, settings routes and data directory; the bundled `/paseo-web` client was removed in 0.1.23.
 

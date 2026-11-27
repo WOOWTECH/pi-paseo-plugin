@@ -52,6 +52,16 @@ test('readiness requires receipt and patched bytes of BOTH official copies and h
  const file=path.join(root,'node_modules/@getpaseo/server',PID_LOCK_COPIES[0],'pid-lock.js');
  const before=fs.statSync(file);markRuntimeReady(loc);assert.equal(fs.statSync(file).mtimeMs,before.mtimeMs);
 });
+test('current runtime readiness requires the receipt to name this exact revision',t=>{
+ const {loc,root}=runtime(t);markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);
+ const receiptFile=path.join(root,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
+ assert.equal(receipt.revision,RUNTIME_REVISION);
+ for(const revision of [undefined,'0.17.5-r3-8664f2c3f8f5',RUNTIME_REVISION+'-x']){
+  const changed={...receipt};if(revision===undefined)delete changed.revision;else changed.revision=revision;
+  fs.writeFileSync(receiptFile,JSON.stringify(changed));assert.equal(runtimeReady(loc),false);
+ }
+ fs.writeFileSync(receiptFile,JSON.stringify(receipt));assert.equal(runtimeReady(loc),true);
+});
 test('current runtime readiness rejects a missing or changed Smart Tasks patch receipt and bytes',t=>{
  const {loc,root}=runtime(t);markRuntimeReady(loc);assert.equal(runtimeReady(loc),true);
  const receiptFile=path.join(root,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
