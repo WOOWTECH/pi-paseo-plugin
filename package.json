@@ -1,6 +1,6 @@
 {
   "name": "@woowtech/pi-paseo",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "Agent Connect for Pi Agent / Pi Web: connect woowtech smart, Apporo smart or Paseo to Claude Code, Codex and Pi.",
   "type": "module",
   "license": "MIT",
@@ -67,7 +67,8 @@
     "LICENSE",
     "runtime/package.json",
     "runtime/package-lock.json",
-    "runtime/better-paseo"
+    "runtime/better-paseo",
+    "docs/runtime-0175-candidate.md"
   ],
   "exports": {
     "./host-api": "./src/host-api.mjs"

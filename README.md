@@ -1,5 +1,7 @@
 # Agent Connect
 
+`0.1.27` 是 Paseo 0.17.5 的正式版（runtime revision `0.17.5-r4-8664f2c3f8f5`）：固定官方 npm CLI／server 0.17.5，內建 Better Paseo Tasks（含 phone board 選取狀態修正），修補 Pi Web 的 Next.js 安全問題，並讓 Pi Web 的 JSON 回應與 Next.js 16.4.6 的輸出壓縮相容。來源、獨立試用安裝、範圍與回復限制見[Paseo 0.17.5 說明](docs/runtime-0175-candidate.md)。
+
 Connect Pi Agent / Pi Web to **Woowtech Smart**, **Apporo Smart**, or **Paseo** from the package settings. Existing installations keep Paseo selected. The installed package remains `@woowtech/pi-paseo`, with its existing command, tool IDs, settings routes and data directory; the bundled `/paseo-web` client was removed in 0.1.23.
 
 Changing the target saves its app URL and relay together. If the daemon is running, finish any conversations, disable the connector, then enable it to apply the change. Target changes clear previous pairing and relay verification; generate a fresh pairing link after restarting. Saving only a display name does not restart the daemon. A target change does not revoke a device already paired with the daemon.
@@ -10,7 +12,7 @@ Changing the target saves its app URL and relay together. If the daemon is runni
 | Apporo Smart | https://smart.apporo.ai | relay.apporo.ai:443 |
 | Paseo | https://app.paseo.sh | relay.paseo.sh:443 |
 
-The connector uses official npm Paseo 0.17.4 with a product-managed Better Paseo 1.7.0 builtin. Its source and compiled files are pinned to the Smart integration recorded in `runtime/better-paseo/provenance.json`. Tasks defaults on, chat enhancements default off, saved preferences remain authoritative, and the builtin cannot update itself. Both Smart web apps must support the plugin API; a daemon version number alone does not prove Tasks is installed. The Smart targets keep `daemon.relay.requireProtectedSecurity` off for compatibility with previously deployed clients. Smart mobile push notifications still require a separate fork-specific FCM integration.
+The connector uses official npm Paseo 0.17.5 with a product-managed Better Paseo 1.7.0 builtin. Its source and compiled files are pinned to the Smart integration recorded in `runtime/better-paseo/provenance.json`. Tasks defaults on, chat enhancements default off, saved preferences remain authoritative, and the builtin cannot update itself. Both Smart web apps must support the plugin API; a daemon version number alone does not prove Tasks is installed. The Smart targets keep `daemon.relay.requireProtectedSecurity` off for compatibility with previously deployed clients. Smart mobile push notifications still require a separate fork-specific FCM integration.
 
 
 Pi Agent / Pi Web 插件，管理共用 Paseo 執行環境，沿用 Claude Code、Codex、Pi 的現有登入、工作目錄及權限。使用者在 **Pi Web 設定 → 插件 → Agent Connect** 選擇連線標的並開始配對。

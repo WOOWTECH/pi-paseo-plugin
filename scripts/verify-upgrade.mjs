@@ -2,21 +2,19 @@
 // Opt-in smoke of the real upgrade, with real Paseo daemons. NOT part of CI: it downloads two runtimes (about
 // 1.3 GB), starts real daemons and takes minutes.
 //
-//   PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|fresh]
+//   PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|legacy|fresh]
 //
 // Skipped (exit 0) unless PI_PASEO_UPGRADE_SMOKE=1, and on anything but Linux. It needs git with the old plugin's
-// commit (PI_PASEO_UPGRADE_OLD_REF, default 152e1c3 = Agent Connect 0.1.23, which runs Paseo 0.11.2), tar, npm and
+// commit (PI_PASEO_UPGRADE_OLD_REF, default 88857bd = Agent Connect rc.3 / Paseo 0.17.5-r3; `legacy` pins 23026e2 = 0.1.26 / 0.17.4-r2), tar, npm and
 // access to the npm registry. Everything lives in one temporary directory (isolated HOME, plugin state, runtime
 // directory and PATH with provider commands that fail, so no provider is installed or started); the directory and
 // every process that points into it, terminal workers included, are removed at the end. Nothing of this user's
 // own Paseo or Agent Connect is read or written. The daemons contact their relay (relay.paseo.sh) as any
 // installation does, with throwaway identities.
 //
-// upgrade  the 0.1.23 plugin installs 0.11.2 and starts its daemon, which gets a workspace and a pairing. This tree
-//          then activates: RESTART_REQUIRED with the old daemon still serving through its own release; an explicit
-//          stop and start moves the same PASEO_HOME to 0.17.4 with the same server id, daemon keypair, pairing
-//          record and workspace, and the old release directory stays. A throwaway old release is pruned only after
-//          that start.
+// upgrade  Agent Connect rc.3 installs 0.17.5-r3 and starts its daemon. This tree upgrades it to r4, checks
+//          RESTART_REQUIRED and old-release control, then the rc.3 code starts the same home back on r3.
+// legacy   preserve the 0.1.26 / 0.17.4-r2 upgrade path as a separate smoke.
 // fresh    this tree on an empty host: install, start, ownership, pairing shape, branded handshake, a terminal
 //          worker. Then a host whose ps stops working while that terminal is open: the stop completes with
 //          TERMINAL_CLEANUP_NOT_CONFIRMED as a warning and nothing is signaled (the terminal worker is still
@@ -41,10 +39,12 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const repoRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const self=fileURLToPath(import.meta.url);
-const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||'152e1c3',DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
+const DEFAULT_OLD_REF='88857bd86a4bf982aef6d85122f16b7d4a03d009';
+const LEGACY_OLD_REF='23026e2442403ddee8df9f764ded6ea1a75b121e';
+const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||DEFAULT_OLD_REF,DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
 // A commit, tag or branch name: it is passed to git archive, so it may not start like an option.
 const OLD_REF_VALID=/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(OLD_REF);
-const OLD_VERSION='0.1.23',OLD_REVISION='0.11.2-r4-4cf9d40940bf',OLD_PASEO='0.11.2',NEW_PASEO='0.17.4';
+const OLD_VERSION='0.1.27-rc.3',OLD_REVISION='0.17.5-r3-8664f2c3f8f5',OLD_PASEO='0.17.5',NEW_PASEO='0.17.5';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fileSha=file=>fs.existsSync(file)?sha(fs.readFileSync(file)):null;
 const readJson=file=>JSON.parse(fs.readFileSync(file,'utf8'));
@@ -94,7 +94,7 @@ const loadIn=root=>rel=>import(pathToFileURL(path.join(root,rel)).href);
 // Phases: each runs in its own process with the isolated environment of its scenario.
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Agent Connect 0.1.23 installs its 0.11.2 runtime as its installer does, starts the daemon and leaves data behind. */
+/** Agent Connect 0.1.26 installs its 0.17.4-r2 runtime as its installer does, starts the daemon and leaves data behind. */
 async function phaseOld(oldRoot,factsFile) {
  const load=loadIn(oldRoot),state=await load('src/state.mjs'),layout=await load('src/runtime-layout.mjs'),runtime=await load('src/runtime.mjs');
  const version=readJson(path.join(oldRoot,'package.json')).version;
@@ -109,15 +109,18 @@ async function phaseOld(oldRoot,factsFile) {
  const project=path.join(loc.home,'smoke-project');fs.mkdirSync(project,{recursive:true});
  const {connectToDaemon}=await import(pathToFileURL(path.join(release,'node_modules/@getpaseo/cli/dist/utils/client.js')).href);
  const client=await connectToDaemon({target:{kind:'instance',home:loc.paseoHome},timeout:10000});
- let workspaceId;
- try {workspaceId=(await client.createWorkspace({source:{kind:'directory',path:project}})).workspace?.id;}finally{await client.close().catch(()=>{});}
+ let workspaceId,tasksEntry;
+ try {
+  workspaceId=(await client.createWorkspace({source:{kind:'directory',path:project}})).workspace?.id;
+  if(['0.17.4','0.17.5'].includes(first.version))tasksEntry=await client.invokePluginRpc('better-paseo','tasks.dismiss-error',{agentId:'owned-upgrade-fixture',error:'isolated upgrade fixture'});
+ }finally{await client.close().catch(()=>{});}
  check(typeof workspaceId==='string'&&workspaceId.length>0,'workspace created on the old daemon');
  const pairing=await runtime.pair();check(new URL(pairing.url).origin==='https://app.paseo.sh','old pairing origin');
- const facts={oldPid:pid,oldRoot:release,oldRevision:layout.RUNTIME_REVISION,oldPaseo:first.version,workspaceId,serverIdSha:fileSha(path.join(loc.paseoHome,'server-id')),keypairSha:fileSha(path.join(loc.paseoHome,'daemon-keypair.json')),
+ const facts={oldPid:pid,oldRoot:release,oldRevision:layout.RUNTIME_REVISION,oldPaseo:first.version,workspaceId,tasksEntry,configSha:fileSha(path.join(loc.paseoHome,'config.json')),serverIdSha:fileSha(path.join(loc.paseoHome,'server-id')),keypairSha:fileSha(path.join(loc.paseoHome,'daemon-keypair.json')),
   pairingSha:fileSha(path.join(loc.stateDir,'pairing.private.json')),installationId:state.readState().installationId};
  check(facts.serverIdSha&&facts.keypairSha&&facts.pairingSha,'identity files and pairing record exist');
  fs.writeFileSync(factsFile,JSON.stringify(facts),{mode:0o600});
- log('old.data',{workspaceCreated:true,pairingRecorded:true,identityFiles:true});
+ log('old.data',{workspaceCreated:true,pairingRecorded:true,identityFiles:true,tasksRpcPersisted:!!tasksEntry});
 }
 
 // Records which release supplied each upstream module that this tree's runtime.mjs imports.
@@ -151,7 +154,7 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
   const installStarted=Date.now(),pending=await runtime.activate();
   check(pending.phase==='restart_required'&&pending.diagnosticCode==='RESTART_REQUIRED','upgrade activation phase '+pending.phase+' '+pending.diagnosticCode);
   check(pending.daemon.reachable===true&&pending.daemon.pid===facts.oldPid&&alive(facts.oldPid),'the old daemon is left running and reachable');
-  check(layout.runtimeReady(loc)&&pending.version===NEW_PASEO&&pending.daemon.version===facts.oldPaseo,'0.17.4 is installed, the old release still serves');
+  check(layout.runtimeReady(loc)&&pending.version===NEW_PASEO&&pending.daemon.version===facts.oldPaseo,'0.17.5 is installed, the old release still serves');
   check(fs.readFileSync(path.join(loc.stateDir,'daemon-instance.private.json')).equals(proofBefore),'no proof is minted for the old daemon');
   check(releaseNames().includes(ancient),'no pruning while the old daemon serves');
   log('new.activate-with-old-daemon',{pluginVersion:packageVersion,phase:pending.phase,diagnosticCode:pending.diagnosticCode,samePid:true,installedVersion:pending.version,servingVersion:pending.daemon.version,activateMs:Date.now()-installStarted,releases:releaseNames()});
@@ -167,7 +170,7 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
  const started=Date.now(),running=await runtime.activate();
  // The old releases are deleted after the activation, without its lock: wait for that before looking at them.
  await runtime.pruneSettled();
- check(running.phase==='running'&&running.daemon.reachable===true&&running.diagnosticCode===null,'0.17.4 daemon running: '+running.phase+' '+running.diagnosticCode);
+ check(running.phase==='running'&&running.daemon.reachable===true&&running.diagnosticCode===null,'0.17.5 daemon running: '+running.phase+' '+running.diagnosticCode);
  const pid=running.daemon.pid;check(!facts||pid!==facts.oldPid,'a new supervisor');
  check(revisionOf(pid)===layout.RUNTIME_REVISION&&running.daemon.version===NEW_PASEO&&running.version===NEW_PASEO,'the daemon runs this release');
  log('new.activated',{mode,pluginVersion:packageVersion,phase:running.phase,reachable:running.daemon.reachable,owned:running.daemon.owned,diagnosticCode:running.diagnosticCode,servingVersion:running.daemon.version,daemonRevision:revisionOf(pid),
@@ -182,18 +185,24 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
  const client=await connectToDaemon({target:{kind:'instance',home:loc.paseoHome},timeout:10000});
  let workspaceId=facts?.workspaceId;
  try {
-  check(client.getLastServerInfoMessage().version===NEW_PASEO,'the client sees daemon 0.17.4');
+  check(client.getLastServerInfoMessage().version===NEW_PASEO,'the client sees daemon 0.17.5');
   if(facts) {
    check(fileSha(path.join(loc.paseoHome,'server-id'))===facts.serverIdSha,'server id preserved');
    check(fileSha(path.join(loc.paseoHome,'daemon-keypair.json'))===facts.keypairSha,'daemon keypair preserved');
    check(fileSha(path.join(loc.stateDir,'pairing.private.json'))===facts.pairingSha&&state.readState().installationId===facts.installationId,'pairing record and installation preserved');
-   check((await client.fetchWorkspaces({page:{limit:200}})).entries.some(entry=>entry.id===facts.workspaceId),'the 0.11.2 workspace is listed by 0.17.4');
+   check((await client.fetchWorkspaces({page:{limit:200}})).entries.some(entry=>entry.id===facts.workspaceId),'the old workspace is listed by the new runtime');
    check(fs.existsSync(path.join(loc.paseoHome,'config.json')),'config kept');
+   if(facts.tasksEntry){
+    const tasks=await client.invokePluginRpc('better-paseo','tasks.error-dismissals',{});
+    check(JSON.stringify(tasks.entries)===JSON.stringify([facts.tasksEntry]),'Tasks record preserved across version upgrade');
+    check(fileSha(path.join(loc.paseoHome,'config.json'))===facts.configSha,'version-only upgrade preserves configuration bytes');
+    log('new.tasks-and-config',{tasksRpcReadable:true,recordPreserved:true,configUnchanged:true});
+   }
    check(fs.existsSync(path.join(facts.oldRoot,'.pi-paseo-runtime.json'))&&layout.previousRuntimeDirectory(loc)===facts.oldRoot,'the old release directory is kept and still verifies');
    check(!releaseNames().includes(facts.ancient)&&releaseNames().includes(path.basename(facts.oldRoot))&&releaseNames().includes(layout.RUNTIME_REVISION),'only the throwaway release was pruned: '+JSON.stringify({releases:releaseNames(),lastPrune:state.readState().lastPrune}));
    check(!processesUnder(path.dirname(loc.stateDir)).some(row=>row.revision===facts.oldRevision),'the old release is not running any more');
    const prune=state.readState().lastPrune;check(prune&&prune.removed.join()===facts.ancient&&prune.kept.includes(path.basename(facts.oldRoot)),'lastPrune names what was removed and kept');
-   log('new.data-preserved',{serverId:true,daemonKeypair:true,pairingRecord:true,installationId:true,workspaceFrom0112Listed:true,oldReleaseKeptVerified:true,pruned:prune.removed,kept:prune.kept,releases:releaseNames()});
+   log('new.data-preserved',{serverId:true,daemonKeypair:true,pairingRecord:true,installationId:true,oldWorkspaceListed:true,oldReleaseKeptVerified:true,pruned:prune.removed,kept:prune.kept,releases:releaseNames()});
   }
   if(!workspaceId) {
    const project=path.join(loc.home,'smoke-project');fs.mkdirSync(project,{recursive:true});
@@ -215,6 +224,7 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
  log('new.pairing',offerShape(pairing.url,{serverIdFile:path.join(loc.paseoHome,'server-id'),appUrl:'https://app.paseo.sh',relayEndpoint:'relay.paseo.sh:443'}));
  const info=await rawServerInfo(release,lock.listen);
  check(JSON.stringify(info.brand)===JSON.stringify({id:'paseo',name:'Paseo'}),'server_info brand');
+ check(info.features?.tailscale===true,'0.17.5 advertises Devices Tailscale RPC');
  log('new.server-info',{brand:info.brand,version:info.version,protocolVersion:info.protocolVersion,relayProtectedSecurity:info.features?.relayProtectedSecurity===true,daemonStatusRpc:info.features?.daemonStatusRpc===true});
  // The README's way to find a setting that 0.17.4 cannot load: `daemon config get` of the release's own CLI reads the
  // file through the same path as the daemon and names each failing setting. A throwaway home, never the live one.
@@ -241,6 +251,29 @@ async function phaseNewSteps(mode,factsFile,marker,moduleLog) {
  check(done.daemon.running===false&&done.phase==='disabled'&&done.warnings.length===0,'final stop is clean: '+JSON.stringify(done.warnings));
  check((await waitGone([pid])).length===0&&terminalWorkers(loc.home).length===0,'the supervisor and every terminal worker are gone');
  log('new.stopped',{remaining:processesUnder(path.dirname(loc.stateDir)).map(row=>row.title)});
+}
+
+/** Return the same isolated home to its supported previous runtime; no settings or identity backup is restored over it. */
+async function phaseRollback(oldRoot,factsFile) {
+ const facts=readJson(factsFile);
+ if(!['0.17.4','0.17.5'].includes(facts.oldPaseo)){log('rollback.skipped',{reason:'unsupported rollback version'});return;}
+ const load=loadIn(oldRoot),state=await load('src/state.mjs'),runtime=await load('src/runtime.mjs');
+ const loc=state.locations();
+ if(facts.oldPaseo==='0.17.4')check(!readJson(path.join(loc.paseoHome,'config.json')).daemon.listen.includes(','),'restore single-listener config before a 0.17.4 rollback');
+ const started=await runtime.activate();
+ check(started.phase==='running'&&started.daemon.reachable&&started.daemon.version===facts.oldPaseo,'old daemon starts on the preserved home');
+ const {connectToDaemon}=await import(pathToFileURL(path.join(facts.oldRoot,'node_modules/@getpaseo/cli/dist/utils/client.js')).href);
+ const client=await connectToDaemon({target:{kind:'instance',home:loc.paseoHome},timeout:10000});
+ try {
+  check(fileSha(path.join(loc.paseoHome,'server-id'))===facts.serverIdSha&&fileSha(path.join(loc.paseoHome,'daemon-keypair.json'))===facts.keypairSha,'rollback identity preserved');
+  check(fileSha(path.join(loc.stateDir,'pairing.private.json'))!==null&&state.readState().installationId===facts.installationId,'rollback pairing and installation preserved');
+  check((await client.fetchWorkspaces({page:{limit:200}})).entries.some(entry=>entry.id===facts.workspaceId),'rollback workspace listed');
+  const tasks=await client.invokePluginRpc('better-paseo','tasks.error-dismissals',{});
+  check(JSON.stringify(tasks.entries)===JSON.stringify([facts.tasksEntry]),'rollback Tasks record readable');
+  check(fileSha(path.join(loc.paseoHome,'config.json'))===facts.configSha,'rollback config unchanged');
+  log('rollback.preserved',{paseoVersion:started.daemon.version,serverId:true,keypair:true,workspace:true,tasks:true,configUnchanged:true});
+ }finally {await client.close().catch(()=>{});await runtime.deactivate();}
+ check((await waitGone([started.daemon.pid])).length===0,'rollback daemon stopped');
 }
 
 /** A host whose ps stops working while a terminal is open. The shim ps in PATH (see the scenario setup) delegates to
@@ -314,7 +347,7 @@ async function failingPs(runtime,state,load,loc,healthReport,{release,workspaceI
 function freePort() {
  return new Promise((resolve,reject)=>{const server=net.createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>resolve(port));});});
 }
-function scenarioEnvironment(base,root,port,token) {
+function scenarioEnvironment(base,root,port,token,oldRef) {
  const env={...process.env};
  for(const key of Object.keys(env))if(/^(PASEO_|PI_PASEO_|PI_WEB_PASSWORD|CODEX_HOME|OMNIGENT_|ANTHROPIC_|OPENAI_|CLAUDE_)/.test(key))delete env[key];
  // Provider commands that fail: no provider is installed or started. A ps that delegates to the real one until the flag exists.
@@ -327,7 +360,7 @@ function scenarioEnvironment(base,root,port,token) {
   PI_PASEO_PORT:String(port),PI_PASEO_SKIP_POSTINSTALL:'1',PI_PASEO_SMOKE_PS_FLAG:flag,npm_config_cache:path.join(base,'npm-cache'),NO_COLOR:'1',
   // Added after the filter above, so the phases get them: the opt-in, the secret that proves this script started them,
   // and a custom old ref (without it a phase assumes the default and fails on any other).
-  PI_PASEO_UPGRADE_SMOKE:'1',PI_PASEO_UPGRADE_SMOKE_TOKEN:token,...(DEFAULT_OLD?{}:{PI_PASEO_UPGRADE_OLD_REF:OLD_REF}),
+  PI_PASEO_UPGRADE_SMOKE:'1',PI_PASEO_UPGRADE_SMOKE_TOKEN:token,...(oldRef===DEFAULT_OLD_REF?{}:{PI_PASEO_UPGRADE_OLD_REF:oldRef}),
   PATH:[shim,providers,path.dirname(process.execPath),env.PATH||''].join(path.delimiter)};
 }
 function prepareScenario(base,name) {
@@ -362,17 +395,23 @@ async function orchestrate(which) {
  const base=fs.mkdtempSync(path.join(os.tmpdir(),'pi-paseo-upgrade-smoke-')),strays={};let failed=false,ok=false;
  const sweep=(dir,label)=>{const left=processesUnder(dir);for(const row of left)try{process.kill(row.pid,'SIGKILL');}catch{}strays[label]=left.map(row=>row.script||row.title);return left.length;};
  const fail=(label,result)=>{failed=true;console.error(JSON.stringify({passed:false,phase:label,exit:result.code,detail:result.err.trim().split('\n').slice(-12).join('\n')}));};
- try {
-  if(['all','upgrade'].includes(which)) {
-   const root=prepareScenario(base,'upgrade'),oldRoot=path.join(base,'plugin-old'),env=scenarioEnvironment(base,root,await freePort(),token);fs.mkdirSync(oldRoot);
-   execFileSync('sh',['-c','git -C "$1" archive "$2" | tar -x -C "$3"','sh',repoRoot,OLD_REF,oldRoot]);
-   const old=await runPhase(['old',oldRoot,path.join(root,'facts.json')],env);
-   if(old.code!==0)fail('old plugin',old);
-   else {const next=await runPhase(['upgrade',path.join(root,'facts.json')],env);if(next.code!==0)fail('upgrade',next);}
-   if(sweep(root,'upgrade'))failed=true;
+ const runUpgrade=async(label,oldRef)=>{
+  const root=prepareScenario(base,label),oldRoot=path.join(base,label+'-plugin-old'),env=scenarioEnvironment(base,root,await freePort(),token,oldRef);fs.mkdirSync(oldRoot);
+  execFileSync('sh',['-c','git -C "$1" archive "$2" | tar -x -C "$3"','sh',repoRoot,oldRef,oldRoot]);
+  const old=await runPhase(['old',oldRoot,path.join(root,'facts.json')],env);
+  if(old.code!==0)fail(label+' old plugin',old);
+  else {
+   const next=await runPhase(['upgrade',path.join(root,'facts.json')],env);
+   if(next.code!==0)fail(label+' upgrade',next);
+   else {const rollback=await runPhase(['rollback',oldRoot,path.join(root,'facts.json')],env);if(rollback.code!==0)fail(label+' rollback',rollback);}
   }
+  if(sweep(root,label))failed=true;
+ };
+ try {
+  if(['all','upgrade'].includes(which))await runUpgrade('upgrade',OLD_REF);
+  if(['all','legacy'].includes(which)&&!failed)await runUpgrade('legacy',LEGACY_OLD_REF);
   if(['all','fresh'].includes(which)&&!failed) {
-   const root=prepareScenario(base,'fresh'),result=await runPhase(['fresh'],scenarioEnvironment(base,root,await freePort(),token));
+   const root=prepareScenario(base,'fresh'),result=await runPhase(['fresh'],scenarioEnvironment(base,root,await freePort(),token,DEFAULT_OLD_REF));
    if(result.code!==0)fail('fresh',result);
    if(sweep(root,'fresh'))failed=true;
   }
@@ -398,6 +437,7 @@ if(first==='--phase') {
  } else try {
   if(name==='old')await phaseOld(args[0],args[1]);
   else if(name==='upgrade')await phaseNew('upgrade',args[0]);
+  else if(name==='rollback')await phaseRollback(args[0],args[1]);
   else if(name==='fresh')await phaseNew('fresh');
   else throw new Error('unknown phase');
  } catch(error) {console.error(String(error?.stack||error).slice(0,2500));process.exitCode=1;}
@@ -407,7 +447,7 @@ if(first==='--phase') {
  console.log(JSON.stringify({skipped:true,reason:'Linux only'}));
 } else {
  const which=first||'all';
- if(!['all','upgrade','fresh'].includes(which)){console.error(JSON.stringify({passed:false,code:'USAGE',message:'node scripts/verify-upgrade.mjs [all|upgrade|fresh]'}));process.exitCode=2;}
+ if(!['all','upgrade','legacy','fresh'].includes(which)){console.error(JSON.stringify({passed:false,code:'USAGE',message:'node scripts/verify-upgrade.mjs [all|upgrade|legacy|fresh]'}));process.exitCode=2;}
  else {
   try {
    if(!OLD_REF_VALID)throw new Error('PI_PASEO_UPGRADE_OLD_REF');

@@ -23,7 +23,7 @@ import {healthReport} from '../src/health.mjs';
 import {singleFlight,createReadWindow} from '../src/single-flight.mjs';
 const require=createRequire(import.meta.url);
 // The real persisted-config modules (read path, normalization, strict schema) of both releases.
-const config0174=await loadPersistedConfig(layout.PASEO_VERSION),config0112=await loadPersistedConfig(layout.LEGACY_PASEO_VERSION);
+const configCurrent=await loadPersistedConfig(layout.PASEO_VERSION),config0112=await loadPersistedConfig(layout.LEGACY_PASEO_VERSION);
 // A config.json as 0.11.2 accepted it. 0.17.4's schema rejects these speech shapes as written; only its
 // read path folds them (providers.openai into the OpenAI speech site, missing providers to local).
 const LEGACY_CONFIG={version:1,daemon:{appendSystemPrompt:'retain'},providers:{openai:{apiKey:'fixture-not-a-key',stt:{baseUrl:'https://stt.invalid'}}},
@@ -115,7 +115,7 @@ function fixture(t, { platform = process.platform } = {}) {
   if(/\/node_modules\/@getpaseo\//.test(spec))used.modules.push({release:releaseOf(spec),module:spec.slice(spec.lastIndexOf('/')+1)});
   if(spec.endsWith('/daemon-instance.js'))return {readDaemonInstance:async()=>{const lock=loadInstance();hooks.read?.();return lock&&(processes.has(lock.pid)||state.processIdentity(lock.pid))?lock:null;},stopDaemonInstance:(home,options)=>{used.stoppedVia=releaseOf(spec);return upstream.stopDaemonInstance(home,options);}};
   if(spec.endsWith('/dist/utils/client.js'))return {connectToDaemon:async()=>client};
-  if(spec.endsWith('/server/config.js'))return releaseOf(spec)===root?config0174:config0112;
+  if(spec.endsWith('/server/config.js'))return releaseOf(spec)===root?configCurrent:config0112;
   if(spec.startsWith('./'))return {};
   return require(spec);
  };
@@ -324,9 +324,10 @@ test(`prepared 0.17.4 with a healthy 0.11.2 ${generation} daemon requires an exp
  assert.deepEqual(f.used.cli.map(c=>c.release),[old]);assert.equal(f.starts(),0);
 });
 }
-test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to 0.17.4 on the same home, keeps data and the old release',async t=>{
+test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to the current runtime on the same home and retains extra listeners',async t=>{
  const f=fixture(t);const old=f.prior({generation:'r4',prepared:true});
  const configFile=path.join(f.loc.paseoHome,'config.json');
+ const configured=JSON.parse(fs.readFileSync(configFile));configured.daemon.listen='127.0.0.1:8999,127.0.0.2:8999';fs.writeFileSync(configFile,JSON.stringify(configured));
  assert.equal((await f.runtime.activate()).phase,'restart_required');assert.equal(f.stops(),0);assert.equal(f.starts(),0);
  f.permitStop();const stopped=await f.runtime.deactivate();
  assert.equal(stopped.daemon.running,false);assert.equal(f.stops(),1);assert.equal(f.used.stoppedVia,old,'the old daemon is stopped by its own release');
@@ -334,15 +335,22 @@ test('an explicit stop and start moves a healthy 0.11.2-r4 daemon to 0.17.4 on t
  const result=await f.runtime.activate();
  assert.equal(result.phase,'running');assert.equal(result.daemon.reachable,true);assert.equal(result.diagnosticCode,null);assert.equal(f.starts(),1);
  const root=layout.runtimeDirectory(f.loc);
- assert.deepEqual(f.used.cli.filter(c=>c.command.startsWith('daemon start')).map(c=>c.release),[root],'0.17.4 starts the new daemon');
+ assert.deepEqual(f.used.cli.filter(c=>c.command.startsWith('daemon start')).map(c=>c.release),[root],layout.PASEO_VERSION+' starts the new daemon');
  assert.deepEqual(f.used.modules.filter(m=>m.release!==root),[],'no old module touches the new daemon');
  assert.equal(state.readState().daemonRuntimeRevision,layout.RUNTIME_REVISION);
  assert.equal(fs.statSync(f.proofFile).mode&0o777,0o600);assert.notEqual(JSON.parse(fs.readFileSync(f.proofFile)).lock.pid,f.initial.pid);
- assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.listen,'127.0.0.1:'+state.readState().port);
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.listen,'127.0.0.1:'+state.readState().port+',127.0.0.2:8999');
  f.keep();
  // The 0.11.2 release stays verified for a rollback and is never started.
  assert.equal(layout.previousRuntimeDirectory(f.loc),old);assert.equal(JSON.parse(fs.readFileSync(path.join(old,'.pi-paseo-runtime.json'))).revision,path.basename(old));
  assert.equal((await f.runtime.status()).diagnosticCode,null);await f.runtime.activate();assert.equal(f.starts(),1);
+});
+test('activation keeps the managed primary loopback when the saved config has one non-loopback listener',async t=>{
+ const f=fixture(t),configFile=path.join(f.loc.paseoHome,'config.json');
+ const config=JSON.parse(fs.readFileSync(configFile));config.daemon.listen='10.20.30.40:8999';fs.writeFileSync(configFile,JSON.stringify(config));
+ await f.runtime.activate();
+ assert.equal(JSON.parse(fs.readFileSync(configFile)).daemon.listen,'127.0.0.1:'+state.readState().port);
+ f.keep();
 });
 test('a healthy r1 daemon stays pending on upgrade, reports 0.17.4, and stop/start preserves its home and rollback',async t=>{
  const f=fixture(t),old=f.prior({generation:'r1',prepared:true});
@@ -356,7 +364,7 @@ test('a healthy r1 daemon stays pending on upgrade, reports 0.17.4, and stop/sta
 test('Darwin state identifies the verified r1 daemon and keeps its upgrade restart pending',async t=>{
  const f=fixture(t,{platform:'darwin'});f.prior({generation:'r1',prepared:true});
  const pending=await f.runtime.activate();assert.equal(pending.phase,'restart_required');
- assert.equal(pending.daemon.version,layout.PASEO_VERSION);assert.equal(pending.diagnosticCode,'RESTART_REQUIRED');
+ assert.equal(pending.daemon.version,'0.17.4');assert.equal(pending.diagnosticCode,'RESTART_REQUIRED');
  assert.equal(f.starts(),0);assert.equal(f.stops(),0);
 });
 test('a damaged r1 release receipt cannot authorize offline daemon control',async t=>{
@@ -370,12 +378,12 @@ test('the start after an upgrade loads 0.11.2 speech shapes through 0.17.4 read-
  const configFile=path.join(f.loc.paseoHome,'config.json');
  // What 0.11.2 loaded, and what 0.17.4's strict schema rejects when the file is merged without that read path.
  assert.deepEqual(config0112.readPersistedConfig(f.loc.paseoHome).providers,LEGACY_CONFIG.providers);
- assert.equal(config0174.PersistedConfigSchema.safeParse(LEGACY_CONFIG).success,false);
+ assert.equal(configCurrent.PersistedConfigSchema.safeParse(LEGACY_CONFIG).success,false);
  assert.equal((await f.runtime.activate()).phase,'restart_required');
  f.permitStop();await f.runtime.deactivate();
  assert.equal((await f.runtime.activate()).phase,'running');assert.equal(f.starts(),1);
  const saved=JSON.parse(fs.readFileSync(configFile));
- assert.equal(config0174.PersistedConfigSchema.safeParse(saved).success,true);
+ assert.equal(configCurrent.PersistedConfigSchema.safeParse(saved).success,true);
  assert.equal(saved.providers?.openai,undefined);
  assert.deepEqual(saved.features.dictation.stt,{provider:'openai',apiKey:'fixture-not-a-key',baseUrl:'https://stt.invalid',language:'zh'});
  assert.deepEqual(saved.features.voiceMode,{stt:{provider:'local',language:'zh'},tts:{provider:'local',speakerId:1}});
@@ -758,31 +766,31 @@ test('a ps that cannot serve terminal cleanup is a warning on every start and di
 });
 
 // ---- Pruning old releases behind a healthy start from this release ----
-const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479';
+const R4='0.11.2-r4-4cf9d40940bf',R3A='0.11.2-r3-4cf9d40940bf',R3B='0.11.2-r3-6d8dbe515479',R2='0.11.2-r2-6d8dbe515479',PRIOR_0174_R2='0.17.4-r2-a651f42711da',PRIOR_0174_R1='0.17.4-r1-a651f42711da';
 const releaseNames=f=>fs.readdirSync(path.join(f.loc.runtimeDir,'releases')).sort();
 const tombs=f=>releaseNames(f).filter(name=>name.startsWith('.pruning-'));
 function seedOlder(f,generations=['r4','r3a','r3b','r2']) {
- const seeds={r4:{generation:'r4'},r3a:{generation:'r3'},r3b:{generation:'r3',lockSha256:LOCK_0112},r2:{generation:'r2'}};
+ const seeds={r4:{generation:'r4'},r3a:{generation:'r3'},r3b:{generation:'r3',lockSha256:LOCK_0112},r2:{generation:'r2'},'0174r2':{version:'0.17.4',generation:'r2'},'0174r1':{version:'0.17.4',generation:'r1'}};
  for(const generation of generations)seedPriorRelease(f.loc,seeds[generation]);
 }
 // The deletion of what was claimed runs after the activation, without its lock: tests wait for it to end.
 const activated=async f=>{const result=await f.runtime.activate();await f.runtime.pruneSettled();return result;};
 const after=(ms,value)=>new Promise(resolve=>{setTimeout(()=>resolve(value),ms).unref();});
 
-test('a healthy start from this release removes the older releases nothing needs, and records names only',async t=>{
- const f=fixture(t);seedOlder(f);
+test('a healthy start from this release removes releases older than the current rollback, and records names only',async t=>{
+ const f=fixture(t);seedOlder(f);seedPriorRelease(f.loc,{version:'0.17.4',generation:'r2'});seedPriorRelease(f.loc,{version:'0.17.4',generation:'r1'});
  fs.mkdirSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli'),{recursive:true});fs.writeFileSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json'),'{"version":"0.11.2"}');
- assert.deepEqual(releaseNames(f),[R2,R3A,R3B,R4,layout.RUNTIME_REVISION].sort());
+ assert.deepEqual(releaseNames(f),[R2,R3A,R3B,R4,PRIOR_0174_R2,PRIOR_0174_R1,layout.RUNTIME_REVISION].sort());
  const result=await activated(f);
  assert.equal(result.phase,'running');assert.equal(result.daemon.reachable,true);assert.equal(f.starts(),0,'the healthy daemon was adopted, not restarted');
- assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort(),'this release and the newest earlier one remain');
+ assert.deepEqual(releaseNames(f),[PRIOR_0174_R2,layout.RUNTIME_REVISION].sort(),'this release and the newest earlier one remain');
  const prune=plain(state.readState().lastPrune);
- assert.deepEqual(Object.keys(prune).sort(),['at','failed','kept','removed']);assert.deepEqual([...prune.removed].sort(),[R2,R3A,R3B].sort());assert.deepEqual(prune.kept,[layout.RUNTIME_REVISION,R4]);assert.deepEqual(prune.failed,[]);
+ assert.deepEqual(Object.keys(prune).sort(),['at','failed','kept','removed']);assert.deepEqual([...prune.removed].sort(),[R2,R3A,R3B,R4,PRIOR_0174_R1].sort());assert.deepEqual(prune.kept,[layout.RUNTIME_REVISION,PRIOR_0174_R2]);assert.deepEqual(prune.failed,[]);
  assert.doesNotMatch(JSON.stringify(prune),/\/|home|runtime-pid/,'names only: no path');
  assert.ok(fs.existsSync(path.join(f.loc.runtimeDir,'node_modules/@getpaseo/cli/package.json')),'the legacy control copy is not a release');
- assert.equal(layout.previousRuntimeDirectory(f.loc),path.join(f.loc.runtimeDir,'releases',R4),'the rollback release still verifies');
+ assert.equal(layout.previousRuntimeDirectory(f.loc),path.join(f.loc.runtimeDir,'releases',PRIOR_0174_R2),'the rollback release still verifies');
  // Nothing left to remove: the next activation neither removes nor rewrites the record.
- await activated(f);assert.deepEqual(plain(state.readState().lastPrune),prune);assert.deepEqual(releaseNames(f),[R4,layout.RUNTIME_REVISION].sort());
+ await activated(f);assert.deepEqual(plain(state.readState().lastPrune),prune);assert.deepEqual(releaseNames(f),[PRIOR_0174_R2,layout.RUNTIME_REVISION].sort());
  f.keep();
 });
 

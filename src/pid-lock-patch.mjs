@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {assertSafePath,RuntimeError} from './state.mjs';
-// Frozen @getpaseo/server 0.17.4 writer; both official copies are byte-identical.
+// Frozen @getpaseo/server 0.17.5 writer; both official copies are unchanged from 0.17.4.
 export const ORIGINAL_PID_LOCK_SHA256='a4e8bc790b27c944847b7bb84694b38d0366d08d7d565409edbc63dd6462b8f7';
 export const PATCHED_PID_LOCK_SHA256='194013b387417fb9b6d74b7a305173d8f28478ef268b7a4c073b9882af66bd1b';
 const helper=fs.readFileSync(new URL('./pid-transition.mjs',import.meta.url));

@@ -4,13 +4,13 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {assertSafePath,RuntimeError} from './state.mjs';
 
-// Official npm server 0.17.4 plus the reviewed product builtin, not a whole forked daemon.
+// Official npm server 0.17.5 plus the reviewed product builtin, not a whole forked daemon.
 // The provenance pins every shipped byte, the Smart integration commit, and upstream 1.7.0.
 export const SMART_TASKS_REGISTRY_PATH='node_modules/@getpaseo/server/dist/server/server/plugins/builtin/index.js';
 export const SMART_TASKS_DIRECTORY='node_modules/@getpaseo/server/dist/server/builtin-plugins/better-paseo';
 export const ORIGINAL_TASKS_REGISTRY_SHA256='f9b556bd333ab30950fb438e7da9b5f57da04e1234ad4d951c5931e19eee0092';
 export const PATCHED_TASKS_REGISTRY_SHA256='f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e';
-export const SMART_TASKS_PROVENANCE_SHA256='08a0cbe942bd3136d983e63f8c723f2b17e21f433d410bddb6faf4b5a1c802c8';
+export const SMART_TASKS_PROVENANCE_SHA256='7e73379929b0c168f8328704bb800438b1c3c14266bbd2961b0d907aebe387e2';
 const source=fileURLToPath(new URL('../runtime/better-paseo/',import.meta.url));
 const sha=b=>createHash('sha256').update(b).digest('hex');
 export const SMART_TASKS_PATCH_ID=sha(SMART_TASKS_PROVENANCE_SHA256+PATCHED_TASKS_REGISTRY_SHA256);
@@ -53,9 +53,13 @@ export function applySmartTasksPatch(root) {
   }
   if(!before.equals(after))fs.writeFileSync(registry,after);
 }
-export function smartTasksPatchReady(root) {
+export function smartTasksPatchReady(root,release={registrySha256:PATCHED_TASKS_REGISTRY_SHA256,provenanceSha256:SMART_TASKS_PROVENANCE_SHA256}) {
   try{
-    if(sha(regularBytes(path.join(root,SMART_TASKS_REGISTRY_PATH)))!==PATCHED_TASKS_REGISTRY_SHA256)return false;
-    return Object.entries(sourceFiles()).every(([name,hash])=>sha(regularBytes(path.join(root,SMART_TASKS_DIRECTORY,name)))===hash);
+    if(sha(regularBytes(path.join(root,SMART_TASKS_REGISTRY_PATH)))!==release.registrySha256)return false;
+    const directory=path.join(root,SMART_TASKS_DIRECTORY);
+    const provenance=regularBytes(path.join(directory,'provenance.json'));
+    // A frozen, known provenance hash is the trust root, never the release's unchecked file list.
+    if(sha(provenance)!==release.provenanceSha256)return false;
+    return Object.entries(JSON.parse(provenance).files).every(([name,hash])=>sha(regularBytes(path.join(directory,name)))===hash);
   }catch{return false;}
 }
