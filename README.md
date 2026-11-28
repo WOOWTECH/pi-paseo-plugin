@@ -1,9 +1,9 @@
 # Agent Connect
 
-`0.1.28-rc.1` 是 Paseo 0.18.1 的候選版（runtime revision `0.18.1-r1-5c179b2ea977`），固定官方 npm CLI／server 0.18.1。
+`0.1.28` 是 Paseo 0.18.1 的正式版（runtime revision `0.18.1-r1-5c179b2ea977`），固定官方 npm CLI／server 0.18.1。
 Agent Connect 的三個修補裡只有品牌識別換成 0.18.1 的雜湊；Tasks 註冊表與 PID 鎖的官方檔案和 0.17.5 逐位元組相同，停止流程的五個官方檔案也相同，所以停止預算不變。依賴樹除了 `@getpaseo/*` 之外維持 0.1.27 的版本。
 修正 [#29](https://github.com/WOOWTECH/pi-paseo-plugin/issues/29)：從 0.1.4–0.1.23（Paseo 0.11.2）升級時，從沒開過的 Paseo 會被打開；現在沿用舊版記在 `state.json` 的關閉，明確啟用時才開。
-Better Paseo 內建外掛仍是 0.1.27 那份 1.7.0，正式版前會從 woowtech-smart 的 0.18.1 合併點重編。0.1.27 的 `0.17.5-r4` 列入舊版清單，可以回退，也能控制它還在跑的 daemon。
+Better Paseo 1.7.0 內建外掛從 woowtech-smart `15153f0c178973d02e679e8bdbe2430404317ffe`（0.18.1 共用分支）重編，帶進繁中用語、觸控與螢幕閱讀器標籤、看板選取狀態等修正；Tasks chunk 是 `e760236822f867c7`。0.1.27 的 `0.17.5-r4` 列入舊版清單（payload 凍結），可以回退，也能控制它還在跑的 daemon。
 
 `0.1.27` 是 Paseo 0.17.5 的正式版（runtime revision `0.17.5-r4-8664f2c3f8f5`）：固定官方 npm CLI／server 0.17.5，內建 Better Paseo Tasks（含 phone board 選取狀態修正），修補 Pi Web 的 Next.js 安全問題，並讓 Pi Web 的 JSON 回應與 Next.js 16.4.6 的輸出壓縮相容。來源、獨立試用安裝、範圍與回復限制見[Paseo 0.17.5 說明](docs/runtime-0175-candidate.md)。
 

@@ -10,7 +10,7 @@ export const SMART_TASKS_REGISTRY_PATH='node_modules/@getpaseo/server/dist/serve
 export const SMART_TASKS_DIRECTORY='node_modules/@getpaseo/server/dist/server/builtin-plugins/better-paseo';
 export const ORIGINAL_TASKS_REGISTRY_SHA256='f9b556bd333ab30950fb438e7da9b5f57da04e1234ad4d951c5931e19eee0092';
 export const PATCHED_TASKS_REGISTRY_SHA256='f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e';
-export const SMART_TASKS_PROVENANCE_SHA256='7e73379929b0c168f8328704bb800438b1c3c14266bbd2961b0d907aebe387e2';
+export const SMART_TASKS_PROVENANCE_SHA256='d99accbcccfe8edcc7809e71c89a5565fe0411944bff659181fd07b8bd860442';
 const source=fileURLToPath(new URL('../runtime/better-paseo/',import.meta.url));
 const sha=b=>createHash('sha256').update(b).digest('hex');
 export const SMART_TASKS_PATCH_ID=sha(SMART_TASKS_PROVENANCE_SHA256+PATCHED_TASKS_REGISTRY_SHA256);

@@ -111,6 +111,9 @@ test('the exact 0.17.5-r4 payload of Agent Connect 0.1.27 stays frozen for contr
  fs.writeFileSync(payload,bytes);assert.equal(priorRuntimeDirectory(loc,revision),old,'restored r4 payload verifies');
  fs.writeFileSync(receiptFile,JSON.stringify({...receipt,smartTasksPatchId:TASKS_0175_R3.patchId}));
  assert.equal(priorRuntimeDirectory(loc,revision),null,'an r3 patch receipt cannot authorize the frozen r4 payload');
+ assert.notEqual(SMART_TASKS_PROVENANCE_SHA256,TASKS_0175_R4.provenanceSha256,'0.1.28 ships a rebuilt payload');
+ fs.writeFileSync(receiptFile,JSON.stringify({...receipt,smartTasksPatchId:SMART_TASKS_PATCH_ID}));
+ assert.equal(priorRuntimeDirectory(loc,revision),null,'the 0.18.1 patch receipt cannot authorize the frozen r4 payload');
 });
 
 test('the exact 0.17.5-r3 2b payload stays frozen for control, rollback, and tamper refusal',t=>{

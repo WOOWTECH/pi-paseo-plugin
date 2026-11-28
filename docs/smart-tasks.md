@@ -1,10 +1,10 @@
 # Tasks 主機封裝
 
-Agent Connect 0.1.27 在官方 npm Paseo 0.17.5 的內建清單加入 Better Paseo，並固定 phone-board selected state 修正。它沿用官方 CLI、server、SDK 與既有身分修補；沒有替換 Smart 網頁，也沒有啟用使用者另外安裝的外掛。
+Agent Connect 0.1.28 在官方 npm Paseo 0.18.1 的內建清單加入 Better Paseo（註冊表檔案和 0.17.5 逐位元組相同），並固定 woowtech-smart 0.18.1 共用分支的外掛修正。它沿用官方 CLI、server、SDK 與既有身分修補；沒有替換 Smart 網頁，也沒有啟用使用者另外安裝的外掛。
 
 ## 固定來源與建置
 
-- Smart 整合：`WOOWTECH/woowtech-smart` commit `a7bfd65a3f39076cf664e28687818c24952e261c` 的 `plugins/better-paseo`，peer build provenance 固定五個輸出檔與 source hash。
+- Smart 整合：`WOOWTECH/woowtech-smart` commit `15153f0c178973d02e679e8bdbe2430404317ffe` 的 `plugins/better-paseo`。它是 shared/upstream-0181-1128，從 a7bfd65a 起外掛改了 25 個 source，包括繁中用語、觸控與螢幕閱讀器標籤、看板選取狀態。provenance 固定輸出檔與這些 source 的雜湊。
 - Better Paseo：1.7.0，原始 commit `e9ac5216185988ce99574b3e2f04f178020204f1`。
 - 產物：`runtime/better-paseo/provenance.json` 固定每個檔案的 SHA-256，`builtin-build.json` 固定依賴 lockfile 與 Tasks chunk。
 
@@ -16,7 +16,7 @@ npm ci --omit=dev --workspaces=false --no-audit --no-fund
 npm run build:builtin --workspaces=false
 ```
 
-比對 `builtin-build.json` 與每個產物的雜湊後，更新本 repo 的 payload、provenance 與 `src/smart-tasks-patch.mjs` 固定值；依賴不會在 daemon 啟動時下載。rc.4 的 Tasks chunk ID 是 `f9f9101d9d59ec1a`。a7 只更新 phone-board builtin；Smart Web 仍固定 2b，Paseo npm 仍為 0.17.5。Tasks chunk 的元件匯出修正屬於此整合，不能以未修正的上游套件替換。
+比對 `builtin-build.json` 與每個產物的雜湊後，更新本 repo 的 payload、provenance 與 `src/smart-tasks-patch.mjs` 固定值；依賴不會在 daemon 啟動時下載。0.1.28 的 Tasks chunk ID 是 `e760236822f867c7`；依賴 lockfile 和上游 1.7.0 commit 與 0.1.27 相同，只有 `index.client.ts`、`server/builtin.js`、`builtin-build.json` 改變。0.1.27 的 payload（a7bfd65a、chunk `f9f9101d9d59ec1a`）凍結在 `tests/fixtures/better-paseo-0175-r4-7e7337.json.gz`，供回退與控制舊 daemon 驗證。Tasks chunk 的元件匯出修正屬於此整合，不能以未修正的上游套件替換。
 
 新 runtime 在安裝階段驗證官方 registry 的精確來源，再加入外掛。ready receipt 同時核對 registry、外掛所有檔案與來源清單；缺檔或修改會拒絕啟動。只有新版本目錄會寫入，既有 daemon 的 runtime、config 與資料不在修補範圍。
 
