@@ -680,3 +680,58 @@ test('restore keeps a same-root supervisor of this version, and never signals a 
   assert.equal(f.processes.has(reused), true); assert.notEqual(started.pid, reused);
   assert.equal(supervisorRecord(f).version, PLUGIN_VERSION);
 });
+
+test('#29: a 0.11.2-era host that never enabled Paseo stays off through the upgrade boot until an explicit enable', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  // What Agent Connect 0.1.15 leaves on a host whose owner never turned Paseo on.
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  f.write('state', { version: 1, phase: 'disabled', desiredEnabled: false, installedVersion: '0.11.2' });
+  const supervisor = f.load('src/supervisor.mjs');
+  assert.equal(supervisor.packageEnabled(f.loc), false, 'a supervisor that starts first reads the off');
+  const result = await postinstallCli(f);
+  assert.equal(result.errors, '');
+  assert.equal(JSON.parse(result.output).lifecycle.phase, 'disabled');
+  assert.equal(f.calls.some(row => row[0] === 'activate' || row[0] === 'spawn'), false, 'nothing switched Paseo on');
+  const carried = JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'host-registration.json')));
+  assert.deepEqual([carried.enabled, carried.legacyOffResolved], [false, true], 'the off now lives in the registration');
+  const host = f.load('src/host-api.mjs');
+  const enabled = await host.lifecycle({ action: 'enable', packages: enabledPackages });
+  assert.equal(enabled.phase, 'starting');
+  assert.equal(f.calls.filter(row => row[0] === 'spawn').length, 1);
+  const registration = JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'host-registration.json')));
+  assert.deepEqual([registration.enabled, registration.legacyOffResolved], [true, true], 'an explicit enable replaces the legacy off');
+  assert.equal(supervisor.packageEnabled(f.loc), true, 'so the supervisor it started keeps running before activation updates the state');
+});
+
+test('#29: an enabled 0.11.2-era host, and an off recorded by a newer release, start on boot as before', async t => {
+  for (const state of [
+    { version: 1, phase: 'running', desiredEnabled: true, installedVersion: '0.11.2' },
+    { version: 1, phase: 'disabled', desiredEnabled: false, installedVersion: '0.17.5' },
+  ]) {
+    const f = fixture(t);
+    f.packages([root]);
+    f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+    f.write('state', state);
+    const result = await postinstallCli(f);
+    assert.equal(result.errors, '', JSON.stringify(state));
+    assert.equal(f.calls.filter(row => row[0] === 'activate').length, 1, JSON.stringify(state));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'host-registration.json'))).enabled, true, JSON.stringify(state));
+  }
+});
+
+test('#29: an explicit enable on a 0.11.2-era host that never booted this release starts it and resolves the old off', async t => {
+  const f = fixture(t);
+  f.packages([root]);
+  f.write('host-registration', { enabled: true, packageRoot: root, cwd: f.loc.home });
+  f.write('state', { version: 1, phase: 'disabled', desiredEnabled: false, installedVersion: '0.11.2' });
+  const host = f.load('src/host-api.mjs');
+  const enabled = await host.lifecycle({ action: 'enable', packages: enabledPackages });
+  assert.equal(enabled.phase, 'starting');
+  assert.equal(f.calls.filter(row => row[0] === 'spawn').length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'host-registration.json'))).legacyOffResolved, true);
+  assert.equal(f.load('src/supervisor.mjs').packageEnabled(f.loc), true);
+  // A later boot keeps the resolution: the old state no longer decides anything.
+  await host.restore();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.loc.stateDir, 'host-registration.json'))).enabled, true);
+});

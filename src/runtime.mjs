@@ -361,7 +361,7 @@ function managedConfig(config, port, launchers) {
   // belong to the host plugin; remove any legacy injected name while retaining other fields.
   const daemon = { ...config.daemon };
   delete daemon.name;
-  // 0.17.5 manages extra listeners through Devices without changing the main endpoint.
+  // Paseo 0.17.5 and later manage extra listeners through Devices without changing the main endpoint.
   // Keep those explicitly saved endpoints across a restart; the managed main stays loopback.
   const extraListeners = typeof daemon.listen === 'string' ? daemon.listen.split(',').slice(1).map(value => value.trim()).filter(Boolean) : [];
   const listen = [`127.0.0.1:${port}`, ...extraListeners].join(',');

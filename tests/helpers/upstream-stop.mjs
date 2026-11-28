@@ -37,8 +37,9 @@ export class TerminalCleanupNotConfirmedError extends Error {
 }
 
 /** The Paseo release this model (and the budgets in src/lifecycle-timeouts.mjs) were derived from by reading its
- * source. A test fails when the pinned release moves, so that nobody keeps modeling a stop that no longer exists. */
-export const MODELED_PASEO_VERSION = '0.17.5';
+ * source. A test fails when the pinned release moves, so that nobody keeps modeling a stop that no longer exists.
+ * 0.18.1: re-read on 2026-11-28; the five files named above are byte-identical to 0.17.5, so the model holds. */
+export const MODELED_PASEO_VERSION = '0.18.1';
 /** Upstream's limits that the budgets count with. */
 export const UPSTREAM_LIMITS = Object.freeze({
   terminalWorkers: 2, // worker-terminal-manager.js MAX_TERMINAL_WORKERS: a daemon runs at most two terminal workers

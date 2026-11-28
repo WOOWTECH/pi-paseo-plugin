@@ -1,0 +1,13 @@
+{
+  "package": "@getpaseo/server",
+  "version": "0.18.1",
+  "tarballIntegrity": "sha512-4YV8iluU6/oXLVtkpsoNFn3WA8PPdkmnsYAHhPzCubRxy3ShmU68dowd5Em9/Oy2cp40PbIMb2mhge5jII5lIA==",
+  "source": "npm pack @getpaseo/server@0.18.1 (unpatched; tarball integrity equals runtime/package-lock.json)",
+  "files": {
+    "pid-lock.js": "a4e8bc790b27c944847b7bb84694b38d0366d08d7d565409edbc63dd6462b8f7",
+    "private-files.js": "69437ab7c001dbcf16f31252b295679346654b6fd3e5924e1d168d666e544b41",
+    "host-name.js": "a6ddc82bb342771f06710a848d8b7f944b37aba95963a8ea055b665bb622e3e2",
+    "builtin-index.js": "f9b556bd333ab30950fb438e7da9b5f57da04e1234ad4d951c5931e19eee0092",
+    "websocket-server.js.gz": "70c6a6dbb238a278ebf685a5d040328786f70a4152551a174483029c75ae73d8"
+  }
+}

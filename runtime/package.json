@@ -1,9 +1,9 @@
 {
   "name": "pi-paseo-managed-runtime",
-  "version": "0.17.5-r3",
+  "version": "0.18.1-r1",
   "private": true,
   "dependencies": {
-    "@getpaseo/cli": "0.17.5"
+    "@getpaseo/cli": "0.18.1"
   },
   "overrides": {
     "@modelcontextprotocol/sdk": "1.32.0",

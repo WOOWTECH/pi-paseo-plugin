@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Focused isolated verification of installed Paseo 0.17.5 Devices/Tailscale RPC.
+// Focused isolated verification of installed Paseo 0.18.1 Devices/Tailscale RPC.
 // Usage: node scripts/verify-devices.mjs /absolute/prepared-runtime
 // Only private temporary files and explicitly bound loopback sockets are used. No Tailscale CLI, provider, or host service.
 import assert from 'node:assert/strict';
@@ -45,8 +45,8 @@ async function rawServerInfo(root,url){
 }
 try{
  assert.ok(fs.existsSync(path.join(prepared,'node_modules/@getpaseo/server/package.json')),'prepared runtime package missing');
- assert.equal(JSON.parse(fs.readFileSync(path.join(prepared,'node_modules/@getpaseo/server/package.json'))).version,'0.17.5');
- assert.equal(JSON.parse(fs.readFileSync(path.join(prepared,'node_modules/@getpaseo/protocol/package.json'))).version,'0.17.5');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(prepared,'node_modules/@getpaseo/server/package.json'))).version,'0.18.1');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(prepared,'node_modules/@getpaseo/protocol/package.json'))).version,'0.18.1');
  // Do not expose inherited Codex/Claude/OpenAI/OmniGent/Pi Agent credentials to imported runtime code.
  for(const key of Object.keys(process.env))delete process.env[key];
  if(savedEnv.PATH)process.env.PATH=savedEnv.PATH;
@@ -94,7 +94,7 @@ try{
  assert.equal(legacy.type,'fetch_agent_history_request');
  const history=await localClient.fetchAgentHistory({sort:[{key:'created_at',direction:'desc'}],page:{limit:20}});
  assert.ok(Array.isArray(history.entries)&&history.pageInfo&&typeof history.pageInfo==='object');
- report.actualDaemonRpc.push('fetch_agent_history_request: official v0.17.5 schema validates legacy sort/page and daemon RPC responds');
+ report.actualDaemonRpc.push('fetch_agent_history_request: official v0.18.1 schema validates legacy sort/page and daemon RPC responds');
  const pid=process.pid;
  const enabled=await localClient.setTailscaleEnabled(true);
  assert.equal(enabled.confirmationRequired,false);assert.equal(enabled.tailscale?.state,'on');

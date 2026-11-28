@@ -7,13 +7,13 @@ import {privateDirectory,atomicJson,RuntimeError,assertSafePath} from './state.m
 import {applyPidLockPatch,pidLockPatchReady,PID_LOCK_PATCH_ID,PID_LOCK_COPIES,PID_LOCK_0112} from './pid-lock-patch.mjs';
 import {applyBrandIdentityPatch,brandIdentityPatchReady,BRAND_IDENTITY_PATCH_ID,BRAND_0112} from './brand-identity-patch.mjs';
 import {applySmartTasksPatch,smartTasksPatchReady,SMART_TASKS_PATCH_ID} from './smart-tasks-patch.mjs';
-export const PASEO_VERSION='0.17.5';
-// Managed releases before this one ran either Paseo 0.17.4 or 0.11.2; the pre-release runtimeDir layout used 0.11.2.
+export const PASEO_VERSION='0.18.1';
+// Managed releases before this one ran Paseo 0.17.5, 0.17.4 or 0.11.2; the pre-release runtimeDir layout used 0.11.2.
 export const LEGACY_PASEO_VERSION='0.11.2';
 const template=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const lock=fs.readFileSync(path.join(template,'package-lock.json'));
 const lockSha256=createHash('sha256').update(lock).digest('hex');
-export const RUNTIME_REVISION=PASEO_VERSION+'-r4-'+lockSha256.slice(0,12);
+export const RUNTIME_REVISION=PASEO_VERSION+'-r1-'+lockSha256.slice(0,12);
 export const runtimeDirectory=loc=>path.join(loc.runtimeDir,'releases',RUNTIME_REVISION);
 // Existing-daemon control compatibility only; these releases are never started.
 // Frozen 0.11.2 lockfiles: 4cf9d4… shipped with later r3 and all r4 (Agent Connect
@@ -32,10 +32,13 @@ const TASKS_0174_R2=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab
 const TASKS_0175_R2=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'370a20c236583c6d0780d6fa3bdffc6b4723fb0f2f12b612d56fc5a2af3fae95',patchId:'26edef83f851dbba2147fedc49380ebface9abb635c50f421582cb4886a233db'});
 const TASKS_0175_R3=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'c2041146accbca4096a40d1b13cce9a1337abe9d06c5a04c16b460bb175b9960',patchId:'d126c336c95a2b11a46054694a68edd3cc8028891c347a955532b8b0801a977f'});
 // Frozen 0.1.27-rc.2/r3 Tasks payloads remain verifiable for control and rollback.
-// Keep r3, r2, rc.1 r1 and legacy descriptors; only the current r4 source is prepared.
+// Keep r4 (the 0.1.27 release), r3, r2, rc.1 r1 and legacy descriptors; only the current 0.18.1 source is prepared.
 const LOCK_0175_R1='8664f2c3f8f58c15b8ec264fec9b69c3bc443192efd60365212e532c811f4ce2';
 const BRAND_0175_R1=Object.freeze({original:'a11dd0366089d25c57c71929c3d56d47dfef3d40cc272c010c4e08bc74d9ac19',patched:'4abdd2bc4f72d5865521b0d5adfca0743b6bd3a7cb8729df42f9b0baa635c523',patchId:'54f658b3f7885b521b6d664efbbd22b5f384c1878d36e45bb988de9ce9ac916b',helperSha256:'036471982ccbbb5a7c3418631518025b245ac50e1c0b1a29c3824d16ba069733'});
+// Agent Connect 0.1.27 (0.17.5-r4-8664f2c3f8f5): the same lock, PID and brand patches as r1-r3 with this Tasks payload.
+const TASKS_0175_R4=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'7e73379929b0c168f8328704bb800438b1c3c14266bbd2961b0d907aebe387e2',patchId:'c91f23fcdf2693e2de7897a1c4cccaab222c6c080605ad079e404daab5a95495'});
 const priorReleases=[
+ {version:'0.17.5',generation:'r4',sha:LOCK_0175_R1,pid:PID_0174_R1,brand:BRAND_0175_R1,tasks:TASKS_0175_R4,recordedRevision:true},
  {version:'0.17.5',generation:'r3',sha:LOCK_0175_R1,pid:PID_0174_R1,brand:BRAND_0175_R1,tasks:TASKS_0175_R3,recordedRevision:true},
  {version:'0.17.5',generation:'r2',sha:LOCK_0175_R1,pid:PID_0174_R1,brand:BRAND_0175_R1,tasks:TASKS_0175_R2,recordedRevision:true},
  {version:'0.17.5',generation:'r1',sha:LOCK_0175_R1,pid:PID_0174_R1,brand:BRAND_0175_R1,tasks:TASKS_0174_R2,recordedRevision:true},

@@ -48,10 +48,18 @@ function sameRoot(installedPath) {
  if(typeof installedPath!=='string')return false;
  try{return fs.realpathSync(installedPath)===fs.realpathSync(root);}catch{return false;}
 }
+// #29: the off Agent Connect 0.1.4-0.1.23 kept only in state.json (see legacyStateOff in host-api.mjs, same rule).
+function legacyStateOff(loc) {
+ try{const state=readRecord(path.join(loc.stateDir,'state.json'));return state.desiredEnabled===false&&state.installedVersion==='0.11.2';}
+ catch{return false;}
+}
 export function packageEnabled(loc=runtime.locations(),{cwd}={}) {
  const registration=readRecord(path.join(loc.stateDir,'host-registration.json'));
  // Service stop is independent of whether Pi still has the package enabled.
  if(registration.enabled===false)return false;
+ // #29: a pre-0.1.24 off kept only in state.json is still an off, also for a supervisor that starts first, until a
+ // lifecycle of this release has carried it over or an explicit enable replaced it.
+ if(registration.legacyOffResolved!==true&&legacyStateOff(loc))return false;
  cwd=cwd||registration.cwd||process.cwd();
  const settings=SettingsManager.create(cwd,loc.agentDir);
  const manager=new DefaultPackageManager({cwd,agentDir:loc.agentDir,settingsManager:settings});
