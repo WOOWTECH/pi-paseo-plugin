@@ -4,10 +4,16 @@ import * as runtime from './runtime.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 import { startSupervisor, stopSupervisor, packageEnabled } from './supervisor.mjs';
 import { CONNECTION_TARGETS, connectionPreferences, connectionTarget } from './connection-targets.mjs';
-import { legacyDesiredOff } from './legacy-intent.mjs';
-import { updateState } from './state.mjs';
 
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
+// #29: Agent Connect 0.1.4-0.1.23 (the Paseo 0.11.2 runtime) kept a user's off only in state.json; their
+// host-registration.json still says enabled. True only while the state still comes from that era: the first
+// activate() of a newer release records its own installedVersion. supervisor.mjs keeps the same rule; both stay
+// free of new imports because hosts load these modules with fixed dependency lists. Unreadable state: no off.
+function legacyStateOff(loc) {
+  try { const state = readRecord(path.join(loc.stateDir, 'state.json')); return state.desiredEnabled === false && state.installedVersion === '0.11.2'; }
+  catch { return false; }
+}
 export async function status() {
   const result=await runtime.status();
   // The switch shows what agents get: the daemon config (a Paseo client can change it too),
@@ -28,14 +34,13 @@ export async function lifecycle(input={}) {
     const explicitStop=['disable','stop','remove'].includes(input.action);
     const explicitEnable=['enable','activate'].includes(input.action);
     // #29: an off from the 0.11.2 era lives in state.json only. Carry it into the registration instead of switching
-    // on a Paseo the owner never enabled; an explicit enable still turns it on.
-    const legacyOff=!explicitStop&&!explicitEnable&&previous.enabled!==false&&legacyDesiredOff(loc);
+    // on a Paseo the owner never enabled; an explicit enable still turns it on. Either way the registration records
+    // that the old state has been dealt with, so the supervisor stops reading it.
+    const legacy=!explicitStop&&previous.legacyOffResolved!==true&&previous.enabled!==false&&legacyStateOff(loc);
+    const legacyOff=legacy&&!explicitEnable;
     const active=!explicitStop&&!legacyOff&&(explicitEnable||previous.enabled!==false)&&
       (Array.isArray(input.packages)?input.packages.some(enabledBinding):input.action==='restore'?packageEnabled(loc):true);
-    // An explicit enable replaces that legacy off at once (activate() records the same first), so the supervisor it
-    // starts does not read the old state as an off before activation has run.
-    if(explicitEnable&&active&&legacyDesiredOff(loc))updateState({desiredEnabled:true});
-    writeRecord(file,{enabled:active,packageRoot:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),cwd:input.cwd||previous.cwd||loc.home,registeredAt:new Date().toISOString()});
+    writeRecord(file,{enabled:active,packageRoot:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),cwd:input.cwd||previous.cwd||loc.home,registeredAt:new Date().toISOString(),...(legacy||previous.legacyOffResolved===true?{legacyOffResolved:true}:{})});
     if (!active) {
       // A supervisor may still be finishing activate(). Deactivate only after it exits.
       const supervisor=await stopSupervisor();
