@@ -5,15 +5,15 @@
 //   PI_PASEO_UPGRADE_SMOKE=1 node scripts/verify-upgrade.mjs [all|upgrade|legacy|fresh]
 //
 // Skipped (exit 0) unless PI_PASEO_UPGRADE_SMOKE=1, and on anything but Linux. It needs git with the old plugin's
-// commit (PI_PASEO_UPGRADE_OLD_REF, default 88857bd = Agent Connect rc.3 / Paseo 0.17.5-r3; `legacy` pins 23026e2 = 0.1.26 / 0.17.4-r2), tar, npm and
+// commit (PI_PASEO_UPGRADE_OLD_REF, default 053a39a = Agent Connect 0.1.27 / Paseo 0.17.5-r4; `legacy` pins 23026e2 = 0.1.26 / 0.17.4-r2), tar, npm and
 // access to the npm registry. Everything lives in one temporary directory (isolated HOME, plugin state, runtime
 // directory and PATH with provider commands that fail, so no provider is installed or started); the directory and
 // every process that points into it, terminal workers included, are removed at the end. Nothing of this user's
 // own Paseo or Agent Connect is read or written. The daemons contact their relay (relay.paseo.sh) as any
 // installation does, with throwaway identities.
 //
-// upgrade  Agent Connect rc.3 installs 0.17.5-r3 and starts its daemon. This tree upgrades it to r4, checks
-//          RESTART_REQUIRED and old-release control, then the rc.3 code starts the same home back on r3.
+// upgrade  Agent Connect 0.1.27 installs 0.17.5-r4 and starts its daemon. This tree upgrades it to 0.18.1-r1, checks
+//          RESTART_REQUIRED and old-release control, then the 0.1.27 code starts the same home back on 0.17.5-r4.
 // legacy   preserve the 0.1.26 / 0.17.4-r2 upgrade path as a separate smoke.
 // fresh    this tree on an empty host: install, start, ownership, pairing shape, branded handshake, a terminal
 //          worker. Then a host whose ps stops working while that terminal is open: the stop completes with
@@ -39,12 +39,12 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const repoRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const self=fileURLToPath(import.meta.url);
-const DEFAULT_OLD_REF='88857bd86a4bf982aef6d85122f16b7d4a03d009';
+const DEFAULT_OLD_REF='053a39a7b72e83787a419b97206adc34f45e35bb';
 const LEGACY_OLD_REF='23026e2442403ddee8df9f764ded6ea1a75b121e';
 const OLD_REF=process.env.PI_PASEO_UPGRADE_OLD_REF||DEFAULT_OLD_REF,DEFAULT_OLD=!process.env.PI_PASEO_UPGRADE_OLD_REF;
 // A commit, tag or branch name: it is passed to git archive, so it may not start like an option.
 const OLD_REF_VALID=/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(OLD_REF);
-const OLD_VERSION='0.1.27-rc.3',OLD_REVISION='0.17.5-r3-8664f2c3f8f5',OLD_PASEO='0.17.5',NEW_PASEO='0.17.5';
+const OLD_VERSION='0.1.27',OLD_REVISION='0.17.5-r4-8664f2c3f8f5',OLD_PASEO='0.17.5',NEW_PASEO='0.18.1';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fileSha=file=>fs.existsSync(file)?sha(fs.readFileSync(file)):null;
 const readJson=file=>JSON.parse(fs.readFileSync(file,'utf8'));

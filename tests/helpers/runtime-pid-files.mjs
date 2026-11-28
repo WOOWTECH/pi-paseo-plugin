@@ -22,6 +22,8 @@ export const LOCK_0175_R1='8664f2c3f8f58c15b8ec264fec9b69c3bc443192efd60365212e5
 export const BRAND_0175_R1=Object.freeze({original:'a11dd0366089d25c57c71929c3d56d47dfef3d40cc272c010c4e08bc74d9ac19',patched:'4abdd2bc4f72d5865521b0d5adfca0743b6bd3a7cb8729df42f9b0baa635c523',patchId:'54f658b3f7885b521b6d664efbbd22b5f384c1878d36e45bb988de9ce9ac916b',helperSha256:'036471982ccbbb5a7c3418631518025b245ac50e1c0b1a29c3824d16ba069733'});
 export const TASKS_0175_R2=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'370a20c236583c6d0780d6fa3bdffc6b4723fb0f2f12b612d56fc5a2af3fae95',patchId:'26edef83f851dbba2147fedc49380ebface9abb635c50f421582cb4886a233db'});
 export const TASKS_0175_R3=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'c2041146accbca4096a40d1b13cce9a1337abe9d06c5a04c16b460bb175b9960',patchId:'d126c336c95a2b11a46054694a68edd3cc8028891c347a955532b8b0801a977f'});
+// Agent Connect 0.1.27 (0.17.5-r4): its payload is frozen in fixtures/better-paseo-0175-r4-7e7337.json.gz.
+export const TASKS_0175_R4=Object.freeze({registrySha256:'f20ea6c51acf595a72148998547ab6edc8623275f3a36f86eb2dc51415f2098e',provenanceSha256:'7e73379929b0c168f8328704bb800438b1c3c14266bbd2961b0d907aebe387e2',patchId:'c91f23fcdf2693e2de7897a1c4cccaab222c6c080605ad079e404daab5a95495'});
 function seedReleasedTasks(root,release,{fixture='better-paseo-d00161.json.gz'}={}) {
  const frozen=JSON.parse(gunzipSync(fs.readFileSync(path.join(fixtures,fixture))));
  const dir=path.join(root,SMART_TASKS_DIRECTORY);
@@ -65,10 +67,10 @@ export function seedPidFiles(loc) {
 /** A verified earlier release as Agent Connect left it. 0.17.4-r1 has PID-lock and brand patches but no
  * Smart Tasks. For 0.11.2, r3/r4 have patched writers, r2 has the original ones, and r4 also has branding. */
 export function seedPriorRelease(loc,{generation='r4',version=generation==='r1'?'0.17.4':LEGACY_PASEO_VERSION,lockSha256=(version==='0.17.5'?LOCK_0175_R1:version==='0.17.4'?LOCK_0174_R1:generation==='r2'?LOCK_0112:LOCK_0112_HONO),patched=generation!=='r2'}={}) {
- if((version==='0.17.4'&&(generation==='r1'||generation==='r2'))||(version==='0.17.5'&&['r1','r2','r3'].includes(generation))){
+ if((version==='0.17.4'&&(generation==='r1'||generation==='r2'))||(version==='0.17.5'&&['r1','r2','r3','r4'].includes(generation))){
   const brand=version==='0.17.5'?BRAND_0175_R1:BRAND_0174;
   const hasTasks=version==='0.17.5'||generation==='r2';
-  const tasks=version==='0.17.5'&&generation==='r3'?TASKS_0175_R3:version==='0.17.5'&&generation==='r2'?TASKS_0175_R2:TASKS_0174_R2;
+  const tasks=version==='0.17.5'&&generation==='r4'?TASKS_0175_R4:version==='0.17.5'&&generation==='r3'?TASKS_0175_R3:version==='0.17.5'&&generation==='r2'?TASKS_0175_R2:TASKS_0174_R2;
   const revision=version+'-'+generation+'-'+lockSha256.slice(0,12);
   const root=path.join(loc.runtimeDir,'releases',revision);
   seedServer(root,version);
@@ -84,7 +86,7 @@ export function seedPriorRelease(loc,{generation='r4',version=generation==='r1'?
   const brandFile=path.join(root,BRAND_SERVER_PATH);
   fs.writeFileSync(brandFile,patchBrandIdentitySource(fs.readFileSync(brandFile,'utf8'),brand));
   fs.writeFileSync(path.join(path.dirname(brandFile),'pi-paseo-brand-identity.mjs'),brandHelper);
-  if(hasTasks)seedReleasedTasks(root,tasks,version==='0.17.5'&&generation==='r3'?{fixture:'better-paseo-0175-r3-2b.json.gz'}:version==='0.17.5'&&generation==='r2'?{fixture:'better-paseo-0175-r2-a61.json.gz'}:{});
+  if(hasTasks)seedReleasedTasks(root,tasks,version==='0.17.5'&&generation==='r4'?{fixture:'better-paseo-0175-r4-7e7337.json.gz'}:version==='0.17.5'&&generation==='r3'?{fixture:'better-paseo-0175-r3-2b.json.gz'}:version==='0.17.5'&&generation==='r2'?{fixture:'better-paseo-0175-r2-a61.json.gz'}:{});
   const cli=path.join(root,'node_modules/@getpaseo/cli');fs.mkdirSync(cli,{recursive:true});
   fs.writeFileSync(path.join(cli,'package.json'),JSON.stringify({version}));
   fs.mkdirSync(path.join(root,'node_modules/@getpaseo/server/dist/server/web-ui'),{recursive:true});

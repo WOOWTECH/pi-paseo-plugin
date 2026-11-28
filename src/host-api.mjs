@@ -4,6 +4,8 @@ import * as runtime from './runtime.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
 import { startSupervisor, stopSupervisor, packageEnabled } from './supervisor.mjs';
 import { CONNECTION_TARGETS, connectionPreferences, connectionTarget } from './connection-targets.mjs';
+import { legacyDesiredOff } from './legacy-intent.mjs';
+import { updateState } from './state.mjs';
 
 const enabledBinding = p => p.disabled !== true && p.status !== 'disabled' && p.status !== 'missing';
 export async function status() {
@@ -25,8 +27,14 @@ export async function lifecycle(input={}) {
     const file=path.join(loc.stateDir,'host-registration.json'),previous=readRecord(file);
     const explicitStop=['disable','stop','remove'].includes(input.action);
     const explicitEnable=['enable','activate'].includes(input.action);
-    const active=!explicitStop&&(explicitEnable||previous.enabled!==false)&&
+    // #29: an off from the 0.11.2 era lives in state.json only. Carry it into the registration instead of switching
+    // on a Paseo the owner never enabled; an explicit enable still turns it on.
+    const legacyOff=!explicitStop&&!explicitEnable&&previous.enabled!==false&&legacyDesiredOff(loc);
+    const active=!explicitStop&&!legacyOff&&(explicitEnable||previous.enabled!==false)&&
       (Array.isArray(input.packages)?input.packages.some(enabledBinding):input.action==='restore'?packageEnabled(loc):true);
+    // An explicit enable replaces that legacy off at once (activate() records the same first), so the supervisor it
+    // starts does not read the old state as an off before activation has run.
+    if(explicitEnable&&active&&legacyDesiredOff(loc))updateState({desiredEnabled:true});
     writeRecord(file,{enabled:active,packageRoot:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),cwd:input.cwd||previous.cwd||loc.home,registeredAt:new Date().toISOString()});
     if (!active) {
       // A supervisor may still be finishing activate(). Deactivate only after it exits.

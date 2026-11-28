@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {assertSafePath,RuntimeError} from './state.mjs';
 
-// Official npm server 0.17.5 plus the reviewed product builtin, not a whole forked daemon.
+// Official npm server 0.18.1 (registry byte-identical to 0.17.5) plus the reviewed product builtin, not a whole forked daemon.
 // The provenance pins every shipped byte, the Smart integration commit, and upstream 1.7.0.
 export const SMART_TASKS_REGISTRY_PATH='node_modules/@getpaseo/server/dist/server/server/plugins/builtin/index.js';
 export const SMART_TASKS_DIRECTORY='node_modules/@getpaseo/server/dist/server/builtin-plugins/better-paseo';

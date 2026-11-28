@@ -7,6 +7,7 @@ import * as runtime from './runtime.mjs';
 import {SUPERVISOR_STOP_TIMEOUT_MS} from './lifecycle-timeouts.mjs';
 import {processIdentity, assertSafePath} from './state.mjs';
 import { readRecord, writeRecord, withLock } from './onboarding.mjs';
+import {legacyDesiredOff} from './legacy-intent.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // A supervisor keeps running the code it was started with. After an in-place upgrade (the same
 // packageRoot) one recorded under another plugin version, or under none (0.1.23 and earlier), would
@@ -52,6 +53,8 @@ export function packageEnabled(loc=runtime.locations(),{cwd}={}) {
  const registration=readRecord(path.join(loc.stateDir,'host-registration.json'));
  // Service stop is independent of whether Pi still has the package enabled.
  if(registration.enabled===false)return false;
+ // #29: a pre-0.1.24 off kept only in state.json is still an off, also for a supervisor that starts first.
+ if(legacyDesiredOff(loc))return false;
  cwd=cwd||registration.cwd||process.cwd();
  const settings=SettingsManager.create(cwd,loc.agentDir);
  const manager=new DefaultPackageManager({cwd,agentDir:loc.agentDir,settingsManager:settings});

@@ -9,7 +9,7 @@ import {patchPidLockSource,applyPidLockPatch,pidLockPatchReady,PID_LOCK_COPIES,O
 import {runtimeDirectory,markRuntimeReady,runtimeReady,previousRuntimeDirectory,priorRuntimeDirectory,priorRuntimeVersion,PRIOR_RUNTIME_REVISIONS,PASEO_VERSION,RUNTIME_REVISION} from '../src/runtime-layout.mjs';
 import {BRAND_SERVER_PATH} from '../src/brand-identity-patch.mjs';
 import {SMART_TASKS_REGISTRY_PATH,SMART_TASKS_DIRECTORY,SMART_TASKS_PATCH_ID,SMART_TASKS_PROVENANCE_SHA256} from '../src/smart-tasks-patch.mjs';
-import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO,TASKS_0174_R2,TASKS_0175_R2,TASKS_0175_R3} from './helpers/runtime-pid-files.mjs';
+import {seedPidFiles,seedPriorRelease,LOCK_0112,LOCK_0112_HONO,TASKS_0174_R2,TASKS_0175_R2,TASKS_0175_R3,TASKS_0175_R4} from './helpers/runtime-pid-files.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const original=fs.readFileSync(new URL('./fixtures/paseo-'+PASEO_VERSION+'/pid-lock.js',import.meta.url),'utf8');
 const original0112=fs.readFileSync(new URL('./fixtures/paseo-0.11.2/pid-lock.js',import.meta.url),'utf8');
@@ -21,7 +21,7 @@ test('frozen official writer bytes patch deterministically and idempotently',()=
  const patched=patchPidLockSource(original);assert.equal(sha(patched),PATCHED_PID_LOCK_SHA256);
  assert.equal(patchPidLockSource(patched),patched);
  assert.throws(()=>patchPidLockSource(original+'\n'),{code:'PID_LOCK_SOURCE_MISMATCH'});
- assert.match(RUNTIME_REVISION,/^0\.17\.5-r4-8664f2c3f8f5$/);
+ assert.match(RUNTIME_REVISION,/^0\.18\.1-r1-5c179b2ea977$/);
 });
 test('the 0.11.2 writer is never patched for this release; its frozen constants still describe r3/r4',()=>{
  assert.throws(()=>patchPidLockSource(original0112),{code:'PID_LOCK_SOURCE_MISMATCH'});
@@ -92,8 +92,25 @@ test('official release/refresh missing home semantics do not create a directory'
 
 // Every 0.11.2 release an earlier Agent Connect shipped: r4 is what 0.1.18-0.1.23 run.
 const SHIPPED=[['r4',LOCK_0112_HONO],['r3',LOCK_0112_HONO],['r3',LOCK_0112],['r2',LOCK_0112]];
-test('prior revisions keep frozen 0.17.5-r3/r2/r1, 0.17.4-r2/r1 and every shipped 0.11.2 release newest first',()=>{
- assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.5-r3-8664f2c3f8f5','0.17.5-r2-8664f2c3f8f5','0.17.5-r1-8664f2c3f8f5','0.17.4-r2-a651f42711da','0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
+test('prior revisions keep frozen 0.17.5-r4/r3/r2/r1, 0.17.4-r2/r1 and every shipped 0.11.2 release newest first',()=>{
+ assert.deepEqual(PRIOR_RUNTIME_REVISIONS,['0.17.5-r4-8664f2c3f8f5','0.17.5-r3-8664f2c3f8f5','0.17.5-r2-8664f2c3f8f5','0.17.5-r1-8664f2c3f8f5','0.17.4-r2-a651f42711da','0.17.4-r1-a651f42711da',...SHIPPED.map(([generation,sha])=>`0.11.2-${generation}-${sha.slice(0,12)}`)]);
+});
+
+test('the exact 0.17.5-r4 payload of Agent Connect 0.1.27 stays frozen for control, rollback, and tamper refusal',t=>{
+ const {loc}=runtime(t),old=seedPriorRelease(loc,{version:'0.17.5',generation:'r4'}),revision=path.basename(old);
+ assert.equal(revision,'0.17.5-r4-8664f2c3f8f5');
+ assert.equal(priorRuntimeDirectory(loc,revision),old);assert.equal(priorRuntimeVersion(loc,revision),'0.17.5');
+ assert.equal(previousRuntimeDirectory(loc),old,'0.1.27 is the newest earlier release');
+ const receiptFile=path.join(old,'.pi-paseo-runtime.json'),receipt=JSON.parse(fs.readFileSync(receiptFile));
+ assert.equal(receipt.smartTasksPatchId,TASKS_0175_R4.patchId);
+ const provenance=path.join(old,SMART_TASKS_DIRECTORY,'provenance.json');
+ assert.equal(sha(fs.readFileSync(provenance)),TASKS_0175_R4.provenanceSha256);
+ const payload=path.join(old,SMART_TASKS_DIRECTORY,'index.client.ts'),bytes=fs.readFileSync(payload);
+ assert.equal(sha(bytes),'68f27211b8fc364ae7b3e58e4b7c6026bdca989cfd2251f27e830d450ad4c922');
+ fs.appendFileSync(payload,'tampered');assert.equal(priorRuntimeDirectory(loc,revision),null,'changed r4 payload is refused');
+ fs.writeFileSync(payload,bytes);assert.equal(priorRuntimeDirectory(loc,revision),old,'restored r4 payload verifies');
+ fs.writeFileSync(receiptFile,JSON.stringify({...receipt,smartTasksPatchId:TASKS_0175_R3.patchId}));
+ assert.equal(priorRuntimeDirectory(loc,revision),null,'an r3 patch receipt cannot authorize the frozen r4 payload');
 });
 
 test('the exact 0.17.5-r3 2b payload stays frozen for control, rollback, and tamper refusal',t=>{

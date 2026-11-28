@@ -39,7 +39,7 @@ if(process.env.PI_PASEO_CANDIDATE_SMOKE!=='1'||process.platform!=='linux'){
    await run('target',target);
    started=true;stopped=false;
    const state=await run('start');
-   assert.equal(state.activeTarget,target);assert.equal(state.runtimeVersion,'0.17.5');assert.equal(state.daemon.reachable,true);
+   assert.equal(state.activeTarget,target);assert.equal(state.runtimeVersion,'0.18.1');assert.equal(state.daemon.reachable,true);
    assert.equal((await run('target','paseo',1)).code,'CANDIDATE_STOP_BEFORE_TARGET');
    assert.equal((await run('pair',undefined,1)).code,'CANDIDATE_PRIVATE_PAIR_REQUIRES_REVEAL');
    const daemonHome=path.join(root,'state/daemon'),configFile=path.join(daemonHome,'config.json'),id=hash(path.join(daemonHome,'server-id')),key=hash(path.join(daemonHome,'daemon-keypair.json'));

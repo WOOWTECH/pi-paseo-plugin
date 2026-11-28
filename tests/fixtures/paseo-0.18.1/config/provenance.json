@@ -1,0 +1,38 @@
+{
+  "purpose": "Offline tests of exact Paseo 0.18.1 persisted-config code; not included in the npm package",
+  "contents": "Static import closure of @getpaseo/server/dist/server/server/persisted-config.js, copied byte-for-byte from the unpatched npm tarballs of @getpaseo/server and @getpaseo/protocol 0.18.1; package integrity values are from runtime/package-lock.json.",
+  "packages": {
+    "@getpaseo/server": {
+      "version": "0.18.1",
+      "tarballIntegrity": "sha512-4YV8iluU6/oXLVtkpsoNFn3WA8PPdkmnsYAHhPzCubRxy3ShmU68dowd5Em9/Oy2cp40PbIMb2mhge5jII5lIA==",
+      "files": "server/"
+    },
+    "@getpaseo/protocol": {
+      "version": "0.18.1",
+      "tarballIntegrity": "sha512-Zd88pwBOKMVOqXvU3r4NZfbT9+sgFdzEjilRN4YUoMxryqsOq6JH1NT077Cp0sVJisHEMGXcx20IuF2BAj5l4g==",
+      "files": "protocol/"
+    }
+  },
+  "lockfile": "runtime/package-lock.json (Agent Connect 0.1.28, Paseo 0.18.1)",
+  "testStubs": {
+    "which": "Throws if called; executable lookup is outside config parsing.",
+    "@getpaseo/plugin/server": "Throws if called; process spawning is outside config parsing."
+  },
+  "zod": "Resolved from package devDependencies for isolated fixture loading.",
+  "files": {
+    "protocol/dist/agent-profile.js": "8979ef52beb315e75c11ad31e5581d3153f1283c36f80c8aa1ff7aefeef12bd0",
+    "protocol/dist/paseo-config-schema.js": "971d95a1e591b01db3ce555305ef4d4ac4feae6d84c1220beb375b552b60cb9d",
+    "protocol/dist/plugin-config.js": "0f60f870d62d9a07d22362d5354fed27dd6c92822f57dccb07671ded14117ad5",
+    "protocol/dist/plugin-registry.js": "3868d6f954ede1a6437069ff91123f8d7d3581221932a682d7f925cc0d965d3f",
+    "protocol/dist/provider-config.js": "b947297aa8c46f676fb61fde02f6792c06169e3afdd7cf96bd47f75ce7627305",
+    "protocol/dist/provider-manifest.js": "abbf2a1ebf85c6cc57d0720f4526e4812248bdf783decc23402d006d5ba1e2b1",
+    "protocol/dist/terminal-profile.js": "6d9844f791ad63f39df9799eaf81e08059dcd070c0f3477dc5c94232cd4056e2",
+    "server/dist/server/server/paseo-env.js": "4a12bf1097826d84bb9a3a7c524a5337311c248568660408c4b30c3bfbc0b9bf",
+    "server/dist/server/utils/spawn.js": "d06337802c46d34adc595241c0d47f0d8c1f70d1549a7ae740f4e0dacfb2cf78",
+    "server/dist/server/executable-resolution/executable-resolution.js": "2f0221cd08cd227bd60939ceb430ea650a993d623154a5ca4947815becbdd9de",
+    "server/dist/server/executable-resolution/windows.js": "0354a76c0c2db4285858d6f2944cbc1bc2f271a3468d2066ab566b20bdcfd042",
+    "server/dist/server/server/agent/provider-launch-config.js": "6a64036ace85acfa4ce55e2fe8ebb3bab1531e8e3dbcee951b163d81dfe4c96a",
+    "server/dist/server/server/persisted-config.js": "bb10807108e6ca85b92b3872216ae559ddc62b006519f364420c487938d8b938",
+    "server/dist/server/server/private-files.js": "69437ab7c001dbcf16f31252b295679346654b6fd3e5924e1d168d666e544b41"
+  }
+}
